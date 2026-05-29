@@ -48,8 +48,8 @@ FONT_BLACK    = FONT_DIR / "Montserrat-Black.ttf"
 FONT_SEMIBOLD = FONT_DIR / "Montserrat-SemiBold.ttf"
 
 FONT_URLS = {
-    FONT_BLACK:    "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-Black.ttf",
-    FONT_SEMIBOLD: "https://github.com/google/fonts/raw/main/ofl/montserrat/static/Montserrat-SemiBold.ttf",
+    FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
+    FONT_SEMIBOLD: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
 }
 
 # ── Font bootstrap ─────────────────────────────────────────────────────────────

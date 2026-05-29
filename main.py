@@ -465,14 +465,9 @@ async def render(req: RenderRequest):
         log_duration(b2_trimmed, "b2_trimmed")
         log_duration(b3_trimmed, "b3_trimmed")
 
-        # ── 4. Zoom on broll1 ────────────────────────────────────────────────
-        b1_zoom = job_dir / "b1_zoom.mp4"
-        apply_zoompan(b1_trimmed, b1_zoom)
-        log_duration(b1_zoom, "b1_zoom_after_zoompan")
-
         # ── 5. Concat brolls ─────────────────────────────────────────────────
         broll_concat = job_dir / "broll_concat.mp4"
-        concat_brolls([b1_zoom, b2_trimmed, b3_trimmed],
+        concat_brolls([b1_trimmed, b2_trimmed, b3_trimmed],
                       broll_concat, duration, job_dir)
         log_duration(broll_concat, "broll_concat")
         log.info("BROLL vs FACECAM: %.3fs vs %.3fs", probe_duration(broll_concat), duration)
@@ -535,7 +530,7 @@ async def render(req: RenderRequest):
             "-filter_complex", filter_complex,
             "-map", "[final]",
             "-map", "2:a",
-            "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+            "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
             "-pix_fmt", "yuv420p",

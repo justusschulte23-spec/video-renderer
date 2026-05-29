@@ -104,6 +104,16 @@ def probe_duration(path: Path) -> float:
     return float(out)
 
 
+def log_duration(path: Path, label: str) -> float:
+    try:
+        d = probe_duration(path)
+        log.info("DURATION [%s]: %.3fs", label, d)
+        return d
+    except Exception as e:
+        log.error("DURATION probe failed [%s]: %s", label, e)
+        return 0.0
+
+
 def run(cmd: list[str], label: str = ""):
     log.info("RUN %s: %s", label, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -146,13 +156,14 @@ def prepare_broll_clip(src: Path, dest: Path, duration: float):
 
 
 def apply_zoompan(src: Path, dest: Path):
-    """Apply zoom-out effect on first 0.5s (15 frames)."""
+    """Apply zoom-out on first 15 frames, reset PTS+FPS to avoid timestamp drift."""
     run([
         "ffmpeg", "-y", "-i", str(src),
         "-vf", (
             "zoompan=z='if(lte(on,1),1.2,max(1,1.2-on*0.013))':"
-            "d=1:s=1080x578,setsar=1"
+            f"d=1:s=1080x578,setsar=1,fps={FPS},setpts=PTS-STARTPTS"
         ),
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-an", str(dest),
     ], "zoompan")
 
@@ -380,18 +391,29 @@ async def render(req: RenderRequest):
         b2_trimmed = job_dir / "b2_trimmed.mp4"
         b3_trimmed = job_dir / "b3_trimmed.mp4"
 
+        log_duration(broll1_raw, "broll1_raw")
+        log_duration(broll2_raw, "broll2_raw")
+        log_duration(broll3_raw, "broll3_raw")
+
         prepare_broll_clip(broll1_raw, b1_trimmed, slot_dur)
         prepare_broll_clip(broll2_raw, b2_trimmed, slot_dur)
         prepare_broll_clip(broll3_raw, b3_trimmed, slot_dur)
 
+        log_duration(b1_trimmed, "b1_trimmed")
+        log_duration(b2_trimmed, "b2_trimmed")
+        log_duration(b3_trimmed, "b3_trimmed")
+
         # ── 4. Zoom on broll1 ────────────────────────────────────────────────
         b1_zoom = job_dir / "b1_zoom.mp4"
         apply_zoompan(b1_trimmed, b1_zoom)
+        log_duration(b1_zoom, "b1_zoom_after_zoompan")
 
         # ── 5. Concat brolls ─────────────────────────────────────────────────
         broll_concat = job_dir / "broll_concat.mp4"
         concat_brolls([b1_zoom, b2_trimmed, b3_trimmed],
                       broll_concat, duration, job_dir)
+        log_duration(broll_concat, "broll_concat")
+        log.info("BROLL vs FACECAM: %.3fs vs %.3fs", probe_duration(broll_concat), duration)
 
         # ── 6. Scale/crop facecam ────────────────────────────────────────────
         facecam_scaled = job_dir / "facecam_scaled.mp4"
@@ -426,7 +448,8 @@ async def render(req: RenderRequest):
         filter_complex = (
             # inputs: [0]=broll_concat [1]=divider [2]=facecam_scaled
             #         [3]=caption seq  [4]=progress seq  [5]=watermark
-            "[0:v]setsar=1[broll];"
+            # Explicit trim on broll guarantees it runs for full facecam duration
+            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];"
             "[1:v]setsar=1[div];"
             "[2:v]setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"

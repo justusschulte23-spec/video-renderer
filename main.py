@@ -113,14 +113,15 @@ def run(cmd: list[str], label: str = ""):
 
 
 def scale_crop(src: Path, dest: Path, tw: int, th: int):
-    """Scale-and-center-crop to target w×h."""
+    """Scale-and-center-crop to target w×h, keeping audio."""
     run([
         "ffmpeg", "-y", "-i", str(src),
         "-vf", (
             f"scale={tw}:{th}:force_original_aspect_ratio=increase,"
             f"crop={tw}:{th}"
         ),
-        "-an", str(dest),
+        "-c:a", "copy",
+        str(dest),
     ], "scale_crop")
 
 

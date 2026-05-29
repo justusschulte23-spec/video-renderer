@@ -287,33 +287,45 @@ def transcribe_audio(video_path: Path) -> list[dict]:
         return []
 
 
+def get_adaptive_font(word: str, max_width: int = W,
+                      max_size: int = CAPTION_FONT_SIZE, min_size: int = 48):
+    size = max_size
+    while size >= min_size:
+        font = ImageFont.truetype(str(FONT_BLACK), size)
+        bbox = font.getbbox(word)
+        if (bbox[2] - bbox[0]) <= max_width - 60:
+            return font, size
+        size -= 4
+    return ImageFont.truetype(str(FONT_BLACK), min_size), min_size
+
+
 def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
-    """Draw one caption word onto a 1080×110 RGBA image with 3-layer soft blend."""
+    """Draw one caption word with adaptive font size and 3-layer soft blend."""
     draw = ImageDraw.Draw(img)
-    font_size = int(CAPTION_FONT_SIZE * scale)
-    font = ImageFont.truetype(str(FONT_BLACK), font_size)
+    font, actual_size = get_adaptive_font(word, max_size=int(CAPTION_FONT_SIZE * scale))
 
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
-    x = (1080 - tw) // 2 - bbox[0]
+    x = (W - tw) // 2 - bbox[0]
     y = (DIVIDER_H - th) // 2 - bbox[1]
 
-    # Layer 1: outer soft halo — wide, semi-transparent deep purple
+    outer_stroke = max(8, int(actual_size * 0.17))
+    mid_stroke   = max(5, int(actual_size * 0.09))
+    inner_stroke = max(3, int(actual_size * 0.04))
+
     draw.text((x, y), word, font=font,
               fill=(0, 0, 0, 0),
               stroke_fill=(109, 40, 217, 100),
-              stroke_width=18)
-    # Layer 2: mid glow — tighter, more opaque amethyst
+              stroke_width=outer_stroke)
     draw.text((x, y), word, font=font,
               fill=(0, 0, 0, 0),
               stroke_fill=(139, 92, 246, 160),
-              stroke_width=10)
-    # Layer 3: sharp inner stroke + pure white fill
+              stroke_width=mid_stroke)
     draw.text((x, y), word, font=font,
               fill=(255, 255, 255, 255),
               stroke_fill=(124, 58, 237, 230),
-              stroke_width=5)
+              stroke_width=inner_stroke)
 
 
 def build_caption_frames(words: list[dict], total_frames: int,

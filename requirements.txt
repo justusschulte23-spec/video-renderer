@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+ffmpeg-python
+openai
+cloudinary
+requests
+Pillow
+python-multipart

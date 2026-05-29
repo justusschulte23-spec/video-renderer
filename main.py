@@ -35,17 +35,20 @@ WHITE         = (255, 255, 255)
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 W, H, FPS   = 1080, 1920, 30
-BROLL_H     = 578
-DIVIDER_Y   = 578
+BROLL_H     = 868    # 45% of 1920 — cinematic
+DIVIDER_Y   = 868
 DIVIDER_H   = 110
-FACECAM_Y   = 688    # 578 + 110
-FACECAM_H   = 1232   # 1920 - 688
+FACECAM_Y   = 978    # BROLL_H + DIVIDER_H
+FACECAM_H   = 942    # 1920 - FACECAM_Y
 PROGRESS_Y  = 1916
 PROGRESS_H  = 4
+CAPTION_FONT_SIZE = 95
 
-FONT_DIR = Path("/tmp/fonts")
+FONT_DIR      = Path("/tmp/fonts")
 FONT_BLACK    = FONT_DIR / "Montserrat-Black.ttf"
 FONT_SEMIBOLD = FONT_DIR / "Montserrat-SemiBold.ttf"
+SCANLINES_PATH = FONT_DIR / "scanlines.png"
+HUD_PATH       = FONT_DIR / "hud.png"
 
 FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
@@ -66,6 +69,57 @@ def _bootstrap_fonts():
         log.info("Font saved: %s", path)
 
 _bootstrap_fonts()
+
+
+def _generate_scanlines():
+    img = Image.new("RGBA", (W, BROLL_H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    for y in range(0, BROLL_H, 4):
+        draw.rectangle([0, y, W, y + 1], fill=(0, 0, 0, int(255 * 0.08)))
+    img.save(str(SCANLINES_PATH))
+    log.info("Scanlines PNG generated")
+
+
+def _generate_hud():
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    font_sm = ImageFont.truetype(str(FONT_SEMIBOLD), 22)
+    lw, m, arm = 4, 24, 55
+
+    draw.line([m, m, m, m+arm],             fill=(*AMETHYST, 178), width=lw)
+    draw.line([m, m, m+arm, m],             fill=(*AMETHYST, 178), width=lw)
+    draw.line([W-m, m, W-m, m+arm],         fill=(*SILVER,   128), width=lw)
+    draw.line([W-m, m, W-m-arm, m],         fill=(*SILVER,   128), width=lw)
+    bl_y = H - m
+    draw.line([m, bl_y, m, bl_y-arm],       fill=(*AMETHYST, 102), width=lw)
+    draw.line([m, bl_y, m+arm, bl_y],       fill=(*AMETHYST, 102), width=lw)
+
+    dot_x, dot_y = m, m + arm + 28
+    draw.ellipse([dot_x-8, dot_y-8, dot_x+8, dot_y+8], fill=(*AMETHYST, 204))
+    draw.text((dot_x + 20, dot_y - 11), "LIVE", font=font_sm, fill=(*AMETHYST, 178))
+    draw.text((W - m - 5, m + arm + 16), "AI.DEEP",
+              font=font_sm, fill=(*SILVER, 128), anchor="rs")
+
+    pill_w, pill_h = 220, 52
+    pill_x = W - m - pill_w
+    pill_y = H - m - pill_h - 10
+    draw.rounded_rectangle(
+        [pill_x, pill_y, pill_x+pill_w, pill_y+pill_h],
+        radius=14, fill=(*AMETHYST, 38), outline=(*AMETHYST, 128), width=2
+    )
+    draw.text((pill_x + pill_w//2, pill_y + pill_h//2),
+              "AI · DEEPTECH", font=font_sm, fill=(*AMETHYST, 230), anchor="mm")
+
+    wm_y = H - m - pill_h - 60
+    draw.text((m + arm + 20, wm_y), "@JUSTUS.AUTOMATES",
+              font=font_sm, fill=(*AMETHYST, 140))
+
+    img.save(str(HUD_PATH))
+    log.info("HUD PNG generated")
+
+
+_generate_scanlines()
+_generate_hud()
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -136,19 +190,26 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
 
 
 def prepare_broll_clip(src: Path, dest: Path, duration: float):
-    """Scale-crop to 1080×578, loop if shorter, trim to exact duration."""
+    """Scale-crop to 1080×BROLL_H with amethyst grade, loop, trim, per-segment fades."""
     scaled = dest.parent / (dest.stem + "_scaled.mp4")
+    color_grade = (
+        f"scale={W}:{BROLL_H}:force_original_aspect_ratio=increase,"
+        f"crop={W}:{BROLL_H},"
+        "colorchannelmixer=rr=1.0:rg=0:rb=0.08:gr=0:gg=0.92:gb=0:br=0.06:bg=0:bb=1.0,"
+        "eq=contrast=1.08:brightness=-0.02:saturation=0.9"
+    )
     run([
         "ffmpeg", "-y", "-i", str(src),
-        "-vf", "scale=1080:578:force_original_aspect_ratio=increase,crop=1080:578",
+        "-vf", color_grade,
         "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
         str(scaled),
     ], "broll_scale")
+    fade_out_st = max(0.0, duration - 0.3)
     run([
         "ffmpeg", "-y",
         "-stream_loop", "-1", "-i", str(scaled),
         "-t", str(duration),
-        "-vf", "setpts=PTS-STARTPTS",
+        "-vf", f"setpts=PTS-STARTPTS,fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_st:.3f}:d=0.3",
         "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
         str(dest),
     ], "broll_loop")
@@ -161,7 +222,7 @@ def apply_zoompan(src: Path, dest: Path):
         "ffmpeg", "-y", "-i", str(src),
         "-vf", (
             "zoompan=z='if(lte(on,1),1.2,max(1,1.2-on*0.013))':"
-            f"d=1:s=1080x578,setsar=1,fps={FPS},setpts=PTS-STARTPTS"
+            f"d=1:s={W}x{BROLL_H},setsar=1,fps={FPS},setpts=PTS-STARTPTS"
         ),
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-an", str(dest),
@@ -178,7 +239,8 @@ def concat_brolls(clips: list[Path], dest: Path, total_dur: float, job_dir: Path
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", str(list_file),
         "-t", str(total_dur),
-        "-vf", "setsar=1",
+        "-vf", "setsar=1,fade=t=in:st=0:d=0.5",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-an", str(dest),
     ], "concat_broll")
 
@@ -228,7 +290,7 @@ def transcribe_audio(video_path: Path) -> list[dict]:
 def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
     """Draw one caption word onto a 1080×110 RGBA image with 3-layer soft blend."""
     draw = ImageDraw.Draw(img)
-    font_size = int(86 * scale)
+    font_size = int(CAPTION_FONT_SIZE * scale)
     font = ImageFont.truetype(str(FONT_BLACK), font_size)
 
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
@@ -434,9 +496,9 @@ async def render(req: RenderRequest):
         prog_dir = job_dir / "progress"
         build_progress_frames(total_frames, prog_dir)
 
-        # ── 11. Watermark PNG ─────────────────────────────────────────────────
-        watermark_png = job_dir / "watermark.png"
-        build_watermark_png(watermark_png)
+        # ── 11. Static overlays (HUD + scanlines generated at startup) ──────────
+        hud_png       = HUD_PATH
+        scanlines_png = SCANLINES_PATH
 
         # ── 12. Final ffmpeg compose ──────────────────────────────────────────
         output_mp4 = job_dir / "output.mp4"
@@ -446,29 +508,30 @@ async def render(req: RenderRequest):
 
         fadeout_start = max(0.0, duration - 1.0)
         filter_complex = (
-            # inputs: [0]=broll_concat [1]=divider [2]=facecam_scaled
-            #         [3]=caption seq  [4]=progress seq  [5]=watermark
-            # Explicit trim on broll guarantees it runs for full facecam duration
+            # [0]=broll_concat [1]=divider [2]=facecam_scaled
+            # [3]=caption seq  [4]=progress seq  [5]=scanlines  [6]=hud
             f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];"
             "[1:v]setsar=1[div];"
             "[2:v]setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
-            f"[stacked][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
-            "[with_cap][5:v]overlay=x=0:y=0[with_wm];"
-            f"[with_wm][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
+            "[stacked][5:v]overlay=x=0:y=0[with_scan];"
+            f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
+            "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
+            f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
             f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [
             "ffmpeg", "-y",
-            "-i", str(broll_concat),
-            "-i", str(divider_png),
-            "-i", str(facecam_scaled),
+            "-i", str(broll_concat),       # [0]
+            "-i", str(divider_png),         # [1]
+            "-i", str(facecam_scaled),      # [2]
             "-framerate", str(FPS),
-            "-i", cap_pattern,
+            "-i", cap_pattern,              # [3]
             "-framerate", str(FPS),
-            "-i", prog_pattern,
-            "-i", str(watermark_png),
+            "-i", prog_pattern,             # [4]
+            "-i", str(scanlines_png),       # [5]
+            "-i", str(hud_png),             # [6]
             "-filter_complex", filter_complex,
             "-map", "[final]",
             "-map", "2:a",

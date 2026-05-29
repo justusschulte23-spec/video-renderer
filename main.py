@@ -37,9 +37,9 @@ WHITE         = (255, 255, 255)
 W, H, FPS   = 1080, 1920, 30
 BROLL_H     = 578
 DIVIDER_Y   = 578
-DIVIDER_H   = 72
-FACECAM_Y   = 650
-FACECAM_H   = 1270   # 650 + 1270 = 1920
+DIVIDER_H   = 110
+FACECAM_Y   = 688    # 578 + 110
+FACECAM_H   = 1232   # 1920 - 688
 PROGRESS_Y  = 1916
 PROGRESS_H  = 4
 
@@ -125,17 +125,24 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
     ], "scale_crop")
 
 
-def trim_and_crop_broll(src: Path, dest: Path, duration: float):
-    """Trim to duration, scale-crop to 1080×578."""
+def prepare_broll_clip(src: Path, dest: Path, duration: float):
+    """Scale-crop to 1080×578, loop if shorter, trim to exact duration."""
+    scaled = dest.parent / (dest.stem + "_scaled.mp4")
     run([
         "ffmpeg", "-y", "-i", str(src),
+        "-vf", "scale=1080:578:force_original_aspect_ratio=increase,crop=1080:578",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(scaled),
+    ], "broll_scale")
+    run([
+        "ffmpeg", "-y",
+        "-stream_loop", "-1", "-i", str(scaled),
         "-t", str(duration),
-        "-vf", (
-            f"scale=1080:578:force_original_aspect_ratio=increase,"
-            f"crop=1080:578"
-        ),
-        "-an", str(dest),
-    ], "trim_crop_broll")
+        "-vf", "setpts=PTS-STARTPTS",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(dest),
+    ], "broll_loop")
+    scaled.unlink(missing_ok=True)
 
 
 def apply_zoompan(src: Path, dest: Path):
@@ -208,25 +215,32 @@ def transcribe_audio(video_path: Path) -> list[dict]:
 
 
 def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
-    """Draw one caption word onto a 1080×72 RGBA image."""
+    """Draw one caption word onto a 1080×110 RGBA image with 3-layer soft blend."""
     draw = ImageDraw.Draw(img)
     font_size = int(86 * scale)
     font = ImageFont.truetype(str(FONT_BLACK), font_size)
 
-    # measure
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
     x = (1080 - tw) // 2 - bbox[0]
-    y = (72 - th) // 2 - bbox[1]
+    y = (DIVIDER_H - th) // 2 - bbox[1]
 
-    # stroke first
+    # Layer 1: outer soft halo — wide, semi-transparent deep purple
     draw.text((x, y), word, font=font,
-              fill=(*AMETHYST_DARK, 255),
-              stroke_width=18,
-              stroke_fill=(*AMETHYST_DARK, 255))
-    # fill on top
-    draw.text((x, y), word, font=font, fill=(*WHITE, 255))
+              fill=(0, 0, 0, 0),
+              stroke_fill=(109, 40, 217, 100),
+              stroke_width=18)
+    # Layer 2: mid glow — tighter, more opaque amethyst
+    draw.text((x, y), word, font=font,
+              fill=(0, 0, 0, 0),
+              stroke_fill=(139, 92, 246, 160),
+              stroke_width=10)
+    # Layer 3: sharp inner stroke + pure white fill
+    draw.text((x, y), word, font=font,
+              fill=(255, 255, 255, 255),
+              stroke_fill=(124, 58, 237, 230),
+              stroke_width=5)
 
 
 def build_caption_frames(words: list[dict], total_frames: int,
@@ -305,6 +319,7 @@ def build_watermark_png(path: Path):
     tw = bbox[2] - bbox[0]
     x = 1048 - tw
     y = 670
+    y = FACECAM_Y + 2
     draw.text((x, y), text, font=font, fill=(232, 232, 232, 77))  # 30% opacity
     img.save(str(path))
 
@@ -360,14 +375,14 @@ async def render(req: RenderRequest):
         log.info("Facecam duration=%.3fs  frames=%d  slot=%.3fs",
                  duration, total_frames, slot_dur)
 
-        # ── 3. Trim + crop brolls ────────────────────────────────────────────
+        # ── 3. Prepare brolls (scale, crop, loop to fill slot) ───────────────
         b1_trimmed = job_dir / "b1_trimmed.mp4"
         b2_trimmed = job_dir / "b2_trimmed.mp4"
         b3_trimmed = job_dir / "b3_trimmed.mp4"
 
-        trim_and_crop_broll(broll1_raw, b1_trimmed, slot_dur)
-        trim_and_crop_broll(broll2_raw, b2_trimmed, slot_dur)
-        trim_and_crop_broll(broll3_raw, b3_trimmed, slot_dur)
+        prepare_broll_clip(broll1_raw, b1_trimmed, slot_dur)
+        prepare_broll_clip(broll2_raw, b2_trimmed, slot_dur)
+        prepare_broll_clip(broll3_raw, b3_trimmed, slot_dur)
 
         # ── 4. Zoom on broll1 ────────────────────────────────────────────────
         b1_zoom = job_dir / "b1_zoom.mp4"
@@ -407,6 +422,7 @@ async def render(req: RenderRequest):
         cap_pattern  = str(cap_dir  / "frame_%06d.png")
         prog_pattern = str(prog_dir / "frame_%06d.png")
 
+        fadeout_start = max(0.0, duration - 1.0)
         filter_complex = (
             # inputs: [0]=broll_concat [1]=divider [2]=facecam_scaled
             #         [3]=caption seq  [4]=progress seq  [5]=watermark
@@ -414,9 +430,10 @@ async def render(req: RenderRequest):
             "[1:v]setsar=1[div];"
             "[2:v]setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
-            "[stacked][3:v]overlay=x=0:y=578[with_cap];"
+            f"[stacked][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
             "[with_cap][5:v]overlay=x=0:y=0[with_wm];"
-            "[with_wm][4:v]overlay=x=0:y=1916[final]"
+            f"[with_wm][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
+            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [

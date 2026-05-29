@@ -189,60 +189,75 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
     ], "scale_crop")
 
 
-def prepare_broll_clip(src: Path, dest: Path, duration: float):
-    """Scale-crop to 1080×BROLL_H with amethyst grade, loop, trim, per-segment fades."""
-    scaled = dest.parent / (dest.stem + "_scaled.mp4")
-    color_grade = (
-        f"scale={W}:{BROLL_H}:force_original_aspect_ratio=increase,"
-        f"crop={W}:{BROLL_H},"
-        "colorchannelmixer=rr=1.0:rg=0:rb=0.08:gr=0:gg=0.92:gb=0:br=0.06:bg=0:bb=1.0,"
-        "eq=contrast=1.08:brightness=-0.02:saturation=0.9"
-    )
-    run([
-        "ffmpeg", "-y", "-i", str(src),
-        "-vf", color_grade,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
-        str(scaled),
-    ], "broll_scale")
-    fade_out_st = max(0.0, duration - 0.3)
-    run([
-        "ffmpeg", "-y",
-        "-stream_loop", "-1", "-i", str(scaled),
-        "-t", str(duration),
-        "-vf", f"setpts=PTS-STARTPTS,fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_st:.3f}:d=0.3",
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
-        str(dest),
-    ], "broll_loop")
-    scaled.unlink(missing_ok=True)
+def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
+    prepared = []
+    total = 0.0
+    for i, clip_path in enumerate(clips):
+        if not clip_path or not os.path.exists(str(clip_path)):
+            continue
+        if total >= target_duration:
+            break
+        clip_dur = probe_duration(Path(clip_path))
+        remaining = target_duration - total
+        use_dur = min(clip_dur, remaining)
+        out = str(job_dir / f"broll_seg_{i}.mp4")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(clip_path),
+            "-t", str(use_dur),
+            "-vf", (
+                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},"
+                "colorchannelmixer=rr=1.0:rg=0:rb=0.08:gr=0:gg=0.92:gb=0:br=0.06:bg=0:bb=1.0,"
+                "eq=contrast=1.08:brightness=-0.02:saturation=0.9"
+            ),
+            "-an", "-c:v", "libx264", "-crf", "18", "-preset", "fast", out
+        ], check=True)
+        actual = probe_duration(Path(out))
+        prepared.append(out)
+        total += actual
+        log.info("[BROLL] Clip %d: %.2fs | total: %.2fs / %.2fs", i+1, actual, total, target_duration)
 
+    if not prepared:
+        raise RuntimeError("No broll clips could be prepared")
 
-def apply_zoompan(src: Path, dest: Path):
-    """Apply zoom-out on first 15 frames, reset PTS+FPS to avoid timestamp drift."""
-    run([
-        "ffmpeg", "-y", "-i", str(src),
-        "-vf", (
-            "zoompan=z='if(lte(on,1),1.2,max(1,1.2-on*0.013))':"
-            f"d=1:s={W}x{BROLL_H},setsar=1,fps={FPS},setpts=PTS-STARTPTS"
-        ),
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-        "-an", str(dest),
-    ], "zoompan")
+    if total < target_duration - 0.5:
+        gap = target_duration - total
+        looped = str(job_dir / "broll_loop_fill.mp4")
+        subprocess.run([
+            "ffmpeg", "-y", "-stream_loop", "-1", "-i", prepared[-1],
+            "-t", str(gap), "-vf", "setpts=PTS-STARTPTS",
+            "-an", "-c:v", "libx264", "-crf", "18", "-preset", "fast", looped
+        ], check=True)
+        prepared.append(looped)
 
+    if len(prepared) == 1:
+        log.info("[BROLL] Single clip covers full duration — no switch")
+        return prepared[0]
 
-def concat_brolls(clips: list[Path], dest: Path, total_dur: float, job_dir: Path):
-    """Concatenate broll clips to a single video of exact total_dur."""
-    list_file = job_dir / "broll_list.txt"
-    with open(list_file, "w") as f:
-        for c in clips:
-            f.write(f"file '{c}'\n")
-    run([
-        "ffmpeg", "-y",
-        "-f", "concat", "-safe", "0", "-i", str(list_file),
-        "-t", str(total_dur),
-        "-vf", "setsar=1,fade=t=in:st=0:d=0.5",
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-        "-an", str(dest),
-    ], "concat_broll")
+    inputs = []
+    for p in prepared:
+        inputs += ["-i", p]
+    durations = [probe_duration(Path(p)) for p in prepared]
+
+    if len(prepared) == 2:
+        offset = durations[0] - 0.3
+        filter_str = f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={offset:.3f}[v]"
+    else:
+        d0, d1 = durations[0], durations[1]
+        filter_str = (
+            f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={d0-0.3:.3f}[v01];"
+            f"[v01][2:v]xfade=transition=fade:duration=0.3:offset={d0+d1-0.6:.3f}[v]"
+        )
+
+    concat_out = str(job_dir / "broll_final.mp4")
+    subprocess.run([
+        "ffmpeg", "-y", *inputs,
+        "-filter_complex", filter_str,
+        "-map", "[v]",
+        "-t", str(target_duration),
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", concat_out
+    ], check=True)
+    return concat_out
 
 
 def make_gradient_png(path: Path, w: int, h: int,
@@ -456,32 +471,12 @@ async def render(req: RenderRequest):
         # ── 2. Probe facecam duration ────────────────────────────────────────
         duration     = probe_duration(facecam_raw)
         total_frames = int(duration * FPS)
-        slot_dur     = duration / 3
-        log.info("Facecam duration=%.3fs  frames=%d  slot=%.3fs",
-                 duration, total_frames, slot_dur)
+        log.info("Facecam duration=%.3fs  frames=%d", duration, total_frames)
 
-        # ── 3. Prepare brolls (scale, crop, loop to fill slot) ───────────────
-        b1_trimmed = job_dir / "b1_trimmed.mp4"
-        b2_trimmed = job_dir / "b2_trimmed.mp4"
-        b3_trimmed = job_dir / "b3_trimmed.mp4"
-
-        log_duration(broll1_raw, "broll1_raw")
-        log_duration(broll2_raw, "broll2_raw")
-        log_duration(broll3_raw, "broll3_raw")
-
-        prepare_broll_clip(broll1_raw, b1_trimmed, slot_dur)
-        prepare_broll_clip(broll2_raw, b2_trimmed, slot_dur)
-        prepare_broll_clip(broll3_raw, b3_trimmed, slot_dur)
-
-        log_duration(b1_trimmed, "b1_trimmed")
-        log_duration(b2_trimmed, "b2_trimmed")
-        log_duration(b3_trimmed, "b3_trimmed")
-
-        # ── 5. Concat brolls ─────────────────────────────────────────────────
-        broll_concat = job_dir / "broll_concat.mp4"
-        concat_brolls([b1_trimmed, b2_trimmed, b3_trimmed],
-                      broll_concat, duration, job_dir)
-        log_duration(broll_concat, "broll_concat")
+        # ── 3. Build broll track (smart sequential, no forced splits) ───────────
+        clips = [broll1_raw, broll2_raw, broll3_raw]
+        broll_concat = Path(build_broll_track(clips, duration, w=W, h=BROLL_H, job_dir=job_dir))
+        log_duration(broll_concat, "broll_final")
         log.info("BROLL vs FACECAM: %.3fs vs %.3fs", probe_duration(broll_concat), duration)
 
         # ── 6. Scale/crop facecam ────────────────────────────────────────────

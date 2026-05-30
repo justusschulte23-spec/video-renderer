@@ -35,11 +35,11 @@ WHITE         = (255, 255, 255)
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 W, H, FPS   = 1080, 1920, 30
-BROLL_H     = 868    # 45% of 1920 — cinematic
-DIVIDER_Y   = 868
+BROLL_H     = 576    # 30% of 1920
+DIVIDER_Y   = 576    # = BROLL_H
 DIVIDER_H   = 110
-FACECAM_Y   = 978    # BROLL_H + DIVIDER_H
-FACECAM_H   = 942    # 1920 - FACECAM_Y
+FACECAM_Y   = 686    # BROLL_H + DIVIDER_H
+FACECAM_H   = 1234   # 1920 - FACECAM_Y
 PROGRESS_Y  = 1916
 PROGRESS_H  = 4
 CAPTION_FONT_SIZE = 95

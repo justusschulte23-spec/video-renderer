@@ -202,8 +202,8 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
         use_dur = min(clip_dur, remaining)
         out = str(job_dir / f"broll_seg_{i}.mp4")
         subprocess.run([
-            "ffmpeg", "-y", "-i", str(clip_path),
-            "-t", str(use_dur),
+            "ffmpeg", "-y", "-ss", "60", "-i", str(clip_path),
+            "-t", "180",
             "-vf", (
                 f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                 f"crop={w}:{h},"

@@ -566,19 +566,37 @@ async def generate_broll(req: GenerateBrollRequest):
         log.info("[BROLL] Generating HTML for: %s", req.topic)
 
         system_prompt = (
-            "You are an expert HTML/CSS/JS animator. Create a 60-second "
-            "seamlessly looping animation for a social media B-Roll.\n"
-            "REQUIREMENTS:\n"
-            "- Exactly 1080x576px viewport (this is the top b-roll strip)\n"
-            "- Dark background #080808\n"
-            f"- Brand: primary={req.brand_color_primary}, secondary={req.brand_color_secondary}\n"
-            "- Topic-SPECIFIC animated elements: counters, data viz, UI mockups, "
-            "graphs — whatever fits the topic. NOT generic tech.\n"
-            "- Subtle scanline overlay, premium minimal feel\n"
-            "- Montserrat font via Google Fonts import\n"
-            "- All CSS/JS only, no external libs except the font\n"
-            "- Smooth 60s loop\n"
-            "Return ONLY raw HTML, no markdown, no explanation."
+            "You are a world-class motion designer creating B-Roll at Apple-keynote / "
+            "OpenAI-reveal quality. Output a single self-contained HTML file.\n\n"
+            "VISUAL LANGUAGE — CLEAN, PREMIUM, NOT OPPRESSIVE:\n"
+            "- Background: soft dark charcoal with a faint amethyst undertone "
+            "(#15131c to #1a1722 gradient) — NOT pure black. It should feel deep "
+            "but breathable, never heavy or oppressive.\n"
+            "- Lots of light elements so it breathes: WHITE is the primary color for "
+            "text, lines, key shapes. SILVER (#C0C0C0) for secondary detail. "
+            f"AMETHYST ({req.brand_color_primary}) as a refined accent only — glows, one highlight, "
+            "a single line of color. Never purple-dominant.\n"
+            "- The overall impression: light, airy, high-end — like a bright premium "
+            "dashboard on a soft dark surface, not a dark cave.\n"
+            "- Precise Montserrat typography, generous spacing, thin elegant lines.\n\n"
+            "MOTION — HIGH ENERGY, NEVER STATIC:\n"
+            "- Frame 0 already in motion. No calm opening.\n"
+            "- Build into existence: logos assemble from lines, UIs slide and layer in, "
+            "numbers count up fast.\n"
+            "- Continuous micro-motion: drift, pulse, parallax, scanning light, particles.\n"
+            "- Scene changes every 3-4s, flowing morphs not hard cuts: "
+            "logo-reveal → morphs into UI → into data viz → network forming → loop.\n"
+            "- Easing always (cubic-bezier). Designed, not robotic.\n\n"
+            "TECHNICAL:\n"
+            "- Exactly 1080x576px viewport\n"
+            "- 60s seamless loop, motion throughout\n"
+            "- Pure CSS/JS + SVG, only Montserrat via Google Fonts\n"
+            "- SVG path animation, CSS transforms, requestAnimationFrame\n"
+            "- Very subtle scanline/grain for cinematic feel — keep it light\n\n"
+            "TOPIC-SPECIFIC: every element relates to the exact topic.\n\n"
+            "ANTI-PATTERNS: pure black heavy background, purple-everything, crowded "
+            "layouts, slow-only fades, single static scene, generic shapes.\n\n"
+            "Return ONLY raw HTML. No markdown, no commentary."
         )
         user_message = (
             f"Topic: {req.topic}. "
@@ -587,8 +605,8 @@ async def generate_broll(req: GenerateBrollRequest):
 
         html_content = call_openrouter(
             system_prompt, user_message,
-            model="anthropic/claude-haiku-4.5",
-            max_tokens=6000,
+            model="anthropic/claude-sonnet-4.5",
+            max_tokens=8000,
         )
 
         # Strip markdown code fences if the model wrapped the output

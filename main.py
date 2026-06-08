@@ -153,7 +153,7 @@ class DetectImpactsRequest(BaseModel):
 
 # ── OpenRouter helper ─────────────────────────────────────────────────────────
 def call_openrouter(system_prompt: str, user_message: str,
-                    model: str = "anthropic/claude-haiku-4",
+                    model: str = "anthropic/claude-haiku-4.5",
                     max_tokens: int = 6000) -> str:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY not set")
@@ -587,7 +587,7 @@ async def generate_broll(req: GenerateBrollRequest):
 
         html_content = call_openrouter(
             system_prompt, user_message,
-            model="anthropic/claude-haiku-4",
+            model="anthropic/claude-haiku-4.5",
             max_tokens=6000,
         )
 
@@ -649,7 +649,7 @@ async def detect_impacts(req: DetectImpactsRequest):
         raw = call_openrouter(
             system_prompt,
             json.dumps(words),
-            model="anthropic/claude-haiku-4",
+            model="anthropic/claude-haiku-4.5",
             max_tokens=1000,
         )
 

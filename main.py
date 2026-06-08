@@ -4,7 +4,11 @@ import shutil
 import logging
 import subprocess
 import math
+import asyncio
+import json
+import re
 from pathlib import Path
+from typing import Optional
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -26,6 +30,9 @@ cloudinary.config(
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+
 # ── Brand colours ─────────────────────────────────────────────────────────────
 AMETHYST      = (139, 92, 246)
 AMETHYST_DARK = (124, 58, 237)
@@ -34,19 +41,19 @@ BG            = (8, 8, 8)
 WHITE         = (255, 255, 255)
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
-W, H, FPS   = 1080, 1920, 30
-BROLL_H     = 576    # 30% of 1920
-DIVIDER_Y   = 576    # = BROLL_H
-DIVIDER_H   = 110
-FACECAM_Y   = 686    # BROLL_H + DIVIDER_H
-FACECAM_H   = 1234   # 1920 - FACECAM_Y
-PROGRESS_Y  = 1916
-PROGRESS_H  = 4
+W, H, FPS         = 1080, 1920, 30
+BROLL_H           = 576
+DIVIDER_Y         = 576
+DIVIDER_H         = 110
+FACECAM_Y         = 686
+FACECAM_H         = 1234
+PROGRESS_Y        = 1916
+PROGRESS_H        = 4
 CAPTION_FONT_SIZE = 95
 
-FONT_DIR      = Path("/tmp/fonts")
-FONT_BLACK    = FONT_DIR / "Montserrat-Black.ttf"
-FONT_SEMIBOLD = FONT_DIR / "Montserrat-SemiBold.ttf"
+FONT_DIR       = Path("/tmp/fonts")
+FONT_BLACK     = FONT_DIR / "Montserrat-Black.ttf"
+FONT_SEMIBOLD  = FONT_DIR / "Montserrat-SemiBold.ttf"
 SCANLINES_PATH = FONT_DIR / "scanlines.png"
 HUD_PATH       = FONT_DIR / "hud.png"
 
@@ -54,6 +61,7 @@ FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
     FONT_SEMIBOLD: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
 }
+
 
 # ── Font bootstrap ─────────────────────────────────────────────────────────────
 def _bootstrap_fonts():
@@ -72,7 +80,7 @@ _bootstrap_fonts()
 
 
 def _generate_scanlines():
-    img = Image.new("RGBA", (W, BROLL_H), (0, 0, 0, 0))
+    img  = Image.new("RGBA", (W, BROLL_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for y in range(0, BROLL_H, 4):
         draw.rectangle([0, y, W, y + 1], fill=(0, 0, 0, int(255 * 0.08)))
@@ -81,18 +89,18 @@ def _generate_scanlines():
 
 
 def _generate_hud():
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    img     = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw    = ImageDraw.Draw(img)
     font_sm = ImageFont.truetype(str(FONT_SEMIBOLD), 22)
     lw, m, arm = 4, 24, 55
 
-    draw.line([m, m, m, m+arm],             fill=(*AMETHYST, 178), width=lw)
-    draw.line([m, m, m+arm, m],             fill=(*AMETHYST, 178), width=lw)
-    draw.line([W-m, m, W-m, m+arm],         fill=(*SILVER,   128), width=lw)
-    draw.line([W-m, m, W-m-arm, m],         fill=(*SILVER,   128), width=lw)
+    draw.line([m, m, m, m+arm],           fill=(*AMETHYST, 178), width=lw)
+    draw.line([m, m, m+arm, m],           fill=(*AMETHYST, 178), width=lw)
+    draw.line([W-m, m, W-m, m+arm],       fill=(*SILVER,   128), width=lw)
+    draw.line([W-m, m, W-m-arm, m],       fill=(*SILVER,   128), width=lw)
     bl_y = H - m
-    draw.line([m, bl_y, m, bl_y-arm],       fill=(*AMETHYST, 102), width=lw)
-    draw.line([m, bl_y, m+arm, bl_y],       fill=(*AMETHYST, 102), width=lw)
+    draw.line([m, bl_y, m, bl_y-arm],     fill=(*AMETHYST, 102), width=lw)
+    draw.line([m, bl_y, m+arm, bl_y],     fill=(*AMETHYST, 102), width=lw)
 
     dot_x, dot_y = m, m + arm + 28
     draw.ellipse([dot_x-8, dot_y-8, dot_x+8, dot_y+8], fill=(*AMETHYST, 204))
@@ -124,15 +132,138 @@ _generate_hud()
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI()
 
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
 class RenderRequest(BaseModel):
-    facecam:   str
-    broll:     str
-    broll2:    str | None = None
-    broll3:    str | None = None
-    hook_text: str
+    facecam:        str
+    broll_html_url: Optional[str] = None
+    hook_text:      str
+
+
+class GenerateBrollRequest(BaseModel):
+    topic:                 str
+    topic_slug:            str
+    brand_color_primary:   str = "#8B5CF6"
+    brand_color_secondary: str = "#C0C0C0"
+
+
+class DetectImpactsRequest(BaseModel):
+    facecam: str
+
+
+# ── OpenRouter helper ─────────────────────────────────────────────────────────
+def call_openrouter(system_prompt: str, user_message: str,
+                    model: str = "anthropic/claude-haiku-4",
+                    max_tokens: int = 6000) -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://schultensolutions.app.n8n.cloud",
+        "X-Title": "Schulten Solutions Video Renderer",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ],
+    }
+    resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+# ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────
+async def render_html_to_video(html_path: Path, output_path: Path, duration: float) -> bool:
+    """Record the HTML animation with Playwright, loop to match duration. Returns True on success."""
+    record_dir = output_path.parent / "pw_record"
+    record_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            log.error("[RENDER] Playwright not installed — cannot render HTML broll")
+            return False
+
+        record_secs   = min(duration, 65.0)
+        log.info("[RENDER] Recording HTML broll via chromium (%.1fs)", duration)
+        webm_path_str = None
+
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox",
+                          "--disable-dev-shm-usage"],
+                )
+            except Exception as exc:
+                log.error("[RENDER] Chromium launch failed: %s", exc)
+                return False
+
+            context = await browser.new_context(
+                viewport={"width": 1080, "height": 576},
+                record_video_dir=str(record_dir),
+                record_video_size={"width": 1080, "height": 576},
+            )
+            page = await context.new_page()
+            try:
+                await page.goto(
+                    f"file://{html_path.absolute()}",
+                    wait_until="networkidle",
+                    timeout=30000,
+                )
+            except Exception as exc:
+                log.warning("[RENDER] Page load warning (continuing): %s", exc)
+
+            await asyncio.sleep(record_secs)
+
+            video_ref = page.video
+            await context.close()
+
+            if video_ref is not None:
+                try:
+                    webm_path_str = await video_ref.path()
+                except Exception as exc:
+                    log.warning("[RENDER] Could not get video path: %s", exc)
+
+            await browser.close()
+
+        if not webm_path_str or not Path(webm_path_str).exists():
+            log.error("[RENDER] Playwright video file not found: %s", webm_path_str)
+            return False
+
+        # Convert WebM to H.264 MP4, looping to match full duration
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1",
+            "-i", str(webm_path_str),
+            "-t", str(duration),
+            "-vf", "scale=1080:576:flags=lanczos,setsar=1",
+            "-an",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-pix_fmt", "yuv420p",
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.error("[RENDER] WebM→MP4 conversion failed: %s", result.stderr[-1000:])
+            return False
+
+        log.info("[RENDER] HTML broll rendered: %s", output_path)
+        return True
+
+    except Exception as exc:
+        log.error("[RENDER] HTML broll render error: %s", exc)
+        return False
+    finally:
+        shutil.rmtree(record_dir, ignore_errors=True)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
 def download_file(url: str, dest: Path) -> bool:
     try:
         r = requests.get(url, timeout=60, stream=True)
@@ -142,8 +273,8 @@ def download_file(url: str, dest: Path) -> bool:
                 f.write(chunk)
         log.info("Downloaded %s → %s", url, dest)
         return True
-    except Exception as e:
-        log.error("Download failed %s: %s", url, e)
+    except Exception as exc:
+        log.error("Download failed %s: %s", url, exc)
         return False
 
 
@@ -163,12 +294,12 @@ def log_duration(path: Path, label: str) -> float:
         d = probe_duration(path)
         log.info("DURATION [%s]: %.3fs", label, d)
         return d
-    except Exception as e:
-        log.error("DURATION probe failed [%s]: %s", label, e)
+    except Exception as exc:
+        log.error("DURATION probe failed [%s]: %s", label, exc)
         return 0.0
 
 
-def run(cmd: list[str], label: str = ""):
+def run(cmd: list, label: str = ""):
     log.info("RUN %s: %s", label, " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -177,7 +308,6 @@ def run(cmd: list[str], label: str = ""):
 
 
 def scale_crop(src: Path, dest: Path, tw: int, th: int):
-    """Scale-and-center-crop to target w×h, keeping audio."""
     run([
         "ffmpeg", "-y", "-i", str(src),
         "-vf", (
@@ -191,15 +321,14 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
 
 def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
     prepared = []
-    total = 0.0
+    total    = 0.0
     for i, clip_path in enumerate(clips):
         if not clip_path or not os.path.exists(str(clip_path)):
             continue
         if total >= target_duration:
             break
-        clip_dur = probe_duration(Path(clip_path))
+        clip_dur  = probe_duration(Path(clip_path))
         remaining = target_duration - total
-        use_dur = min(clip_dur, remaining)
         out = str(job_dir / f"broll_seg_{i}.mp4")
         subprocess.run([
             "ffmpeg", "-y", "-ss", "60", "-i", str(clip_path),
@@ -221,7 +350,7 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
         raise RuntimeError("No broll clips could be prepared")
 
     if total < target_duration - 0.5:
-        gap = target_duration - total
+        gap    = target_duration - total
         looped = str(job_dir / "broll_loop_fill.mp4")
         subprocess.run([
             "ffmpeg", "-y", "-stream_loop", "-1", "-i", prepared[-1],
@@ -231,19 +360,18 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
         prepared.append(looped)
 
     if len(prepared) == 1:
-        log.info("[BROLL] Single clip covers full duration — no switch")
         return prepared[0]
 
-    inputs = []
+    inputs    = []
     for p in prepared:
         inputs += ["-i", p]
     durations = [probe_duration(Path(p)) for p in prepared]
 
     if len(prepared) == 2:
-        offset = durations[0] - 0.3
+        offset     = durations[0] - 0.3
         filter_str = f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={offset:.3f}[v]"
     else:
-        d0, d1 = durations[0], durations[1]
+        d0, d1     = durations[0], durations[1]
         filter_str = (
             f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={d0-0.3:.3f}[v01];"
             f"[v01][2:v]xfade=transition=fade:duration=0.3:offset={d0+d1-0.6:.3f}[v]"
@@ -262,7 +390,7 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
 
 def make_gradient_png(path: Path, w: int, h: int,
                       left: tuple, right: tuple, alpha: int = 255):
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    img  = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for x in range(w):
         t = x / (w - 1)
@@ -273,7 +401,7 @@ def make_gradient_png(path: Path, w: int, h: int,
     img.save(str(path))
 
 
-def transcribe_audio(video_path: Path) -> list[dict]:
+def transcribe_audio(video_path: Path) -> list:
     """Returns list of {word, start, end} or [] on failure."""
     try:
         log.info("Extracting audio for Whisper …")
@@ -297,8 +425,8 @@ def transcribe_audio(video_path: Path) -> list[dict]:
             words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
         log.info("Whisper returned %d words", len(words))
         return words
-    except Exception as e:
-        log.error("Whisper transcription failed: %s", e)
+    except Exception as exc:
+        log.error("Whisper transcription failed: %s", exc)
         return []
 
 
@@ -315,15 +443,14 @@ def get_adaptive_font(word: str, max_width: int = W,
 
 
 def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
-    """Draw one caption word with adaptive font size and 3-layer soft blend."""
-    draw = ImageDraw.Draw(img)
+    draw            = ImageDraw.Draw(img)
     font, actual_size = get_adaptive_font(word, max_size=int(CAPTION_FONT_SIZE * scale))
 
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    x = (W - tw) // 2 - bbox[0]
-    y = (DIVIDER_H - th) // 2 - bbox[1]
+    tw   = bbox[2] - bbox[0]
+    th   = bbox[3] - bbox[1]
+    x    = (W - tw) // 2 - bbox[0]
+    y    = (DIVIDER_H - th) // 2 - bbox[1]
 
     outer_stroke = max(8, int(actual_size * 0.17))
     mid_stroke   = max(5, int(actual_size * 0.09))
@@ -343,22 +470,19 @@ def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
               stroke_width=inner_stroke)
 
 
-def build_caption_frames(words: list[dict], total_frames: int,
+def build_caption_frames(words: list, total_frames: int,
                          cap_dir: Path, gradient_base: Path):
-    """Pre-render caption PNG sequence to cap_dir."""
     cap_dir.mkdir(parents=True, exist_ok=True)
     log.info("Rendering %d caption frames …", total_frames)
 
-    # build per-frame word index
-    word_at_frame = {}
+    word_at_frame: dict = {}
     for i, w in enumerate(words):
         start_f = int(w["start"] * FPS)
         end_f   = int(w["end"]   * FPS)
         for f in range(start_f, min(end_f + 1, total_frames)):
             word_at_frame[f] = i
 
-    # find transition frames (first frame of each new word)
-    transition_frames: set[int] = set()
+    transition_frames: set = set()
     prev = -1
     for f in range(total_frames):
         cur = word_at_frame.get(f, -1)
@@ -370,7 +494,7 @@ def build_caption_frames(words: list[dict], total_frames: int,
 
     for frame_n in range(total_frames):
         img = base_img.copy()
-        wi = word_at_frame.get(frame_n, -1)
+        wi  = word_at_frame.get(frame_n, -1)
         if wi >= 0:
             word = words[wi]["word"]
             if frame_n in transition_frames:
@@ -391,13 +515,12 @@ def build_caption_frames(words: list[dict], total_frames: int,
 
 
 def build_progress_frames(total_frames: int, prog_dir: Path):
-    """Pre-render progress bar PNG sequence."""
     prog_dir.mkdir(parents=True, exist_ok=True)
     log.info("Rendering %d progress frames …", total_frames)
     for frame_n in range(total_frames):
-        img = Image.new("RGBA", (W, PROGRESS_H), (0, 0, 0, 0))
+        img  = Image.new("RGBA", (W, PROGRESS_H), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        fw = int((frame_n / max(total_frames - 1, 1)) * W)
+        fw   = int((frame_n / max(total_frames - 1, 1)) * W)
         if fw > 0:
             for x in range(fw):
                 t = x / (W - 1)
@@ -411,16 +534,15 @@ def build_progress_frames(total_frames: int, prog_dir: Path):
 
 
 def build_watermark_png(path: Path):
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    img  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(str(FONT_SEMIBOLD), 22)
     text = "@justus.automates"
     bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    x = 1048 - tw
-    y = 670
-    y = FACECAM_Y + 2
-    draw.text((x, y), text, font=font, fill=(232, 232, 232, 77))  # 30% opacity
+    tw   = bbox[2] - bbox[0]
+    x    = 1048 - tw
+    y    = FACECAM_Y + 2
+    draw.text((x, y), text, font=font, fill=(232, 232, 232, 77))
     img.save(str(path))
 
 
@@ -436,8 +558,127 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
     return result["secure_url"]
 
 
-# ── Main render route ─────────────────────────────────────────────────────────
+# ── POST /generate-broll ──────────────────────────────────────────────────────
+@app.post("/generate-broll")
+async def generate_broll(req: GenerateBrollRequest):
+    html_path = Path(f"/tmp/broll_{req.topic_slug}.html")
+    try:
+        log.info("[BROLL] Generating HTML for: %s", req.topic)
 
+        system_prompt = (
+            "You are an expert HTML/CSS/JS animator. Create a 60-second "
+            "seamlessly looping animation for a social media B-Roll.\n"
+            "REQUIREMENTS:\n"
+            "- Exactly 1080x576px viewport (this is the top b-roll strip)\n"
+            "- Dark background #080808\n"
+            f"- Brand: primary={req.brand_color_primary}, secondary={req.brand_color_secondary}\n"
+            "- Topic-SPECIFIC animated elements: counters, data viz, UI mockups, "
+            "graphs — whatever fits the topic. NOT generic tech.\n"
+            "- Subtle scanline overlay, premium minimal feel\n"
+            "- Montserrat font via Google Fonts import\n"
+            "- All CSS/JS only, no external libs except the font\n"
+            "- Smooth 60s loop\n"
+            "Return ONLY raw HTML, no markdown, no explanation."
+        )
+        user_message = (
+            f"Topic: {req.topic}. "
+            "Make every visual element specific to this exact topic."
+        )
+
+        html_content = call_openrouter(
+            system_prompt, user_message,
+            model="anthropic/claude-haiku-4",
+            max_tokens=6000,
+        )
+
+        # Strip markdown code fences if the model wrapped the output
+        stripped = html_content.strip()
+        if stripped.startswith("```"):
+            lines        = stripped.split("\n")
+            end          = -1 if lines[-1].strip() == "```" else len(lines)
+            html_content = "\n".join(lines[1:end])
+
+        html_path.write_text(html_content, encoding="utf-8")
+        log.info("[BROLL] HTML saved: %s", html_path)
+
+        result   = cloudinary.uploader.upload(
+            str(html_path),
+            resource_type="raw",
+            folder="broll_html",
+            public_id=req.topic_slug,
+            overwrite=True,
+        )
+        html_url = result["secure_url"]
+        log.info("[BROLL] HTML uploaded: %s", html_url)
+
+        return {"html_url": html_url, "topic_slug": req.topic_slug}
+
+    except Exception as exc:
+        log.error("[BROLL] Error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"B-Roll generation failed: {exc}")
+    finally:
+        html_path.unlink(missing_ok=True)
+
+
+# ── POST /detect-impacts ──────────────────────────────────────────────────────
+@app.post("/detect-impacts")
+async def detect_impacts(req: DetectImpactsRequest):
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/impacts_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        facecam_path = job_dir / "facecam.mp4"
+        if not download_file(req.facecam, facecam_path):
+            raise HTTPException(status_code=500, detail="facecam download failed")
+
+        duration = probe_duration(facecam_path)
+        words    = transcribe_audio(facecam_path)
+        if not words:
+            raise HTTPException(status_code=500, detail="Whisper transcription returned no words")
+
+        transcript = " ".join(w["word"] for w in words)
+
+        system_prompt = (
+            "You are a video editor. Find moments for impact sound effects.\n"
+            "Max 5 moments, only the strongest. Types:\n"
+            "'whoosh'=numbers/stats, 'impact'=hook/revelation/CTA, 'subtle'=transitions.\n"
+            'Return ONLY JSON: {"impacts":[{"time":2.34,"type":"impact","word":"x","reason":"y"}]}'
+        )
+
+        raw = call_openrouter(
+            system_prompt,
+            json.dumps(words),
+            model="anthropic/claude-haiku-4",
+            max_tokens=1000,
+        )
+
+        try:
+            m            = re.search(r'\{.*\}', raw, re.DOTALL)
+            impacts_data = json.loads(m.group()) if m else {"impacts": []}
+        except (json.JSONDecodeError, AttributeError):
+            log.warning("[IMPACTS] Could not parse JSON: %s", raw[:200])
+            impacts_data = {"impacts": []}
+
+        n = len(impacts_data.get("impacts", []))
+        log.info("[IMPACTS] Detected %d moments", n)
+
+        return {
+            "impacts":        impacts_data.get("impacts", []),
+            "transcript":     transcript,
+            "total_duration": duration,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[IMPACTS] Error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Impact detection failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+# ── POST /render ──────────────────────────────────────────────────────────────
 @app.post("/render")
 async def render(req: RenderRequest):
     job_id  = str(uuid.uuid4())
@@ -446,72 +687,73 @@ async def render(req: RenderRequest):
     log.info("=== JOB %s START ===", job_id)
 
     try:
-        # ── 1. Download inputs ───────────────────────────────────────────────
+        # ── 1. Download facecam ──────────────────────────────────────────────
         facecam_raw = job_dir / "facecam_raw.mp4"
-        broll1_raw  = job_dir / "broll1_raw.mp4"
-
         if not download_file(req.facecam, facecam_raw):
-            raise HTTPException(500, "facecam download failed")
-        if not download_file(req.broll, broll1_raw):
-            raise HTTPException(500, "broll download failed")
+            raise HTTPException(status_code=500, detail="facecam download failed")
 
-        broll2_raw = job_dir / "broll2_raw.mp4"
-        broll3_raw = job_dir / "broll3_raw.mp4"
-
-        b2_ok = bool(req.broll2) and download_file(req.broll2, broll2_raw)
-        b3_ok = bool(req.broll3) and download_file(req.broll3, broll3_raw)
-
-        if not b2_ok:
-            log.warning("broll2 unavailable — using broll1")
-            broll2_raw = broll1_raw
-        if not b3_ok:
-            log.warning("broll3 unavailable — using broll1")
-            broll3_raw = broll1_raw
-
-        # ── 2. Probe facecam duration ────────────────────────────────────────
+        # ── 2. Probe duration ────────────────────────────────────────────────
         duration     = probe_duration(facecam_raw)
         total_frames = int(duration * FPS)
         log.info("Facecam duration=%.3fs  frames=%d", duration, total_frames)
 
-        # ── 3. Build broll track (smart sequential, no forced splits) ───────────
-        clips = [broll1_raw, broll2_raw, broll3_raw]
-        broll_concat = Path(build_broll_track(clips, duration, w=W, h=BROLL_H, job_dir=job_dir))
-        log_duration(broll_concat, "broll_final")
-        log.info("BROLL vs FACECAM: %.3fs vs %.3fs", probe_duration(broll_concat), duration)
+        # ── 3. B-Roll: HTML via Playwright, fallback to black strip ──────────
+        broll_final = job_dir / "broll_final.mp4"
+        broll_ok    = False
 
-        # ── 6. Scale/crop facecam ────────────────────────────────────────────
+        if req.broll_html_url:
+            html_path = job_dir / "broll.html"
+            if download_file(req.broll_html_url, html_path):
+                broll_ok = await render_html_to_video(html_path, broll_final, duration)
+            if not broll_ok:
+                log.warning("[RENDER] HTML broll failed — using black strip")
+
+        if not broll_ok:
+            run([
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
+                "-t", str(duration),
+                "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                "-pix_fmt", "yuv420p",
+                str(broll_final),
+            ], "black_broll")
+
+        log_duration(broll_final, "broll_final")
+
+        # ── 4. Scale/crop facecam ────────────────────────────────────────────
         facecam_scaled = job_dir / "facecam_scaled.mp4"
         scale_crop(facecam_raw, facecam_scaled, W, FACECAM_H)
 
-        # ── 7. Divider gradient PNG ──────────────────────────────────────────
+        # ── 5. Divider gradient PNG ──────────────────────────────────────────
         divider_png = job_dir / "divider.png"
         make_gradient_png(divider_png, W, DIVIDER_H, AMETHYST, SILVER)
 
-        # ── 8. Whisper transcription ──────────────────────────────────────────
+        # ── 6. Whisper captions ──────────────────────────────────────────────
+        log.info("[RENDER] Transcribing facecam for captions")
         words = transcribe_audio(facecam_raw)
 
-        # ── 9. Caption frames ─────────────────────────────────────────────────
+        # ── 7. Caption frames ─────────────────────────────────────────────────
         cap_dir = job_dir / "captions"
         build_caption_frames(words, total_frames, cap_dir, divider_png)
 
-        # ── 10. Progress frames ───────────────────────────────────────────────
+        # ── 8. Progress frames ───────────────────────────────────────────────
         prog_dir = job_dir / "progress"
         build_progress_frames(total_frames, prog_dir)
 
-        # ── 11. Static overlays (HUD + scanlines generated at startup) ──────────
+        # ── 9. Static overlays ───────────────────────────────────────────────
         hud_png       = HUD_PATH
         scanlines_png = SCANLINES_PATH
 
-        # ── 12. Final ffmpeg compose ──────────────────────────────────────────
+        # ── 10. Final ffmpeg compose ──────────────────────────────────────────
+        log.info("[RENDER] Compositing: broll + divider + facecam + captions")
         output_mp4 = job_dir / "output.mp4"
 
         cap_pattern  = str(cap_dir  / "frame_%06d.png")
         prog_pattern = str(prog_dir / "frame_%06d.png")
 
-        fadeout_start = max(0.0, duration - 1.0)
+        fadeout_start  = max(0.0, duration - 1.0)
         filter_complex = (
-            # [0]=broll_concat [1]=divider [2]=facecam_scaled
-            # [3]=caption seq  [4]=progress seq  [5]=scanlines  [6]=hud
             f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];"
             "[1:v]setsar=1[div];"
             "[2:v]setsar=1[face];"
@@ -525,7 +767,7 @@ async def render(req: RenderRequest):
 
         cmd = [
             "ffmpeg", "-y",
-            "-i", str(broll_concat),       # [0]
+            "-i", str(broll_final),        # [0]
             "-i", str(divider_png),         # [1]
             "-i", str(facecam_scaled),      # [2]
             "-framerate", str(FPS),
@@ -544,12 +786,12 @@ async def render(req: RenderRequest):
             str(output_mp4),
         ]
         run(cmd, "final_compose")
-        log.info("Output: %s (%.1f MB)",
-                 output_mp4, output_mp4.stat().st_size / 1e6)
+        log.info("Output: %s (%.1f MB)", output_mp4, output_mp4.stat().st_size / 1e6)
 
-        # ── 13. Upload ────────────────────────────────────────────────────────
+        # ── 11. Upload ────────────────────────────────────────────────────────
         url = upload_cloudinary(output_mp4, job_id)
-        log.info("=== JOB %s DONE → %s ===", job_id, url)
+        log.info("[UPLOAD] %s", url)
+        log.info("=== JOB %s DONE ===", job_id)
         return {"url": url}
 
     finally:

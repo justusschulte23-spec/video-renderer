@@ -6,3 +6,4 @@ cloudinary
 requests
 Pillow
 python-multipart
+playwright

@@ -879,11 +879,8 @@ async def generate_thumbnail(req: ThumbnailRequest):
 
         img_prompt = (
             f"{req.thumbnail_prompt}. "
-            "Vertical 9:16 portrait orientation. "
-            "Dark atmospheric background with amethyst (#8B5CF6) accent lighting. "
-            "Cinematic, premium, ultra-high contrast. "
-            "NO people, NO faces, NO text, NO watermarks. "
-            f"Topic: {req.topic}. Scroll-stopping visual."
+            "Dark background, amethyst purple accent light #8B5CF6, "
+            "cinematic, no people, no faces, 9:16 vertical, premium tech aesthetic"
         )
 
         # ── Image generation (DALL-E 3) ──────────────────────────────────────

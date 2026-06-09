@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -883,21 +884,29 @@ async def generate_thumbnail(req: ThumbnailRequest):
             "cinematic, no people, no faces, 9:16 vertical, premium tech aesthetic"
         )
 
-        # ── Image generation (DALL-E 3) ──────────────────────────────────────
+        # ── Image generation (OpenRouter — Flux Schnell) ──────────────────────
         image_url = None
         try:
-            resp      = openai_client.images.generate(
-                model="dall-e-3",
-                prompt=img_prompt,
-                size="1024x1792",
-                quality="standard",
-                n=1,
+            resp = httpx.post(
+                "https://openrouter.ai/api/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "black-forest-labs/flux-schnell",
+                    "prompt": img_prompt,
+                    "n": 1,
+                    "size": "1024x1792",
+                },
+                timeout=60,
             )
-            image_url = resp.data[0].url
-            log.info("[THUMB] DALL-E 3 URL: %s…", image_url[:80])
+            resp.raise_for_status()
+            image_url = resp.json()["data"][0]["url"]
+            log.info("[THUMB] Flux Schnell URL: %s…", image_url[:80])
         except Exception as exc:
-            print(f"[THUMB ERROR] DALL-E failed: {type(exc).__name__}: {str(exc)}")
-            log.error("[THUMB] DALL-E 3 failed: %s", exc)
+            print(f"[THUMB ERROR] Flux Schnell failed: {type(exc).__name__}: {str(exc)}")
+            log.error("[THUMB] Flux Schnell failed: %s", exc)
 
         if image_url:
             if not download_file(image_url, tmp_raw):

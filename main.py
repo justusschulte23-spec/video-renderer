@@ -896,6 +896,7 @@ async def generate_thumbnail(req: ThumbnailRequest):
             image_url = resp.data[0].url
             log.info("[THUMB] DALL-E 3 URL: %s…", image_url[:80])
         except Exception as exc:
+            print(f"[THUMB ERROR] DALL-E failed: {type(exc).__name__}: {str(exc)}")
             log.error("[THUMB] DALL-E 3 failed: %s", exc)
 
         if image_url:

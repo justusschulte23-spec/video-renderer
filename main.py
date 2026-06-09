@@ -171,7 +171,7 @@ class RenderRequest(BaseModel):
 
 class ThumbnailRequest(BaseModel):
     topic:                 str
-    thumbnail_prompt:      str
+    broll_html_url:        str              # screenshot this at t=500ms
     hook:                  str = ""
     brand_color_primary:   str = "#8B5CF6"
     brand_color_secondary: str = "#C0C0C0"
@@ -645,6 +645,41 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
     return result["secure_url"]
 
 
+# ── Playwright: broll HTML → thumbnail screenshot ────────────────────────────
+async def _screenshot_broll_html(html_path: Path, out_path: Path) -> bool:
+    """Take a 1080×1920 screenshot of the broll HTML after 500ms of animation."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.error("[THUMB] Playwright not installed")
+        return False
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox",
+                      "--disable-dev-shm-usage"],
+            )
+            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
+            try:
+                await page.goto(
+                    f"file://{html_path.absolute()}",
+                    wait_until="networkidle",
+                    timeout=30000,
+                )
+            except Exception as exc:
+                log.warning("[THUMB] Page load warning: %s", exc)
+            await page.wait_for_timeout(500)
+            await page.screenshot(path=str(out_path), full_page=False)
+            await browser.close()
+        return out_path.exists() and out_path.stat().st_size > 0
+    except Exception as exc:
+        print(f"[THUMB ERROR] Playwright screenshot failed: {type(exc).__name__}: {str(exc)}")
+        log.error("[THUMB] Playwright screenshot failed: %s", exc)
+        return False
+
+
 # ── Thumbnail hook-text overlay ───────────────────────────────────────────────
 def _draw_thumbnail_hook(img: Image.Image, text: str,
                          primary_color: str = "#8B5CF6") -> Image.Image:
@@ -872,49 +907,23 @@ async def detect_impacts(req: DetectImpactsRequest):
 # ── POST /generate-thumbnail ──────────────────────────────────────────────────
 @app.post("/generate-thumbnail")
 async def generate_thumbnail(req: ThumbnailRequest):
-    job_id    = str(uuid.uuid4())
-    tmp_raw   = Path(f"/tmp/thumb_raw_{job_id}.jpg")
-    tmp_final = Path(f"/tmp/thumb_{job_id}.jpg")
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/thumb_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    tmp_raw   = job_dir / "raw.jpg"
+    tmp_final = job_dir / "final.jpg"
     try:
         log.info("[THUMB] generating image for: %s", req.topic)
 
-        img_prompt = (
-            f"{req.thumbnail_prompt}. "
-            "Dark background, amethyst purple accent light #8B5CF6, "
-            "cinematic, no people, no faces, 9:16 vertical, premium tech aesthetic"
-        )
-
-        # ── Image generation (OpenRouter — Flux Schnell) ──────────────────────
-        image_url = None
-        try:
-            resp = httpx.post(
-                "https://openrouter.ai/api/v1/images/generations",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "black-forest-labs/flux-schnell",
-                    "prompt": img_prompt,
-                    "n": 1,
-                    "size": "1024x1792",
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            image_url = resp.json()["data"][0]["url"]
-            log.info("[THUMB] Flux Schnell URL: %s…", image_url[:80])
-        except Exception as exc:
-            print(f"[THUMB ERROR] Flux Schnell failed: {type(exc).__name__}: {str(exc)}")
-            log.error("[THUMB] Flux Schnell failed: %s", exc)
-
-        if image_url:
-            if not download_file(image_url, tmp_raw):
-                image_url = None
+        # ── Screenshot broll HTML via Playwright at t=500ms ──────────────────
+        html_path = job_dir / "broll_thumb.html"
+        ok = False
+        if download_file(req.broll_html_url, html_path):
+            ok = await _screenshot_broll_html(html_path, tmp_raw)
 
         # ── Fallback: solid dark canvas ───────────────────────────────────────
-        if not image_url or not tmp_raw.exists():
-            log.warning("[THUMB] image gen failed — using dark fallback canvas")
+        if not ok:
+            log.warning("[THUMB] screenshot failed — using dark fallback canvas")
             fallback = Image.new("RGB", (W, H), (18, 16, 26))
             fallback.save(str(tmp_raw), "JPEG", quality=95)
 
@@ -953,8 +962,7 @@ async def generate_thumbnail(req: ThumbnailRequest):
         log.error("[THUMB] Error: %s", exc)
         raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {exc}")
     finally:
-        tmp_raw.unlink(missing_ok=True)
-        tmp_final.unlink(missing_ok=True)
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 # ── POST /render ──────────────────────────────────────────────────────────────

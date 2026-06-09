@@ -62,6 +62,14 @@ FONT_URLS = {
     FONT_SEMIBOLD: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
 }
 
+# ── SFX ───────────────────────────────────────────────────────────────────────
+SFX_DIR  = Path("/tmp/sfx")
+SFX_URLS = {
+    "whoosh":  "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/whoosh.mp3",
+    "impact":  "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/impact.mp3",
+    "benefit": "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/benefit.mp3",
+}
+
 
 # ── Font bootstrap ─────────────────────────────────────────────────────────────
 def _bootstrap_fonts():
@@ -77,6 +85,24 @@ def _bootstrap_fonts():
         log.info("Font saved: %s", path)
 
 _bootstrap_fonts()
+
+
+def _bootstrap_sfx():
+    SFX_DIR.mkdir(parents=True, exist_ok=True)
+    for name, url in SFX_URLS.items():
+        path = SFX_DIR / f"{name}.mp3"
+        if path.exists():
+            continue
+        log.info("Downloading SFX %s", name)
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            path.write_bytes(r.content)
+            log.info("SFX saved: %s", path)
+        except Exception as exc:
+            log.warning("SFX download failed [%s]: %s", name, exc)
+
+_bootstrap_sfx()
 
 
 def _generate_scanlines():
@@ -138,6 +164,7 @@ class RenderRequest(BaseModel):
     facecam:        str
     broll_html_url: Optional[str] = None
     hook_text:      str
+    impacts:        Optional[list] = None   # from /detect-impacts
 
 
 class GenerateBrollRequest(BaseModel):
@@ -261,6 +288,56 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
         return False
     finally:
         shutil.rmtree(record_dir, ignore_errors=True)
+
+
+# ── SFX mixer ────────────────────────────────────────────────────────────────
+def mix_sfx_into_video(video: Path, impacts: list, job_dir: Path, duration: float):
+    """Overlay impact sounds at their timestamps. Returns new Path or None on failure."""
+    valid = [
+        i for i in impacts
+        if i.get("type") in SFX_URLS
+        and i.get("time") is not None
+        and (SFX_DIR / f"{i['type']}.mp3").exists()
+    ]
+    if not valid:
+        return None
+
+    inputs       = ["-i", str(video)]
+    filter_parts = []
+
+    for idx, impact in enumerate(valid):
+        delay_ms = int(float(impact["time"]) * 1000)
+        sfx_path = SFX_DIR / f"{impact['type']}.mp3"
+        inputs  += ["-i", str(sfx_path)]
+        filter_parts.append(
+            f"[{idx+1}:a]adelay={delay_ms}|{delay_ms},volume=0.8[sfx{idx}]"
+        )
+
+    n          = len(valid)
+    sfx_labels = "".join(f"[sfx{i}]" for i in range(n))
+    filter_parts.append(
+        f"[0:a]{sfx_labels}amix=inputs={n+1}:duration=first:normalize=0[aout]"
+    )
+
+    out = job_dir / "output_sfx.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", str(duration),
+        str(out),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("[SFX] Mix failed: %s", result.stderr[-1000:])
+        return None
+
+    log.info("[SFX] Mixed %d impact sounds into video", n)
+    return out
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -672,9 +749,12 @@ async def detect_impacts(req: DetectImpactsRequest):
 
         system_prompt = (
             "You are a video editor. Find moments for impact sound effects.\n"
-            "Max 5 moments, only the strongest. Types:\n"
-            "'whoosh'=numbers/stats, 'impact'=hook/revelation/CTA, 'subtle'=transitions.\n"
-            'Return ONLY JSON: {"impacts":[{"time":2.34,"type":"impact","word":"x","reason":"y"}]}'
+            "Max 6 moments, only the strongest. Types:\n"
+            "'impact'=hook/revelation/CTA punch, "
+            "'whoosh'=number/stat mentioned, "
+            "'benefit'=user benefit statement (you get/save/can now, advantage, profit), "
+            "'subtle'=scene transition.\n"
+            'Return ONLY JSON: {"impacts":[{"time":2.34,"type":"benefit","word":"x","reason":"y"}]}'
         )
 
         raw = call_openrouter(
@@ -819,7 +899,13 @@ async def render(req: RenderRequest):
         run(cmd, "final_compose")
         log.info("Output: %s (%.1f MB)", output_mp4, output_mp4.stat().st_size / 1e6)
 
-        # ── 11. Upload ────────────────────────────────────────────────────────
+        # ── 11. SFX mixing (optional) ─────────────────────────────────────────
+        if req.impacts:
+            mixed = mix_sfx_into_video(output_mp4, req.impacts, job_dir, duration)
+            if mixed:
+                output_mp4 = mixed
+
+        # ── 12. Upload ────────────────────────────────────────────────────────
         url = upload_cloudinary(output_mp4, job_id)
         log.info("[UPLOAD] %s", url)
         log.info("=== JOB %s DONE ===", job_id)

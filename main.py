@@ -165,6 +165,15 @@ class RenderRequest(BaseModel):
     broll_html_url: Optional[str] = None
     hook_text:      str
     impacts:        Optional[list] = None   # from /detect-impacts
+    thumbnail_url:  Optional[str] = None   # from /generate-thumbnail
+
+
+class ThumbnailRequest(BaseModel):
+    topic:                 str
+    thumbnail_prompt:      str
+    hook:                  str = ""
+    brand_color_primary:   str = "#8B5CF6"
+    brand_color_secondary: str = "#C0C0C0"
 
 
 class GenerateBrollRequest(BaseModel):
@@ -635,6 +644,76 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
     return result["secure_url"]
 
 
+# ── Thumbnail hook-text overlay ───────────────────────────────────────────────
+def _draw_thumbnail_hook(img: Image.Image, text: str,
+                         primary_color: str = "#8B5CF6") -> Image.Image:
+    """Overlay uppercase hook text in the bottom third of a 1080x1920 thumbnail."""
+    try:
+        r = int(primary_color[1:3], 16)
+        g = int(primary_color[3:5], 16)
+        b = int(primary_color[5:7], 16)
+        accent = (r, g, b)
+    except Exception:
+        accent = AMETHYST
+
+    draw      = ImageDraw.Draw(img)
+    max_width = W - 80
+
+    # Find largest font size that fits in ≤2 lines
+    words = text.split()
+    lines: list[str] = []
+    size  = 96
+
+    while size >= 52:
+        font = ImageFont.truetype(str(FONT_BLACK), size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            lines = [text]
+            break
+        best_split: Optional[tuple] = None
+        best_diff  = float("inf")
+        for i in range(1, len(words)):
+            l1, l2 = " ".join(words[:i]), " ".join(words[i:])
+            b1 = draw.textbbox((0, 0), l1, font=font)
+            b2 = draw.textbbox((0, 0), l2, font=font)
+            w1, w2 = b1[2] - b1[0], b2[2] - b2[0]
+            if w1 <= max_width and w2 <= max_width:
+                diff = abs(w1 - w2)
+                if diff < best_diff:
+                    best_diff, best_split = diff, (l1, l2)
+        if best_split:
+            lines = list(best_split)
+            break
+        size -= 4
+
+    if not lines:
+        mid   = len(words) // 2
+        lines = [" ".join(words[:mid]), " ".join(words[mid:])]
+        size  = 52
+
+    font    = ImageFont.truetype(str(FONT_BLACK), size)
+    line_h  = size + 14
+    total_h = len(lines) * line_h
+    start_y = int(H * 0.68) - total_h // 2
+
+    outer_sw = max(10, int(size * 0.18))
+    inner_sw = max(4,  int(size * 0.06))
+
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw   = bbox[2] - bbox[0]
+        x    = (W - tw) // 2 - bbox[0]
+        y    = start_y + i * line_h - bbox[1]
+        # thick dark stroke → depth/shadow
+        draw.text((x, y), line, font=font,
+                  fill=(0, 0, 0), stroke_fill=(0, 0, 0), stroke_width=outer_sw)
+        # white text + thin accent stroke
+        draw.text((x, y), line, font=font,
+                  fill=(255, 255, 255), stroke_fill=accent, stroke_width=inner_sw)
+
+    return img
+
+
 # ── POST /generate-broll ──────────────────────────────────────────────────────
 @app.post("/generate-broll")
 async def generate_broll(req: GenerateBrollRequest):
@@ -789,6 +868,88 @@ async def detect_impacts(req: DetectImpactsRequest):
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
+# ── POST /generate-thumbnail ──────────────────────────────────────────────────
+@app.post("/generate-thumbnail")
+async def generate_thumbnail(req: ThumbnailRequest):
+    job_id    = str(uuid.uuid4())
+    tmp_raw   = Path(f"/tmp/thumb_raw_{job_id}.jpg")
+    tmp_final = Path(f"/tmp/thumb_{job_id}.jpg")
+    try:
+        log.info("[THUMB] generating image for: %s", req.topic)
+
+        img_prompt = (
+            f"{req.thumbnail_prompt}. "
+            "Vertical 9:16 portrait orientation. "
+            "Dark atmospheric background with amethyst (#8B5CF6) accent lighting. "
+            "Cinematic, premium, ultra-high contrast. "
+            "NO people, NO faces, NO text, NO watermarks. "
+            f"Topic: {req.topic}. Scroll-stopping visual."
+        )
+
+        # ── Image generation (DALL-E 3) ──────────────────────────────────────
+        image_url = None
+        try:
+            resp      = openai_client.images.generate(
+                model="dall-e-3",
+                prompt=img_prompt,
+                size="1024x1792",
+                quality="standard",
+                n=1,
+            )
+            image_url = resp.data[0].url
+            log.info("[THUMB] DALL-E 3 URL: %s…", image_url[:80])
+        except Exception as exc:
+            log.error("[THUMB] DALL-E 3 failed: %s", exc)
+
+        if image_url:
+            if not download_file(image_url, tmp_raw):
+                image_url = None
+
+        # ── Fallback: solid dark canvas ───────────────────────────────────────
+        if not image_url or not tmp_raw.exists():
+            log.warning("[THUMB] image gen failed — using dark fallback canvas")
+            fallback = Image.new("RGB", (W, H), (18, 16, 26))
+            fallback.save(str(tmp_raw), "JPEG", quality=95)
+
+        # ── Resize / center-crop to exactly 1080×1920 ─────────────────────────
+        img          = Image.open(str(tmp_raw)).convert("RGB")
+        target_ratio = W / H
+        src_ratio    = img.width / img.height
+        if src_ratio > target_ratio:
+            new_h, new_w = H, int(img.width * H / img.height)
+        else:
+            new_w, new_h = W, int(img.height * W / img.width)
+        img  = img.resize((new_w, new_h), Image.LANCZOS)
+        left = (new_w - W) // 2
+        top  = (new_h - H) // 2
+        img  = img.crop((left, top, left + W, top + H))
+
+        # ── Hook text overlay ────────────────────────────────────────────────
+        if req.hook:
+            img = _draw_thumbnail_hook(img, req.hook.upper(), req.brand_color_primary)
+
+        img.save(str(tmp_final), "JPEG", quality=95)
+
+        # ── Upload ────────────────────────────────────────────────────────────
+        result = cloudinary.uploader.upload(
+            str(tmp_final),
+            resource_type="image",
+            folder="thumbnails",
+            public_id=f"thumb_{job_id}",
+            overwrite=True,
+        )
+        url = result["secure_url"]
+        log.info("[THUMB] uploaded: %s", url)
+        return {"thumbnail_url": url}
+
+    except Exception as exc:
+        log.error("[THUMB] Error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {exc}")
+    finally:
+        tmp_raw.unlink(missing_ok=True)
+        tmp_final.unlink(missing_ok=True)
+
+
 # ── POST /render ──────────────────────────────────────────────────────────────
 @app.post("/render")
 async def render(req: RenderRequest):
@@ -798,6 +959,33 @@ async def render(req: RenderRequest):
     log.info("=== JOB %s START ===", job_id)
 
     try:
+        # ── 0. Thumbnail freeze-frame clip (optional, created early) ─────────
+        thumb_clip = None
+        if req.thumbnail_url:
+            log.info("[RENDER] prepending 0.3s thumbnail freeze-frame")
+            thumb_img = job_dir / "thumb.jpg"
+            if download_file(req.thumbnail_url, thumb_img):
+                thumb_clip = job_dir / "thumb_clip.mp4"
+                try:
+                    run([
+                        "ffmpeg", "-y",
+                        "-loop", "1", "-framerate", str(FPS),
+                        "-i", str(thumb_img),
+                        "-f", "lavfi",
+                        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                        "-t", "0.3",
+                        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,"
+                               f"crop={W}:{H},setsar=1",
+                        "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-pix_fmt", "yuv420p",
+                        "-shortest",
+                        str(thumb_clip),
+                    ], "thumb_clip")
+                except Exception as exc:
+                    log.warning("[RENDER] thumbnail clip creation failed: %s", exc)
+                    thumb_clip = None
+
         # ── 1. Download facecam ──────────────────────────────────────────────
         facecam_raw = job_dir / "facecam_raw.mp4"
         if not download_file(req.facecam, facecam_raw):
@@ -905,7 +1093,29 @@ async def render(req: RenderRequest):
             if mixed:
                 output_mp4 = mixed
 
-        # ── 12. Upload ────────────────────────────────────────────────────────
+        # ── 12. Prepend thumbnail freeze-frame (optional) ─────────────────────
+        if thumb_clip and thumb_clip.exists():
+            output_with_thumb = job_dir / "output_thumb.mp4"
+            try:
+                run([
+                    "ffmpeg", "-y",
+                    "-i", str(thumb_clip),
+                    "-i", str(output_mp4),
+                    "-filter_complex",
+                    "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]",
+                    "-map", "[vout]",
+                    "-map", "[aout]",
+                    "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-pix_fmt", "yuv420p",
+                    str(output_with_thumb),
+                ], "thumb_concat")
+                output_mp4 = output_with_thumb
+                log.info("[RENDER] thumbnail + main concat done")
+            except Exception as exc:
+                log.warning("[RENDER] thumbnail concat failed, skipping: %s", exc)
+
+        # ── 14. Upload ────────────────────────────────────────────────────────
         url = upload_cloudinary(output_mp4, job_id)
         log.info("[UPLOAD] %s", url)
         log.info("=== JOB %s DONE ===", job_id)

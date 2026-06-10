@@ -171,7 +171,7 @@ class RenderRequest(BaseModel):
 
 class ThumbnailRequest(BaseModel):
     topic:                 str
-    broll_html_url:        str              # screenshot this at t=500ms
+    broll_html_url:        Optional[str] = None
     hook:                  str = ""
     brand_color_primary:   str = "#8B5CF6"
     brand_color_secondary: str = "#C0C0C0"

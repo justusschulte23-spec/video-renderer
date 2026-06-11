@@ -182,6 +182,7 @@ class GenerateBrollRequest(BaseModel):
     topic_slug:            str
     brand_color_primary:   str = "#8B5CF6"
     brand_color_secondary: str = "#C0C0C0"
+    duration:              float = 60.0
 
 
 class DetectImpactsRequest(BaseModel):
@@ -761,55 +762,99 @@ async def generate_broll(req: GenerateBrollRequest):
     try:
         log.info("[BROLL] Generating HTML for: %s", req.topic)
 
-        system_prompt = (
-            "You are a motion designer building B-Roll for a German tech creator. "
-            "Brand: dark background #12101a, WHITE primary, SILVER #C0C0C0 secondary, "
-            f"AMETHYST {req.brand_color_primary} sparingly as accent only.\n\n"
-            "YOUR JOB: Visualize the STORY of the topic — not just \"tech stuff\". "
-            "Read the topic and ask: what is actually happening? Then show THAT.\n\n"
-            "STORY-FIRST APPROACH:\n"
-            "- \"KI übernimmt Kundenservice\" → show a chat interface where AI responds "
-            "instantly while human queue grows, counter showing \"847 solved today\"\n"
-            "- \"Hacker kapern Instagram\" → show a terminal with access_granted flashing, "
-            "an account icon turning red, a progress bar filling \"account compromised\"\n"
-            "- \"OpenAI Super-App\" → show app icons assembling into one, "
-            "a counter showing users joining in real-time\n"
-            "- \"Verjüngung durch KI\" → show a DNA strand with segments lighting up, "
-            "age counter counting DOWN from 45 to 35\n\n"
-            "ALWAYS: the visual tells the same story as the spoken words. "
-            "Never: random floating particles, generic network graphs, "
-            "abstract shapes that could fit any topic.\n\n"
-            "MOTION RULES (hard, never break):\n"
-            "- GSAP for ALL animations (import from cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js)\n"
-            "- Something moves in first 200ms. Always.\n"
-            "- Every element: gsap.from() with duration max 0.4s, ease \"power3.out\"\n"
-            "- New thing happens every 1.5s minimum\n"
-            "- Numbers always count up/down with gsap\n"
-            "- Between scenes: elements fly out (x:±200, duration:0.3) then new ones fly in\n"
-            "- No slow fades. No opacity-only transitions.\n\n"
-            "STRUCTURE — 3 ACTS, 20s each, seamless loop:\n"
-            "ACT 1 (0-20s): The situation — what is happening right now\n"
-            "ACT 2 (20-40s): The scale — numbers, data, how big is this\n"
-            "ACT 3 (40-60s): The consequence — what changes, who wins/loses\n\n"
-            "TECHNICAL:\n"
-            "- 1080x576px viewport\n"
-            "- Background always #12101a\n"
-            "- White for all text and main shapes\n"
-            "- Silver for labels and secondary info\n"
-            f"- Amethyst ONLY for: one key highlight, glow effects, progress bars\n"
-            "- Montserrat via Google Fonts\n"
-            "- Pure HTML/CSS/JS + GSAP only\n\n"
-            "Return ONLY raw HTML. Nothing else."
-        )
+        dur       = req.duration
+        n_beats   = max(8, int(dur / 3.5))
+        beat_secs = dur / n_beats
+
+        system_prompt = f"""You are a motion graphics director. Your output is HTML/JS that plays as a {dur:.0f}s B-Roll for a German AI/tech creator.
+
+BRAND
+- Background: #0d0d0f
+- Primary text: #FFFFFF
+- Secondary/labels: #9ca3af
+- Accent (SPARINGLY — max 2-3 elements total): {req.brand_color_primary}
+- Font: Montserrat, Google Fonts
+
+VISUAL PHILOSOPHY — "Bloomberg Terminal meets Motion Design"
+Dark, clean, data-forward. Numbers and typography ARE the design.
+Every frame has something in motion. Nothing is ever fully static.
+Max 4-5 visible elements at once. Never cluttered.
+
+MANDATORY LAYER SYSTEM — implement ALL three:
+
+LAYER 0 — AMBIENT (runs the entire {dur:.0f}s, never stops):
+  Use ONE of these in the background at opacity 0.05-0.08:
+  - Slowly drifting dots grid (SVG, gsap y motion ±6px over 4s, yoyo:true)
+  - OR a faint horizontal scan line sweeping top→bottom on loop
+  - OR slowly rotating large circle outline (stroke only, opacity 0.06)
+  This layer NEVER exits. It gives depth.
+
+LAYER 1 — BEAT CONTENT ({n_beats} beats × {beat_secs:.1f}s each):
+  The timeline has exactly {n_beats} beats. Each beat shows ONE primary data piece:
+  a large number counting up, a progress bar filling, a stat appearing, a chart drawing.
+  Beat content enters from RIGHT (x:50→0), exits to LEFT (x:0→-50).
+  Numbers always animate with gsap countUp (snap:{{snapTo:1}}).
+  A NEW beat starts every {beat_secs:.1f}s. No exceptions.
+
+LAYER 2 — LABELS (follow each beat element):
+  Small silver label above or below the primary element.
+  Appears 0.2s after its beat element, same exit timing.
+  Max 4 words. Uppercase. letter-spacing: 0.15em. font-size: 13-15px.
+
+LAYER 3 — ACCENT PULSE (every 3rd beat only):
+  ONE element in {req.brand_color_primary} — a glowing underline, a pulsing dot, a filled progress bar.
+  gsap.to with repeat:-1, yoyo:true for the pulse. Duration 0.8s.
+
+STORY RULE — topic-specific content only:
+Read the topic and derive REAL numbers/facts/UI elements from it.
+Each beat shows a different facet of the story. Like a data documentary.
+Examples:
+  "KI-Agenten 300% Wachstum" → beats: 300% counter, 847 tasks/min, org-chart shrinking, cost bar, ROI counter, speed comparison, adoption curve, market size
+  "Hacker kapern Instagram" → beats: breach counter, access_granted terminal, accounts/sec counter, detection time, data exfiltrated MB, dark web price, recovery rate
+  "OpenAI Super-App" → beats: feature count assembling, DAU counter, revenue bar, competitor comparison, API calls/s, valuation counter
+NEVER use: random particles, generic network graphs, abstract shapes that could fit any topic.
+
+GSAP IMPLEMENTATION RULES:
+- Import GSAP: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
+- Use ONE gsap.timeline() for ALL beat animations with absolute time positions
+  Example: tl.to(el, {{...}}, {beat_secs:.1f}) — the third argument is absolute seconds
+- The ambient layer uses separate gsap.to() calls with repeat:-1
+- First animation starts at t=0.1s (not 0 — gives browser time to render)
+- Timeline MUST have content until t={dur:.0f}s
+- Enter: gsap.from(el, {{x:50, opacity:0, duration:0.25, ease:"power3.out"}}, t)
+- Exit:  tl.to(el, {{x:-50, opacity:0, duration:0.2, ease:"power2.in"}}, t+{beat_secs:.1f}-0.25)
+- countUp: tl.to(counter, {{innerHTML:TARGET, snap:{{snapTo:1}}, duration:{min(beat_secs*0.7, 2.0):.1f}, ease:"power2.out"}}, t+0.1)
+
+HTML STRUCTURE:
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ width:1080px; height:576px; overflow:hidden; background:#0d0d0f; font-family:'Montserrat',sans-serif; }}
+  /* all elements position:absolute */
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head><body>
+<!-- ambient layer -->
+<!-- beat elements (reuse DOM nodes, just animate in/out) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script>/* all animation code here */</script>
+</body></html>
+
+Return ONLY raw HTML. No markdown fences. No explanation."""
+
         user_message = (
-            f"Topic: {req.topic}. "
-            "Make every visual element specific to this exact topic."
+            f"Topic: {req.topic}\n"
+            f"Duration: {dur:.0f}s → {n_beats} beats × {beat_secs:.1f}s each.\n"
+            "Derive real, specific data points and UI elements from this exact topic. "
+            "Every beat must feel like a new revelation about the topic."
         )
 
         html_content = call_openrouter(
             system_prompt, user_message,
-            model="anthropic/claude-sonnet-4.5",
-            max_tokens=8000,
+            model="anthropic/claude-sonnet-4-6",
+            max_tokens=12000,
         )
 
         # Strip markdown code fences if the model wrapped the output

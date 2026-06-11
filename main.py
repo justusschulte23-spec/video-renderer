@@ -182,7 +182,7 @@ class GenerateBrollRequest(BaseModel):
     topic_slug:            str
     brand_color_primary:   str = "#8B5CF6"
     brand_color_secondary: str = "#C0C0C0"
-    duration:              float = 60.0
+    duration:              float = 70.0
 
 
 class DetectImpactsRequest(BaseModel):

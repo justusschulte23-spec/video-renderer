@@ -916,23 +916,36 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         scene_videos = []
         for i, scene in enumerate(scenes):
             scene_dur = scene["end"] - scene["start"]
-            prompt = _broll_system_prompt(
-                scene.get("visual_theme", req.topic),
-                req.brand_color_primary,
-                scene_dur,
-            )
-            user_msg = (
-                f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
-                f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
-                f"Duration: {scene_dur:.1f}s."
-            )
-            html_raw = call_openrouter(prompt, user_msg,
-                                       model="anthropic/claude-sonnet-4.6",
-                                       max_tokens=10000)
-            html = _strip_fences(html_raw)
-            video_path = await _render_scene_html(html, job_dir, i, scene_dur)
+            log.info("[BROLL_SYNC] scene %d/%d — generating HTML (%.1fs): %s",
+                     i+1, len(scenes), scene_dur, scene.get("visual_theme", "")[:60])
+            try:
+                prompt = _broll_system_prompt(
+                    scene.get("visual_theme", req.topic),
+                    req.brand_color_primary,
+                    scene_dur,
+                )
+                user_msg = (
+                    f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
+                    f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
+                    f"Duration: {scene_dur:.1f}s."
+                )
+                html_raw = call_openrouter(prompt, user_msg,
+                                           model="anthropic/claude-sonnet-4.6",
+                                           max_tokens=10000)
+                html = _strip_fences(html_raw)
+                video_path = await _render_scene_html(html, job_dir, i, scene_dur)
+            except Exception as exc:
+                log.error("[BROLL_SYNC] scene %d failed: %s — using black fallback", i+1, exc)
+                video_path = job_dir / f"scene_{i}.mp4"
+                run([
+                    "ffmpeg", "-y", "-f", "lavfi",
+                    "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
+                    "-t", str(scene_dur),
+                    "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                    "-pix_fmt", "yuv420p", str(video_path)
+                ], f"black_fallback_{i}")
             scene_videos.append(str(video_path))
-            log.info("[BROLL_SYNC] scene %d/%d rendered (%.1fs)", i+1, len(scenes), scene_dur)
+            log.info("[BROLL_SYNC] scene %d/%d done", i+1, len(scenes))
 
         # 5. Concatenate scenes
         broll_final = job_dir / "broll_synced.mp4"

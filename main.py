@@ -7,6 +7,7 @@ import math
 import asyncio
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -158,6 +159,7 @@ _generate_hud()
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI()
+_html_executor = ThreadPoolExecutor(max_workers=6)
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -912,30 +914,46 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         scenes = _segment_into_scenes(words, duration, req.topic)
         log.info("[BROLL_SYNC] %d scenes", len(scenes))
 
-        # 4. Generate + render HTML per scene (sequential — Playwright memory)
-        scene_videos = []
-        for i, scene in enumerate(scenes):
+        # 4a. Generate ALL HTML in parallel (unblocks Railway 5-min timeout)
+        log.info("[BROLL_SYNC] generating %d HTMLs in parallel", len(scenes))
+        loop = asyncio.get_event_loop()
+
+        def _gen_html(i_scene):
+            i, scene = i_scene
             scene_dur = scene["end"] - scene["start"]
-            log.info("[BROLL_SYNC] scene %d/%d — generating HTML (%.1fs): %s",
-                     i+1, len(scenes), scene_dur, scene.get("visual_theme", "")[:60])
+            prompt  = _broll_system_prompt(
+                scene.get("visual_theme", req.topic),
+                req.brand_color_primary,
+                scene_dur,
+            )
+            user_msg = (
+                f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
+                f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
+                f"Duration: {scene_dur:.1f}s."
+            )
+            return call_openrouter(prompt, user_msg,
+                                   model="anthropic/claude-sonnet-4.6",
+                                   max_tokens=7000)
+
+        html_futures = await asyncio.gather(
+            *[loop.run_in_executor(_html_executor, _gen_html, (i, s))
+              for i, s in enumerate(scenes)],
+            return_exceptions=True,
+        )
+        log.info("[BROLL_SYNC] all HTML generated")
+
+        # 4b. Render sequentially (Playwright needs serial execution)
+        scene_videos = []
+        for i, (scene, html_raw) in enumerate(zip(scenes, html_futures)):
+            scene_dur = scene["end"] - scene["start"]
             try:
-                prompt = _broll_system_prompt(
-                    scene.get("visual_theme", req.topic),
-                    req.brand_color_primary,
-                    scene_dur,
+                if isinstance(html_raw, Exception):
+                    raise html_raw
+                video_path = await _render_scene_html(
+                    _strip_fences(str(html_raw)), job_dir, i, scene_dur
                 )
-                user_msg = (
-                    f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
-                    f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
-                    f"Duration: {scene_dur:.1f}s."
-                )
-                html_raw = call_openrouter(prompt, user_msg,
-                                           model="anthropic/claude-sonnet-4.6",
-                                           max_tokens=10000)
-                html = _strip_fences(html_raw)
-                video_path = await _render_scene_html(html, job_dir, i, scene_dur)
             except Exception as exc:
-                log.error("[BROLL_SYNC] scene %d failed: %s — using black fallback", i+1, exc)
+                log.error("[BROLL_SYNC] scene %d failed: %s — black fallback", i+1, exc)
                 video_path = job_dir / f"scene_{i}.mp4"
                 run([
                     "ffmpeg", "-y", "-f", "lavfi",
@@ -945,7 +963,7 @@ async def generate_broll_synced(req: BrollSyncedRequest):
                     "-pix_fmt", "yuv420p", str(video_path)
                 ], f"black_fallback_{i}")
             scene_videos.append(str(video_path))
-            log.info("[BROLL_SYNC] scene %d/%d done", i+1, len(scenes))
+            log.info("[BROLL_SYNC] scene %d/%d rendered", i+1, len(scenes))
 
         # 5. Concatenate scenes
         broll_final = job_dir / "broll_synced.mp4"

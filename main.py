@@ -772,11 +772,12 @@ def _broll_system_prompt(topic: str, accent: str, dur: float) -> str:
     beat_secs = dur / n_beats
     return f"""You are a motion graphics director. Output: a single self-contained HTML file, {dur:.0f}s B-Roll for a German AI/tech creator.
 
-BRAND: bg #0d0d0f · text #fff · labels #9ca3af · accent {accent} (max 2-3 uses) · font Montserrat (Google Fonts)
+BRAND: bg #141218 · text #ffffff · labels #c4c4c4 · accent {accent} (max 2-3 uses) · font Montserrat (Google Fonts)
+BRIGHTNESS RULE: ALL text, numbers, labels — color #ffffff, opacity 1.0, NEVER dimmed. Add text-shadow: 0 0 20px rgba(0,0,0,0.9) for readability against scene.
 
 ━━━ STEP 1 — BUILD A VISUAL WORLD (always, no exceptions) ━━━
 Every B-Roll has a SCENE that represents the topic physically or metaphorically.
-The scene is SVG or pixel-art canvas, opacity 0.18-0.30, fills the whole 1080×576.
+The scene is SVG or pixel-art canvas, opacity 0.55-0.75, fills the whole 1080×576.
 It has subtle continuous animation (slow pulse, gentle drift, soft glow — never stops).
 
 Scene reference library — match to topic:
@@ -821,7 +822,7 @@ Timeline starts at t=0.1, MUST have content through t={dur:.0f}s.
 <style>*{{margin:0;padding:0;box-sizing:border-box}}body{{width:1080px;height:576px;overflow:hidden;background:#0d0d0f;font-family:'Montserrat',sans-serif}}</style>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
 </head><body>
-<!-- LAYER 0: scene (SVG or pixel canvas, opacity 0.18-0.30) -->
+<!-- LAYER 0: scene (SVG or pixel canvas, opacity 0.55-0.75) -->
 <!-- LAYER 1: beat elements (position:absolute) -->
 <!-- LAYER 2: labels (position:absolute) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
@@ -1281,6 +1282,7 @@ async def render(req: RenderRequest):
         filter_complex = (
             f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,"
             f"zoompan=z='min(zoom+0.0002,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x{BROLL_H}:fps={FPS},"
+            f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
             "[2:v]setsar=1[face];"

@@ -162,11 +162,12 @@ app = FastAPI()
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 class RenderRequest(BaseModel):
-    facecam:        str
-    broll_html_url: Optional[str] = None
-    hook_text:      str
-    impacts:        Optional[list] = None   # from /detect-impacts
-    thumbnail_url:  Optional[str] = None   # from /generate-thumbnail
+    facecam:          str
+    broll_html_url:   Optional[str] = None
+    broll_video_url:  Optional[str] = None
+    hook_text:        str
+    impacts:          Optional[list] = None
+    thumbnail_url:    Optional[str] = None
 
 
 class ThumbnailRequest(BaseModel):
@@ -183,6 +184,14 @@ class GenerateBrollRequest(BaseModel):
     brand_color_primary:   str = "#8B5CF6"
     brand_color_secondary: str = "#C0C0C0"
     duration:              float = 70.0
+
+
+class BrollSyncedRequest(BaseModel):
+    facecam:               str
+    topic:                 str
+    topic_slug:            str
+    brand_color_primary:   str = "#8B5CF6"
+    brand_color_secondary: str = "#C0C0C0"
 
 
 class DetectImpactsRequest(BaseModel):
@@ -755,6 +764,213 @@ def _draw_thumbnail_hook(img: Image.Image, text: str,
     return img
 
 
+# ── Broll prompt builder ──────────────────────────────────────────────────────
+def _broll_system_prompt(topic: str, accent: str, dur: float) -> str:
+    n_beats   = max(8, int(dur / 3.5))
+    beat_secs = dur / n_beats
+    return f"""You are a motion graphics director. Output: a single self-contained HTML file, {dur:.0f}s B-Roll for a German AI/tech creator.
+
+BRAND: bg #0d0d0f · text #fff · labels #9ca3af · accent {accent} (max 2-3 uses) · font Montserrat (Google Fonts)
+
+━━━ STEP 1 — BUILD A VISUAL WORLD (always, no exceptions) ━━━
+Every B-Roll has a SCENE that represents the topic physically or metaphorically.
+The scene is SVG or pixel-art canvas, opacity 0.18-0.30, fills the whole 1080×576.
+It has subtle continuous animation (slow pulse, gentle drift, soft glow — never stops).
+
+Scene reference library — match to topic:
+· AI / Agents / LLM      → isometric server racks (CSS skew), blinking LED dots, floating data streams
+· Energy / Power         → cooling towers (SVG cylinder silhouettes), rising steam circles, power-line geometry
+· Finance / Markets      → tilted phone mockup with red/green bars, ticker tape, candlestick silhouettes
+· Social Media / Viral   → phone outline with scrolling card stack, notification badge counter cascading
+· Hacking / Security     → terminal lines scrolling (monospace text, green), lock icon breaking apart
+· Healthcare / Bio       → ECG line drawing itself (stroke-dashoffset), DNA double helix (two sine paths)
+· Geopolitics / Trade    → simplified world map (SVG paths), pulsing dots on countries, trade flow arrows
+· Logistics / Supply     → warehouse perspective lines, moving box icons, route paths
+· Robotics / Automation  → mechanical arm SVG (jointed lines), gear rotation, assembly counter
+· Pixel Art trigger      → use canvas pixel art (270×144 scaled 8× via image-rendering:pixelated) when topic
+                           involves: tech, AI, digital, hacking, gaming, code, internet, data
+
+━━━ STEP 2 — BEAT DATA LAYER ({n_beats} beats × {beat_secs:.1f}s each) ━━━
+One primary data element per beat — large number (countUp), progress bar, SVG chart drawing, or stat card.
+Enter: x:60→0, opacity:0→1, duration:0.25s, ease:power3.out
+Exit:  x:0→-60, opacity:1→0, duration:0.20s, ease:power2.in — fires {beat_secs:.1f}s after entry
+Below each: silver uppercase label (13px, letter-spacing:0.15em), appears 0.2s after main element.
+CountUp syntax: gsap.to(el, {{innerHTML: TARGET, snap:{{snapTo:1}}, duration:{min(beat_secs*0.7,2.0):.1f}, ease:"power2.out"}})
+
+BEAT CONTENT — derive real data from the topic. Each beat = a different facet:
+· "KI-Agenten Boom"     → 300% growth / 847 tasks/min / 12,000 jobs automated / cost -78% / 4.2s response
+· "Atomkraft Abschaltung" → 17 plants offline / 31% capacity lost / power price +340% / CO2 +18Mt / €4.2B cost
+· "Hacker Angriff"      → 1,847 breaches/day / 3.2GB exfiltrated / detection: 197 days avg / €4.2M ransom
+· "OpenAI Expansion"    → 200M users / $157B valuation / 1.2T tokens/day / 45 countries / 3,000 employees
+Every beat must feel like a new revelation.
+
+━━━ STEP 3 — ACCENT PULSE (every 3rd beat) ━━━
+ONE {accent} element: glowing underline OR pulsing ring OR filled arc.
+gsap.to repeat:-1 yoyo:true duration:0.8s.
+
+━━━ GSAP RULES ━━━
+Import: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
+ONE gsap.timeline() for beats — use absolute time positions (3rd argument).
+Scene ambient uses separate gsap.to() with repeat:-1.
+Timeline starts at t=0.1, MUST have content through t={dur:.0f}s.
+
+━━━ HTML SKELETON ━━━
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{width:1080px;height:576px;overflow:hidden;background:#0d0d0f;font-family:'Montserrat',sans-serif}}</style>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head><body>
+<!-- LAYER 0: scene (SVG or pixel canvas, opacity 0.18-0.30) -->
+<!-- LAYER 1: beat elements (position:absolute) -->
+<!-- LAYER 2: labels (position:absolute) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script>/* scene ambient + beat timeline */</script>
+</body></html>
+
+Return ONLY raw HTML. No markdown. No explanation."""
+
+
+def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
+    n_scenes = max(3, min(6, int(duration / 10)))
+    system_prompt = (
+        "You are a video editor. Segment a transcript into visual scenes for B-Roll sync.\n"
+        f"Total duration: {duration:.1f}s. Create exactly {n_scenes} scenes covering 0s to {duration:.1f}s.\n"
+        "Per scene: start, end (seconds), visual_theme (what to SHOW, specific), "
+        "data_point (one key stat/number), mood (dark|urgent|bright).\n"
+        'Return ONLY valid JSON: {"scenes":[{"start":0,"end":12.5,"visual_theme":"...","data_point":"...","mood":"dark"}]}\n'
+        "Scenes must be contiguous — end of scene N == start of scene N+1. Last end == total duration."
+    )
+    sample = [{"word": w["word"], "t": round(w["start"], 1)}
+              for w in words[::max(1, len(words)//60)]]
+    try:
+        raw = call_openrouter(
+            system_prompt,
+            f"Topic: {topic}\nTranscript sample: {json.dumps(sample)}",
+            model="anthropic/claude-haiku-4.5",
+            max_tokens=800,
+        )
+        m      = re.search(r'\{.*\}', raw, re.DOTALL)
+        scenes = json.loads(m.group()).get("scenes", []) if m else []
+        if scenes:
+            scenes[0]["start"]  = 0.0
+            scenes[-1]["end"]   = duration
+            return scenes
+    except Exception as exc:
+        log.warning("[BROLL_SYNC] Segmentation failed: %s", exc)
+    seg = duration / n_scenes
+    return [{"start": i*seg, "end": (i+1)*seg,
+              "visual_theme": topic, "data_point": "", "mood": "dark"}
+            for i in range(n_scenes)]
+
+
+def _strip_fences(text: str) -> str:
+    s = text.strip()
+    if s.startswith("```"):
+        lines = s.split("\n")
+        end   = -1 if lines[-1].strip() == "```" else len(lines)
+        s     = "\n".join(lines[1:end])
+    return s
+
+
+async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
+    html_path  = job_dir / f"scene_{idx}.html"
+    video_path = job_dir / f"scene_{idx}.mp4"
+    html_path.write_text(html, encoding="utf-8")
+    ok = await render_html_to_video(html_path, video_path, scene_dur)
+    if not ok:
+        run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
+            "-t", str(scene_dur),
+            "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+            "-pix_fmt", "yuv420p", str(video_path)
+        ], f"black_scene_{idx}")
+    return video_path
+
+
+# ── POST /generate-broll-synced ───────────────────────────────────────────────
+@app.post("/generate-broll-synced")
+async def generate_broll_synced(req: BrollSyncedRequest):
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/brollsync_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log.info("[BROLL_SYNC] START topic=%s", req.topic)
+
+    try:
+        # 1. Download facecam + probe duration
+        facecam_path = job_dir / "facecam.mp4"
+        if not download_file(req.facecam, facecam_path):
+            raise HTTPException(status_code=500, detail="facecam download failed")
+        duration = probe_duration(facecam_path)
+        log.info("[BROLL_SYNC] facecam duration=%.1fs", duration)
+
+        # 2. Transcribe
+        words = transcribe_audio(facecam_path)
+        if not words:
+            raise HTTPException(status_code=500, detail="transcription failed")
+
+        # 3. Segment into scenes
+        scenes = _segment_into_scenes(words, duration, req.topic)
+        log.info("[BROLL_SYNC] %d scenes", len(scenes))
+
+        # 4. Generate + render HTML per scene (sequential — Playwright memory)
+        scene_videos = []
+        for i, scene in enumerate(scenes):
+            scene_dur = scene["end"] - scene["start"]
+            prompt = _broll_system_prompt(
+                scene.get("visual_theme", req.topic),
+                req.brand_color_primary,
+                scene_dur,
+            )
+            user_msg = (
+                f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
+                f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
+                f"Duration: {scene_dur:.1f}s."
+            )
+            html_raw = call_openrouter(prompt, user_msg,
+                                       model="anthropic/claude-sonnet-4.6",
+                                       max_tokens=10000)
+            html = _strip_fences(html_raw)
+            video_path = await _render_scene_html(html, job_dir, i, scene_dur)
+            scene_videos.append(str(video_path))
+            log.info("[BROLL_SYNC] scene %d/%d rendered (%.1fs)", i+1, len(scenes), scene_dur)
+
+        # 5. Concatenate scenes
+        broll_final = job_dir / "broll_synced.mp4"
+        if len(scene_videos) == 1:
+            shutil.copy(scene_videos[0], str(broll_final))
+        else:
+            concat_txt = job_dir / "concat.txt"
+            concat_txt.write_text(
+                "\n".join(f"file '{p}'" for p in scene_videos), encoding="utf-8"
+            )
+            run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", str(concat_txt),
+                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-pix_fmt", "yuv420p", str(broll_final)
+            ], "concat_scenes")
+
+        # 6. Upload
+        result = cloudinary.uploader.upload(
+            str(broll_final),
+            resource_type="video",
+            folder="broll_synced",
+            public_id=f"broll_{req.topic_slug}_{job_id[:8]}",
+            overwrite=True,
+        )
+        url = result["secure_url"]
+        log.info("[BROLL_SYNC] uploaded: %s", url)
+        return {"broll_video_url": url, "scenes": scenes, "duration": duration}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[BROLL_SYNC] Error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Broll sync failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
 # ── POST /generate-broll ──────────────────────────────────────────────────────
 @app.post("/generate-broll")
 async def generate_broll(req: GenerateBrollRequest):
@@ -766,88 +982,12 @@ async def generate_broll(req: GenerateBrollRequest):
         n_beats   = max(8, int(dur / 3.5))
         beat_secs = dur / n_beats
 
-        system_prompt = f"""You are a motion graphics director. Your output is HTML/JS that plays as a {dur:.0f}s B-Roll for a German AI/tech creator.
-
-BRAND
-- Background: #0d0d0f
-- Primary text: #FFFFFF
-- Secondary/labels: #9ca3af
-- Accent (SPARINGLY — max 2-3 elements total): {req.brand_color_primary}
-- Font: Montserrat, Google Fonts
-
-VISUAL PHILOSOPHY — "Bloomberg Terminal meets Motion Design"
-Dark, clean, data-forward. Numbers and typography ARE the design.
-Every frame has something in motion. Nothing is ever fully static.
-Max 4-5 visible elements at once. Never cluttered.
-
-MANDATORY LAYER SYSTEM — implement ALL three:
-
-LAYER 0 — AMBIENT (runs the entire {dur:.0f}s, never stops):
-  Use ONE of these in the background at opacity 0.05-0.08:
-  - Slowly drifting dots grid (SVG, gsap y motion ±6px over 4s, yoyo:true)
-  - OR a faint horizontal scan line sweeping top→bottom on loop
-  - OR slowly rotating large circle outline (stroke only, opacity 0.06)
-  This layer NEVER exits. It gives depth.
-
-LAYER 1 — BEAT CONTENT ({n_beats} beats × {beat_secs:.1f}s each):
-  The timeline has exactly {n_beats} beats. Each beat shows ONE primary data piece:
-  a large number counting up, a progress bar filling, a stat appearing, a chart drawing.
-  Beat content enters from RIGHT (x:50→0), exits to LEFT (x:0→-50).
-  Numbers always animate with gsap countUp (snap:{{snapTo:1}}).
-  A NEW beat starts every {beat_secs:.1f}s. No exceptions.
-
-LAYER 2 — LABELS (follow each beat element):
-  Small silver label above or below the primary element.
-  Appears 0.2s after its beat element, same exit timing.
-  Max 4 words. Uppercase. letter-spacing: 0.15em. font-size: 13-15px.
-
-LAYER 3 — ACCENT PULSE (every 3rd beat only):
-  ONE element in {req.brand_color_primary} — a glowing underline, a pulsing dot, a filled progress bar.
-  gsap.to with repeat:-1, yoyo:true for the pulse. Duration 0.8s.
-
-STORY RULE — topic-specific content only:
-Read the topic and derive REAL numbers/facts/UI elements from it.
-Each beat shows a different facet of the story. Like a data documentary.
-Examples:
-  "KI-Agenten 300% Wachstum" → beats: 300% counter, 847 tasks/min, org-chart shrinking, cost bar, ROI counter, speed comparison, adoption curve, market size
-  "Hacker kapern Instagram" → beats: breach counter, access_granted terminal, accounts/sec counter, detection time, data exfiltrated MB, dark web price, recovery rate
-  "OpenAI Super-App" → beats: feature count assembling, DAU counter, revenue bar, competitor comparison, API calls/s, valuation counter
-NEVER use: random particles, generic network graphs, abstract shapes that could fit any topic.
-
-GSAP IMPLEMENTATION RULES:
-- Import GSAP: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
-- Use ONE gsap.timeline() for ALL beat animations with absolute time positions
-  Example: tl.to(el, {{...}}, {beat_secs:.1f}) — the third argument is absolute seconds
-- The ambient layer uses separate gsap.to() calls with repeat:-1
-- First animation starts at t=0.1s (not 0 — gives browser time to render)
-- Timeline MUST have content until t={dur:.0f}s
-- Enter: gsap.from(el, {{x:50, opacity:0, duration:0.25, ease:"power3.out"}}, t)
-- Exit:  tl.to(el, {{x:-50, opacity:0, duration:0.2, ease:"power2.in"}}, t+{beat_secs:.1f}-0.25)
-- countUp: tl.to(counter, {{innerHTML:TARGET, snap:{{snapTo:1}}, duration:{min(beat_secs*0.7, 2.0):.1f}, ease:"power2.out"}}, t+0.1)
-
-HTML STRUCTURE:
-<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ width:1080px; height:576px; overflow:hidden; background:#0d0d0f; font-family:'Montserrat',sans-serif; }}
-  /* all elements position:absolute */
-</style>
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
-</head><body>
-<!-- ambient layer -->
-<!-- beat elements (reuse DOM nodes, just animate in/out) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script>/* all animation code here */</script>
-</body></html>
-
-Return ONLY raw HTML. No markdown fences. No explanation."""
+        system_prompt = _broll_system_prompt(req.topic, req.brand_color_primary, dur)
 
         user_message = (
             f"Topic: {req.topic}\n"
             f"Duration: {dur:.0f}s → {n_beats} beats × {beat_secs:.1f}s each.\n"
-            "Derive real, specific data points and UI elements from this exact topic. "
+            "Build the illustrated scene first, then layer the data beats on top. "
             "Every beat must feel like a new revelation about the topic."
         )
 
@@ -857,13 +997,7 @@ Return ONLY raw HTML. No markdown fences. No explanation."""
             max_tokens=12000,
         )
 
-        # Strip markdown code fences if the model wrapped the output
-        stripped = html_content.strip()
-        if stripped.startswith("```"):
-            lines        = stripped.split("\n")
-            end          = -1 if lines[-1].strip() == "```" else len(lines)
-            html_content = "\n".join(lines[1:end])
-
+        html_content = _strip_fences(html_content)
         html_path.write_text(html_content, encoding="utf-8")
         log.info("[BROLL] HTML saved: %s", html_path)
 
@@ -1054,11 +1188,14 @@ async def render(req: RenderRequest):
         total_frames = int(duration * FPS)
         log.info("Facecam duration=%.3fs  frames=%d", duration, total_frames)
 
-        # ── 3. B-Roll: HTML via Playwright, fallback to black strip ──────────
+        # ── 3. B-Roll: pre-rendered video > HTML > black strip ───────────────
         broll_final = job_dir / "broll_final.mp4"
         broll_ok    = False
 
-        if req.broll_html_url:
+        if req.broll_video_url:
+            log.info("[RENDER] Using pre-rendered synced broll")
+            broll_ok = download_file(req.broll_video_url, broll_final)
+        elif req.broll_html_url:
             html_path = job_dir / "broll.html"
             if download_file(req.broll_html_url, html_path):
                 broll_ok = await render_html_to_video(html_path, broll_final, duration)

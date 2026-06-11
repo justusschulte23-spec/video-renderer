@@ -853,7 +853,7 @@ Return ONLY raw HTML. No markdown fences. No explanation."""
 
         html_content = call_openrouter(
             system_prompt, user_message,
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/claude-sonnet-4.6",
             max_tokens=12000,
         )
 

@@ -58,6 +58,8 @@ FONT_BLACK     = FONT_DIR / "Montserrat-Black.ttf"
 FONT_SEMIBOLD  = FONT_DIR / "Montserrat-SemiBold.ttf"
 SCANLINES_PATH = FONT_DIR / "scanlines.png"
 HUD_PATH       = FONT_DIR / "hud.png"
+GSAP_LOCAL     = FONT_DIR / "gsap.min.js"
+GSAP_CDN       = "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"
 
 FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
@@ -87,6 +89,40 @@ def _bootstrap_fonts():
         log.info("Font saved: %s", path)
 
 _bootstrap_fonts()
+
+
+def _bootstrap_gsap():
+    if GSAP_LOCAL.exists():
+        return
+    log.info("Downloading GSAP …")
+    try:
+        r = requests.get(GSAP_CDN, timeout=30)
+        r.raise_for_status()
+        GSAP_LOCAL.write_bytes(r.content)
+        log.info("GSAP cached: %s (%d KB)", GSAP_LOCAL, len(r.content) // 1024)
+    except Exception as exc:
+        log.warning("GSAP download failed (CDN animations may not work): %s", exc)
+
+_bootstrap_gsap()
+
+
+def _inject_gsap_inline(html: str) -> str:
+    """Replace any external GSAP <script> tag with an inline version."""
+    if not GSAP_LOCAL.exists():
+        return html
+    gsap_js = GSAP_LOCAL.read_text(encoding="utf-8")
+    inline  = f"<script>{gsap_js}</script>"
+    # Replace CDN script tags (with or without closing tag variations)
+    patched = re.sub(
+        r'<script[^>]*gsap[^>]*>\s*</script>',
+        inline,
+        html,
+        flags=re.IGNORECASE,
+    )
+    # If no CDN tag found, prepend inline before first <script>
+    if patched == html and "<script>" in html.lower():
+        patched = html.replace("<script>", f"{inline}\n<script>", 1)
+    return patched
 
 
 def _bootstrap_sfx():
@@ -933,7 +969,7 @@ def _strip_fences(text: str) -> str:
 async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
     html_path  = job_dir / f"scene_{idx}.html"
     video_path = job_dir / f"scene_{idx}.mp4"
-    html_path.write_text(html, encoding="utf-8")
+    html_path.write_text(_inject_gsap_inline(html), encoding="utf-8")
     ok = await render_html_to_video(html_path, video_path, scene_dur)
     if not ok:
         run([
@@ -1360,7 +1396,7 @@ async def render(req: RenderRequest):
             f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            f"[2:v]zoompan=z='if(lte(on,10),1+0.15*(on/10),if(lte(on,16),1.15-0.15*((on-10)/6),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
+            f"[2:v]zoompan=z='if(lte(on,8),1+0.20*(on/8),if(lte(on,14),1.20-0.20*((on-8)/6),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
             f"setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"

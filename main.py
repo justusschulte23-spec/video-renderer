@@ -768,65 +768,112 @@ def _draw_thumbnail_hook(img: Image.Image, text: str,
 
 # ── Broll prompt builder ──────────────────────────────────────────────────────
 def _broll_system_prompt(topic: str, accent: str, dur: float) -> str:
-    n_beats   = max(8, int(dur / 3.5))
-    beat_secs = dur / n_beats
-    return f"""You are a motion graphics director. Output: a single self-contained HTML file, {dur:.0f}s B-Roll for a German AI/tech creator.
+    n_primary  = max(int(dur / 2.5), 6)   # primary beat every 2.5s
+    n_second   = max(int(dur / 5.0), 3)   # secondary beat every 5s
+    p_beat     = dur / n_primary
+    s_beat     = dur / n_second
+    return f"""You are a motion graphics director. Output: a self-contained HTML file — {dur:.0f}s B-Roll for a German AI/tech creator.
 
-BRAND: bg #141218 · text #ffffff · labels #c4c4c4 · accent {accent} (max 2-3 uses) · font Montserrat (Google Fonts)
-BRIGHTNESS RULE: ALL text, numbers, labels — color #ffffff, opacity 1.0, NEVER dimmed. Add text-shadow: 0 0 20px rgba(0,0,0,0.9) for readability against scene.
+BRAND: bg #141218 · text #ffffff · labels #d0d0d0 · accent {accent} · font Montserrat (Google Fonts)
+RULE: every text/number is color:#fff, opacity:1, text-shadow:0 2px 24px rgba(0,0,0,0.95). Never dim data elements.
 
-━━━ STEP 1 — BUILD A VISUAL WORLD (always, no exceptions) ━━━
-Every B-Roll has a SCENE that represents the topic physically or metaphorically.
-The scene is SVG or pixel-art canvas, opacity 0.55-0.75, fills the whole 1080×576.
-It has subtle continuous animation (slow pulse, gentle drift, soft glow — never stops).
+━━━ ARCHITECTURE: 4 INDEPENDENT STREAMS, ALL RUNNING SIMULTANEOUSLY ━━━
+At every frame, the viewer sees: SCENE + TICKER + PRIMARY STAT + SECONDARY STAT.
+Nothing is ever blank. No gaps. No waiting.
 
-Scene reference library — match to topic:
-· AI / Agents / LLM      → isometric server racks (CSS skew), blinking LED dots, floating data streams
-· Energy / Power         → cooling towers (SVG cylinder silhouettes), rising steam circles, power-line geometry
-· Finance / Markets      → tilted phone mockup with red/green bars, ticker tape, candlestick silhouettes
-· Social Media / Viral   → phone outline with scrolling card stack, notification badge counter cascading
-· Hacking / Security     → terminal lines scrolling (monospace text, green), lock icon breaking apart
-· Healthcare / Bio       → ECG line drawing itself (stroke-dashoffset), DNA double helix (two sine paths)
-· Geopolitics / Trade    → simplified world map (SVG paths), pulsing dots on countries, trade flow arrows
-· Logistics / Supply     → warehouse perspective lines, moving box icons, route paths
-· Robotics / Automation  → mechanical arm SVG (jointed lines), gear rotation, assembly counter
-· Pixel Art trigger      → use canvas pixel art (270×144 scaled 8× via image-rendering:pixelated) when topic
-                           involves: tech, AI, digital, hacking, gaming, code, internet, data
+──────────────────────────────────────────────────────────────────────
+STREAM A — SCENE (t=0 → t={dur:.0f}, never exits)
+──────────────────────────────────────────────────────────────────────
+Full-canvas SVG or pixel-art illustration at opacity 0.6.
+Represents the topic as a physical environment. Always subtly animating.
 
-━━━ STEP 2 — BEAT DATA LAYER ({n_beats} beats × {beat_secs:.1f}s each) ━━━
-One primary data element per beat — large number (countUp), progress bar, SVG chart drawing, or stat card.
-Enter: x:60→0, opacity:0→1, duration:0.25s, ease:power3.out
-Exit:  x:0→-60, opacity:1→0, duration:0.20s, ease:power2.in — fires {beat_secs:.1f}s after entry
-Below each: silver uppercase label (13px, letter-spacing:0.15em), appears 0.2s after main element.
-CountUp syntax: gsap.to(el, {{innerHTML: TARGET, snap:{{snapTo:1}}, duration:{min(beat_secs*0.7,2.0):.1f}, ease:"power2.out"}})
+Scene types — pick the exact match:
+· Nuclear / Energy      → SVG cooling towers (rounded rectangles), steam circles rising (gsap y:-40 repeat:-1),
+                          power transmission lines (SVG polyline), voltage meter needle oscillating
+· AI / LLM / Agents     → pixel-art canvas (270×144 → 1080×576, image-rendering:pixelated):
+                          server rack rows, blinking LEDs (random interval setInterval), data flow dots
+· Finance / Markets     → candlestick chart (SVG rects, reds+greens), price line drawing itself, volume bars
+· Hacking / Security    → monospace terminal (green #00ff41 on black), lines of code scrolling upward via CSS
+· Social / Viral        → phone outline SVG, notification cards stacking, follower counter spinning
+· Healthcare / Bio      → ECG line (SVG stroke-dashoffset animating), heartbeat pulse, DNA helix (2 sine SVG paths)
+· Geopolitics           → world map SVG (simplified continents), pulsing country dots, arc trade routes
+· Robotics / Industry   → mechanical arm (SVG jointed segments), gear (CSS rotate repeat:-1), conveyor belt
 
-BEAT CONTENT — derive real data from the topic. Each beat = a different facet:
-· "KI-Agenten Boom"     → 300% growth / 847 tasks/min / 12,000 jobs automated / cost -78% / 4.2s response
-· "Atomkraft Abschaltung" → 17 plants offline / 31% capacity lost / power price +340% / CO2 +18Mt / €4.2B cost
-· "Hacker Angriff"      → 1,847 breaches/day / 3.2GB exfiltrated / detection: 197 days avg / €4.2M ransom
-· "OpenAI Expansion"    → 200M users / $157B valuation / 1.2T tokens/day / 45 countries / 3,000 employees
-Every beat must feel like a new revelation.
+The scene has 2-3 internal animated elements. They run independently with gsap repeat:-1 or CSS animation.
 
-━━━ STEP 3 — ACCENT PULSE (every 3rd beat) ━━━
-ONE {accent} element: glowing underline OR pulsing ring OR filled arc.
-gsap.to repeat:-1 yoyo:true duration:0.8s.
+──────────────────────────────────────────────────────────────────────
+STREAM B — LIVE TICKER (t=0 → t={dur:.0f}, never exits)
+──────────────────────────────────────────────────────────────────────
+A strip at the very bottom: y=530, height=46px, full width.
+Background: rgba(0,0,0,0.75). Border-top: 1px solid rgba(255,255,255,0.12).
+Contains data pills scrolling left continuously (CSS @keyframes translateX).
+Each pill: rounded-rect bg rgba(255,255,255,0.08), text 13px Montserrat 600, white.
+Pill content = 5-8 real data points about the topic (numbers, percentages, short labels).
+New pill enters from right every 3s via GSAP (repeat, x: 1100→-200).
+The ticker NEVER stops. It is always visible.
 
-━━━ GSAP RULES ━━━
+──────────────────────────────────────────────────────────────────────
+STREAM C — PRIMARY STAT (changes every {p_beat:.1f}s — {n_primary} total)
+──────────────────────────────────────────────────────────────────────
+Large hero number or stat, center-stage (y: 200-280).
+Font-size: 96-120px, font-weight: 900, color: #fff.
+Enter: gsap.from(el, {{x:80, opacity:0, duration:0.3, ease:"power3.out"}}, t)
+Exit:  gsap.to(el, {{x:-80, opacity:0, duration:0.25, ease:"power2.in"}}, t+{p_beat:.1f}-0.3)
+Numbers use countUp: gsap.to(counter, {{innerHTML:TARGET, snap:{{snapTo:1}}, duration:{min(p_beat*0.6,1.8):.1f}}})
+Below: uppercase silver label 14px letter-spacing:0.18em, appears 0.15s after stat.
+Every stat = a DIFFERENT data point. No repetition. Cover: growth %, absolute numbers,
+comparisons, time stats, cost, speed, market size — all from the topic.
+
+──────────────────────────────────────────────────────────────────────
+STREAM D — SECONDARY STAT (changes every {s_beat:.1f}s — {n_second} total)
+──────────────────────────────────────────────────────────────────────
+Smaller supporting stat always visible in top-right corner (x:860, y:24).
+Font-size: 28px weight:700. Label above it 11px.
+Alternates position every change: top-right → top-left → top-right.
+Enters: y:-20→0, opacity:0→1, 0.3s. Exits: y:0→-20, opacity:1→0.
+Offset from Stream C by {p_beat/2:.1f}s so they never change simultaneously.
+This stat is different data than Stream C — complementary angle on the same topic.
+
+──────────────────────────────────────────────────────────────────────
+STREAM E — ACCENT PULSE (every 6s, 1 element at a time)
+──────────────────────────────────────────────────────────────────────
+ONE element in {accent}: glowing horizontal bar under Stream C stat,
+OR pulsing ring around a key number. gsap repeat:-1 yoyo:true duration:0.7s.
+Box-shadow: 0 0 18px {accent}, 0 0 40px {accent}44.
+
+──────────────────────────────────────────────────────────────────────
+GSAP IMPLEMENTATION
+──────────────────────────────────────────────────────────────────────
 Import: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
-ONE gsap.timeline() for beats — use absolute time positions (3rd argument).
-Scene ambient uses separate gsap.to() with repeat:-1.
-Timeline starts at t=0.1, MUST have content through t={dur:.0f}s.
+Use ONE gsap.timeline() for streams C+D+E (absolute time positions as 3rd arg).
+Streams A+B use separate gsap.to() / CSS @keyframes with repeat:-1.
+Timeline must have entries from t=0.1 through t={dur:.0f}.
 
-━━━ HTML SKELETON ━━━
+TOPIC DATA — derive REAL specific numbers (invent plausible ones if needed):
+Build a list of 12+ distinct data points before coding. Each stream uses different ones.
+Example for "China Atomkraftwerke":
+  22 reactors under construction / 6 new starts per year / build time 5.4 years /
+  54 GW new capacity / cost $6.4B per reactor / 15% of global nuclear output /
+  CO2 saved: 400Mt/year / 1,000 engineers per site / 3× faster than EU average /
+  nuclear share 5% → target 10% by 2035 / 150,000 workers / $440B total investment
+
+──────────────────────────────────────────────────────────────────────
+HTML SKELETON
+──────────────────────────────────────────────────────────────────────
 <!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>*{{margin:0;padding:0;box-sizing:border-box}}body{{width:1080px;height:576px;overflow:hidden;background:#0d0d0f;font-family:'Montserrat',sans-serif}}</style>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{width:1080px;height:576px;overflow:hidden;background:#141218;font-family:'Montserrat',sans-serif;position:relative}}
+</style>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
 </head><body>
-<!-- LAYER 0: scene (SVG or pixel canvas, opacity 0.55-0.75) -->
-<!-- LAYER 1: beat elements (position:absolute) -->
-<!-- LAYER 2: labels (position:absolute) -->
+<!-- STREAM A: scene SVG or canvas -->
+<!-- STREAM B: ticker strip (position:absolute, bottom) -->
+<!-- STREAM C: primary stat elements (position:absolute) -->
+<!-- STREAM D: secondary stat (position:absolute, corner) -->
+<!-- STREAM E: accent element (position:absolute) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script>/* scene ambient + beat timeline */</script>
+<script>/* streams A+B ambient | streams C+D+E timeline */</script>
 </body></html>
 
 Return ONLY raw HTML. No markdown. No explanation."""

@@ -115,7 +115,7 @@ def _inject_gsap_inline(html: str) -> str:
     # Replace CDN script tags (with or without closing tag variations)
     patched = re.sub(
         r'<script[^>]*gsap[^>]*>\s*</script>',
-        inline,
+        lambda _: inline,  # lambda avoids re.sub escape-processing of \d \w etc in minified JS
         html,
         flags=re.IGNORECASE,
     )

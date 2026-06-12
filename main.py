@@ -285,13 +285,13 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             log.error("[RENDER] Playwright video file not found: %s", webm_path_str)
             return False
 
-        # Convert WebM to H.264 MP4, looping to match full duration
+        # Convert WebM to H.264 MP4 — force CFR 30fps to fix VFR stutter from Playwright
         cmd = [
             "ffmpeg", "-y",
             "-stream_loop", "-1",
             "-i", str(webm_path_str),
             "-t", str(duration),
-            "-vf", "scale=1080:576:flags=lanczos,setsar=1",
+            "-vf", "fps=30,scale=1080:576:flags=lanczos,setsar=1",
             "-an",
             "-c:v", "libx264", "-crf", "16", "-preset", "medium",
             "-pix_fmt", "yuv420p",
@@ -774,8 +774,13 @@ def _broll_system_prompt(topic: str, accent: str, dur: float) -> str:
     s_beat     = dur / n_second
     return f"""You are a motion graphics director. Output: a self-contained HTML file — {dur:.0f}s B-Roll for a German AI/tech creator.
 
-BRAND: bg #141218 · text #ffffff · labels #d0d0d0 · accent {accent} · font Montserrat (Google Fonts)
+BRAND: bg #141218 · text #ffffff · labels #d0d0d0 · accent {accent}
+FONTS: use font-family:'Arial Black','Impact',sans-serif for all bold/heavy text. Load Montserrat async
+  via @font-face or Google Fonts ONLY as enhancement — never block animation on font load.
 RULE: every text/number is color:#fff, opacity:1, text-shadow:0 2px 24px rgba(0,0,0,0.95). Never dim data elements.
+FRAME-1 RULE: ALL animations must be visible from frame 1. Do NOT use window.onload, DOMContentLoaded,
+  or document.fonts.ready to delay GSAP start. All gsap.timeline() and gsap.to() calls execute
+  synchronously in inline <script>. Frame 1 = something is already moving or visible.
 
 ━━━ ARCHITECTURE: 4 INDEPENDENT STREAMS, ALL RUNNING SIMULTANEOUSLY ━━━
 At every frame, the viewer sees: SCENE + TICKER + PRIMARY STAT + SECONDARY STAT.
@@ -867,9 +872,9 @@ HTML SKELETON
 <!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{width:1080px;height:576px;overflow:hidden;background:#141218;font-family:'Montserrat',sans-serif;position:relative}}
+body{{width:1080px;height:576px;overflow:hidden;background:#141218;font-family:'Arial Black','Impact',Arial,sans-serif;position:relative}}
 </style>
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 </head><body>
 <!-- STREAM A: scene SVG or canvas -->
 <!-- STREAM B: ticker strip (position:absolute, bottom) -->
@@ -1355,7 +1360,7 @@ async def render(req: RenderRequest):
             f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            f"[2:v]zoompan=z='if(lte(on,15),1+0.1*(on/15),if(lte(on,25),1.1-0.1*((on-15)/10),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
+            f"[2:v]zoompan=z='if(lte(on,10),1+0.15*(on/10),if(lte(on,16),1.15-0.15*((on-10)/6),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
             f"setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"

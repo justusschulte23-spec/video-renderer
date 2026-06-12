@@ -1351,14 +1351,14 @@ async def render(req: RenderRequest):
             f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            "[2:v]setsar=1[face];"
+            f"[2:v]zoompan=z='if(lte(on,60),1+0.06*(on/60),1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
+            f"setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"
             f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
             "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
             f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
-            f"[with_prog]zoompan=z='if(lte(on,60),1+0.06*(on/60),1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},"
-            f"fade=t=out:st={fadeout_start:.3f}:d=1[final]"
+            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [

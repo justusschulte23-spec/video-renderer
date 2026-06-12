@@ -845,9 +845,13 @@ Box-shadow: 0 0 18px {accent}, 0 0 40px {accent}44.
 GSAP IMPLEMENTATION
 ──────────────────────────────────────────────────────────────────────
 Import: https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
-Use ONE gsap.timeline() for streams C+D+E (absolute time positions as 3rd arg).
+Use ONE gsap.timeline({{repeat:-1}}) for streams C+D+E — repeat:-1 is MANDATORY so it loops forever.
 Streams A+B use separate gsap.to() / CSS @keyframes with repeat:-1.
 Timeline must have entries from t=0.1 through t={dur:.0f}.
+
+CRITICAL — NO DEAD ZONES: Every stream must be animated until t={dur:.0f}. The timeline uses repeat:-1
+so it loops automatically after one full cycle. Never leave any period where all streams are idle.
+Do not hardcode a fixed end — the repeat:-1 handles looping.
 
 TOPIC DATA — derive REAL specific numbers (invent plausible ones if needed):
 Build a list of 12+ distinct data points before coding. Each stream uses different ones.
@@ -1351,7 +1355,7 @@ async def render(req: RenderRequest):
             f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            f"[2:v]zoompan=z='if(lte(on,60),1+0.06*(on/60),1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
+            f"[2:v]zoompan=z='if(lte(on,15),1+0.1*(on/15),if(lte(on,25),1.1-0.1*((on-15)/10),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
             f"setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"

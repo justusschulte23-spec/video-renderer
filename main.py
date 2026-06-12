@@ -1018,13 +1018,32 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         if len(scene_videos) == 1:
             shutil.copy(scene_videos[0], str(broll_final))
         else:
-            concat_txt = job_dir / "concat.txt"
-            concat_txt.write_text(
-                "\n".join(f"file '{p}'" for p in scene_videos), encoding="utf-8"
-            )
+            # Crossfade 0.4s between scenes
+            xfade_dur = 0.4
+            durations = [probe_duration(Path(p)) for p in scene_videos]
+            inputs = []
+            for p in scene_videos:
+                inputs += ["-i", p]
+
+            if len(scene_videos) == 2:
+                offset = durations[0] - xfade_dur
+                filt = (f"[0:v][1:v]xfade=transition=fade:duration={xfade_dur}:offset={offset:.3f}[v]")
+                maps = ["-map", "[v]"]
+            else:
+                parts, offset = [], 0.0
+                label_in = "[0:v]"
+                for i in range(1, len(scene_videos)):
+                    offset += durations[i-1] - xfade_dur
+                    label_out = "[v]" if i == len(scene_videos)-1 else f"[v{i}]"
+                    parts.append(f"{label_in}[{i}:v]xfade=transition=fade:duration={xfade_dur}:offset={offset:.3f}{label_out}")
+                    label_in = label_out
+                filt = ";".join(parts)
+                maps = ["-map", "[v]"]
+
             run([
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", str(concat_txt),
+                "ffmpeg", "-y", *inputs,
+                "-filter_complex", filt,
+                *maps,
                 "-c:v", "libx264", "-crf", "16", "-preset", "medium",
                 "-pix_fmt", "yuv420p", str(broll_final)
             ], "concat_scenes")
@@ -1338,7 +1357,8 @@ async def render(req: RenderRequest):
             f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
             "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
             f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
-            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
+            f"[with_prog]zoompan=z='if(lte(on,60),1+0.06*(on/60),1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},"
+            f"fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [

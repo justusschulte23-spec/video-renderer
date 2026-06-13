@@ -214,7 +214,8 @@ class RenderRequest(BaseModel):
 
 class ThumbnailRequest(BaseModel):
     topic:               str
-    thumbnail_concept:   str
+    thumbnail_concept:   Optional[str] = None
+    thumbnail_prompt:    Optional[str] = None  # alias used by N8N workflow
     brand_color_primary: str = "#8B5CF6"
 
 
@@ -1201,11 +1202,12 @@ async def generate_thumbnail(req: ThumbnailRequest):
     tmp_final = job_dir / "final.jpg"
     try:
         # ── fal.ai generation ─────────────────────────────────────────────────
+        concept = req.thumbnail_concept or req.thumbnail_prompt or req.topic
         ok = False
         try:
             loop    = asyncio.get_event_loop()
             img_url = await loop.run_in_executor(
-                None, _call_fal_thumbnail, req.thumbnail_concept, req.brand_color_primary
+                None, _call_fal_thumbnail, concept, req.brand_color_primary
             )
             log.info("[THUMB] fal.ai returned: %s", img_url)
             ok = download_file(img_url, tmp_raw)

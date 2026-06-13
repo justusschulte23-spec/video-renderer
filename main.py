@@ -7,6 +7,7 @@ import math
 import asyncio
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,9 @@ openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+
+FAL_API_KEY           = os.environ.get("FAL_API_KEY", "")
+FAL_THUMBNAIL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro"
 
 # ── Brand colours ─────────────────────────────────────────────────────────────
 AMETHYST      = (139, 92, 246)
@@ -209,11 +213,9 @@ class RenderRequest(BaseModel):
 
 
 class ThumbnailRequest(BaseModel):
-    topic:                 str
-    broll_html_url:        Optional[str] = None
-    hook:                  str = ""
-    brand_color_primary:   str = "#8B5CF6"
-    brand_color_secondary: str = "#C0C0C0"
+    topic:               str
+    thumbnail_concept:   str
+    brand_color_primary: str = "#8B5CF6"
 
 
 class GenerateBrollRequest(BaseModel):
@@ -697,109 +699,74 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
     return result["secure_url"]
 
 
-# ── Playwright: broll HTML → thumbnail screenshot ────────────────────────────
-async def _screenshot_broll_html(html_path: Path, out_path: Path) -> bool:
-    """Take a 1080×1920 screenshot of the broll HTML after 500ms of animation."""
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        log.error("[THUMB] Playwright not installed")
-        return False
+# ── fal.ai thumbnail generator ───────────────────────────────────────────────
+def _call_fal_thumbnail(concept: str, accent: str) -> str:
+    """Generate a thumbnail via fal.ai nano-banana-pro. Returns image URL."""
+    if not FAL_API_KEY:
+        raise RuntimeError("FAL_API_KEY not set")
 
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox",
-                      "--disable-dev-shm-usage"],
-            )
-            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
-            try:
-                await page.goto(
-                    f"file://{html_path.absolute()}",
-                    wait_until="networkidle",
-                    timeout=30000,
-                )
-            except Exception as exc:
-                log.warning("[THUMB] Page load warning: %s", exc)
-            await page.wait_for_timeout(500)
-            await page.screenshot(path=str(out_path), full_page=False)
-            await browser.close()
-        return out_path.exists() and out_path.stat().st_size > 0
-    except Exception as exc:
-        print(f"[THUMB ERROR] Playwright screenshot failed: {type(exc).__name__}: {str(exc)}")
-        log.error("[THUMB] Playwright screenshot failed: %s", exc)
-        return False
+    negative = (
+        "cluttered, busy, multiple objects, text, letters, words, watermark, "
+        "logo, oversaturated, neon overload, rainbow colors, cartoonish, anime, "
+        "low quality, blurry, generic stock photo, chaotic background, messy, "
+        "people, faces, hands, distorted, ugly, amateur"
+    )
+    prompt = (
+        f"Premium minimal tech thumbnail for a social media video. "
+        f"Hero subject: {concept}. "
+        "Single hero object, centered composition, lots of empty negative space around it. "
+        "Deep dark charcoal background (#12101a). "
+        f"The ONLY light source is a soft amethyst purple glow ({accent}) rimming the object. "
+        "Cinematic studio lighting, premium 3D render aesthetic, ultra clean, sharp focus, "
+        "high-end product photography style like an Apple keynote reveal. "
+        f"Sophisticated, minimalist, expensive-looking. Subtle, not oversaturated. "
+        f"Avoid: {negative}"
+    )
 
+    headers = {
+        "Authorization": f"Key {FAL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "aspect_ratio": "9:16",
+        "num_images": 1,
+    }
 
-# ── Thumbnail hook-text overlay ───────────────────────────────────────────────
-def _draw_thumbnail_hook(img: Image.Image, text: str,
-                         primary_color: str = "#8B5CF6") -> Image.Image:
-    """Overlay uppercase hook text in the bottom third of a 1080x1920 thumbnail."""
-    try:
-        r = int(primary_color[1:3], 16)
-        g = int(primary_color[3:5], 16)
-        b = int(primary_color[5:7], 16)
-        accent = (r, g, b)
-    except Exception:
-        accent = AMETHYST
+    log.info("[THUMB] calling fal.ai nano-banana-pro")
+    resp = requests.post(FAL_THUMBNAIL_ENDPOINT, headers=headers, json=payload, timeout=90)
+    resp.raise_for_status()
+    data = resp.json()
 
-    draw      = ImageDraw.Draw(img)
-    max_width = W - 80
+    # Direct result (synchronous endpoint)
+    if data.get("images"):
+        return data["images"][0]["url"]
 
-    # Find largest font size that fits in ≤2 lines
-    words = text.split()
-    lines: list[str] = []
-    size  = 96
+    # Queued result — poll status_url / response_url
+    request_id = data.get("request_id")
+    status_url  = data.get("status_url") or data.get("response_url")
+    if not status_url and request_id:
+        status_url = f"https://queue.fal.run/fal-ai/nano-banana-pro/requests/{request_id}"
+    if not status_url:
+        raise RuntimeError(f"fal.ai unexpected response: {data}")
 
-    while size >= 52:
-        font = ImageFont.truetype(str(FONT_BLACK), size)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        if (bbox[2] - bbox[0]) <= max_width:
-            lines = [text]
-            break
-        best_split: Optional[tuple] = None
-        best_diff  = float("inf")
-        for i in range(1, len(words)):
-            l1, l2 = " ".join(words[:i]), " ".join(words[i:])
-            b1 = draw.textbbox((0, 0), l1, font=font)
-            b2 = draw.textbbox((0, 0), l2, font=font)
-            w1, w2 = b1[2] - b1[0], b2[2] - b2[0]
-            if w1 <= max_width and w2 <= max_width:
-                diff = abs(w1 - w2)
-                if diff < best_diff:
-                    best_diff, best_split = diff, (l1, l2)
-        if best_split:
-            lines = list(best_split)
-            break
-        size -= 4
+    poll_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    for _ in range(60):
+        time.sleep(1)
+        poll = requests.get(status_url, headers=poll_headers, timeout=30)
+        poll.raise_for_status()
+        result = poll.json()
+        status = result.get("status", "")
+        if status == "COMPLETED":
+            images = (result.get("output") or result).get("images", [])
+            if images:
+                return images[0]["url"]
+            raise RuntimeError(f"fal.ai completed but no images in response")
+        if status in ("FAILED", "ERROR"):
+            raise RuntimeError(f"fal.ai generation failed: {result}")
 
-    if not lines:
-        mid   = len(words) // 2
-        lines = [" ".join(words[:mid]), " ".join(words[mid:])]
-        size  = 52
-
-    font    = ImageFont.truetype(str(FONT_BLACK), size)
-    line_h  = size + 14
-    total_h = len(lines) * line_h
-    start_y = int(H * 0.68) - total_h // 2
-
-    outer_sw = max(10, int(size * 0.18))
-    inner_sw = max(4,  int(size * 0.06))
-
-    for i, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font)
-        tw   = bbox[2] - bbox[0]
-        x    = (W - tw) // 2 - bbox[0]
-        y    = start_y + i * line_h - bbox[1]
-        # thick dark stroke → depth/shadow
-        draw.text((x, y), line, font=font,
-                  fill=(0, 0, 0), stroke_fill=(0, 0, 0), stroke_width=outer_sw)
-        # white text + thin accent stroke
-        draw.text((x, y), line, font=font,
-                  fill=(255, 255, 255), stroke_fill=accent, stroke_width=inner_sw)
-
-    return img
+    raise RuntimeError("fal.ai polling timed out after 60s")
 
 
 # ── Broll prompt builder ──────────────────────────────────────────────────────
@@ -1233,21 +1200,24 @@ async def generate_thumbnail(req: ThumbnailRequest):
     tmp_raw   = job_dir / "raw.jpg"
     tmp_final = job_dir / "final.jpg"
     try:
-        log.info("[THUMB] generating image for: %s", req.topic)
-
-        # ── Screenshot broll HTML via Playwright at t=500ms ──────────────────
-        html_path = job_dir / "broll_thumb.html"
+        # ── fal.ai generation ─────────────────────────────────────────────────
         ok = False
-        if download_file(req.broll_html_url, html_path):
-            ok = await _screenshot_broll_html(html_path, tmp_raw)
+        try:
+            loop    = asyncio.get_event_loop()
+            img_url = await loop.run_in_executor(
+                None, _call_fal_thumbnail, req.thumbnail_concept, req.brand_color_primary
+            )
+            log.info("[THUMB] fal.ai returned: %s", img_url)
+            ok = download_file(img_url, tmp_raw)
+        except Exception as exc:
+            log.warning("[THUMB] fal.ai failed — dark fallback: %s", exc)
 
         # ── Fallback: solid dark canvas ───────────────────────────────────────
         if not ok:
-            log.warning("[THUMB] screenshot failed — using dark fallback canvas")
-            fallback = Image.new("RGB", (W, H), (18, 16, 26))
-            fallback.save(str(tmp_raw), "JPEG", quality=95)
+            log.warning("[THUMB] using dark #12101a fallback canvas")
+            Image.new("RGB", (W, H), (18, 16, 26)).save(str(tmp_raw), "JPEG", quality=95)
 
-        # ── Resize / center-crop to exactly 1080×1920 ─────────────────────────
+        # ── Resize / center-crop to exactly 1080×1920, hero centered ─────────
         img          = Image.open(str(tmp_raw)).convert("RGB")
         target_ratio = W / H
         src_ratio    = img.width / img.height
@@ -1259,14 +1229,9 @@ async def generate_thumbnail(req: ThumbnailRequest):
         left = (new_w - W) // 2
         top  = (new_h - H) // 2
         img  = img.crop((left, top, left + W, top + H))
-
-        # ── Hook text overlay ────────────────────────────────────────────────
-        if req.hook:
-            img = _draw_thumbnail_hook(img, req.hook.upper(), req.brand_color_primary)
-
         img.save(str(tmp_final), "JPEG", quality=95)
 
-        # ── Upload ────────────────────────────────────────────────────────────
+        # ── Upload to Cloudinary ──────────────────────────────────────────────
         result = cloudinary.uploader.upload(
             str(tmp_final),
             resource_type="image",

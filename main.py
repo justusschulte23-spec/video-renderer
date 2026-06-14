@@ -785,6 +785,9 @@ RULE: every text/number is color:#fff, opacity:1, text-shadow:0 2px 24px rgba(0,
 FRAME-1 RULE: ALL animations must be visible from frame 1. Do NOT use window.onload, DOMContentLoaded,
   or document.fonts.ready to delay GSAP start. All gsap.timeline() and gsap.to() calls execute
   synchronously in inline <script>. Frame 1 = something is already moving or visible.
+  ALL CSS @keyframes rules must have animation-delay:0s and animation-play-state:running on their elements.
+  The PRIMARY STAT counter starts counting from 0 immediately at t=0 — the countUp must fire at position 0
+  in the gsap timeline, not delayed. Viewer must see movement within the first 100ms.
 
 ━━━ ARCHITECTURE: 4 INDEPENDENT STREAMS, ALL RUNNING SIMULTANEOUSLY ━━━
 At every frame, the viewer sees: SCENE + TICKER + PRIMARY STAT + SECONDARY STAT.
@@ -1363,14 +1366,14 @@ async def render(req: RenderRequest):
             f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
             f"setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            f"[2:v]zoompan=z='if(lte(on,8),1+0.20*(on/8),if(lte(on,14),1.20-0.20*((on-8)/6),1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{FACECAM_H}:fps={FPS},"
-            f"setsar=1[face];"
+            "[2:v]setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"
             f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
             "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
             f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
-            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
+            f"[with_prog]zoompan=z='if(lte(on,5),1+0.15*(on/5),1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},"
+            f"fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [

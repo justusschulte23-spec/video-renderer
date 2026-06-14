@@ -466,9 +466,18 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
         "-vf", (
             f"scale={tw}:{th}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop={tw}:{th},"
-            "unsharp=5:5:0.6:5:5:0,"
-            "eq=contrast=1.06:brightness=0.01:saturation=1.08,"
-            "vignette=angle=PI/5"
+            # S-curve: crush blacks, lift mids, keep highlights clean
+            # Blue slightly up in shadows → cool/brand-matching darkness
+            # Red slightly up in mids → natural warm skin tones
+            "curves="
+                "r='0/0 0.12/0.08 0.5/0.54 0.88/0.93 1/1':"
+                "g='0/0 0.12/0.07 0.5/0.52 0.88/0.92 1/1':"
+                "b='0/0 0.12/0.11 0.5/0.52 0.88/0.92 1/1',"
+            # Shadow push: cool blues, mid warmth, highlight neutral
+            "colorbalance=rs=-0.06:gs=-0.04:bs=0.10:rm=0.04:gm=0.01:bm=-0.06:rh=0.02:gh=0.01:bh=-0.02,"
+            "unsharp=5:5:0.7:3:3:0,"
+            "eq=contrast=1.04:brightness=0.005:saturation=0.88,"
+            "vignette=angle=PI/4"
         ),
         "-c:v", "libx264", "-crf", "16", "-preset", "medium",
         "-c:a", "copy",

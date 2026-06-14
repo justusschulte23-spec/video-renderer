@@ -307,6 +307,21 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
+            # Force GSAP + CSS animations to start from t=0 immediately
+            try:
+                await page.evaluate("""() => {
+                    if (window.gsap) {
+                        gsap.globalTimeline.seek(0);
+                        gsap.globalTimeline.play();
+                    }
+                    document.querySelectorAll('*').forEach(function(el) {
+                        el.style.animationPlayState = 'running';
+                        el.style.animationDelay = '0s';
+                    });
+                }""")
+            except Exception as exc:
+                log.warning("[RENDER] force-start eval: %s", exc)
+
             await asyncio.sleep(record_secs)
 
             video_ref = page.video

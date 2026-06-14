@@ -1302,7 +1302,7 @@ async def render(req: RenderRequest):
                         "-i", str(thumb_img),
                         "-f", "lavfi",
                         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                        "-t", "0.3",
+                        "-t", "1.0",
                         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,"
                                f"crop={W}:{H},setsar=1",
                         "-c:v", "libx264", "-crf", "16", "-preset", "medium",

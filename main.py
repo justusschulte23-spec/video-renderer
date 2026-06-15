@@ -48,11 +48,11 @@ WHITE         = (255, 255, 255)
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 W, H, FPS         = 1080, 1920, 30
-BROLL_H           = 576
-DIVIDER_Y         = 576
+BROLL_H           = 622
+DIVIDER_Y         = 622
 DIVIDER_H         = 110
-FACECAM_Y         = 686
-FACECAM_H         = 1234
+FACECAM_Y         = 732
+FACECAM_H         = 1188
 PROGRESS_Y        = 1916
 PROGRESS_H        = 4
 CAPTION_FONT_SIZE = 95
@@ -122,8 +122,9 @@ def _inject_gsap_inline(html: str) -> str:
     patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?/?>',
                      lambda _: "", patched, flags=re.IGNORECASE)
     # Inject inline before the first remaining <script
+    # Use lambda to prevent re.sub from treating GSAP's \d, \w etc. as backreferences
     if "<script" in patched:
-        patched = re.sub(r'<script', inline + "\n<script", patched, count=1)
+        patched = re.sub(r'<script', lambda m: inline + "\n" + m.group(0), patched, count=1)
     else:
         patched = patched.replace("</body>", inline + "\n</body>")
     return patched
@@ -277,7 +278,7 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             log.error("[RENDER] Playwright not installed — cannot render HTML broll")
             return False
 
-        record_secs   = min(duration, 65.0)
+        record_secs   = min(duration + 1.5, 66.5)
         log.info("[RENDER] Recording HTML broll via chromium (%.1fs)", duration)
         webm_path_str = None
 
@@ -293,9 +294,9 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
                 return False
 
             context = await browser.new_context(
-                viewport={"width": 1080, "height": 576},
+                viewport={"width": 1080, "height": BROLL_H},
                 record_video_dir=str(record_dir),
-                record_video_size={"width": 1080, "height": 576},
+                record_video_size={"width": 1080, "height": BROLL_H},
             )
             page = await context.new_page()
             try:
@@ -337,13 +338,14 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             log.error("[RENDER] Playwright video file not found: %s", webm_path_str)
             return False
 
-        # Convert WebM to H.264 MP4 — force CFR 30fps to fix VFR stutter from Playwright
+        # Convert WebM to H.264 MP4 — force CFR 30fps, skip first 1s grey startup frames
         cmd = [
             "ffmpeg", "-y",
+            "-ss", "1",
             "-stream_loop", "-1",
             "-i", str(webm_path_str),
             "-t", str(duration),
-            "-vf", "fps=30,scale=1080:576:flags=lanczos,setsar=1",
+            "-vf", f"fps=30,scale=1080:{BROLL_H}:flags=lanczos,setsar=1",
             "-an",
             "-c:v", "libx264", "-crf", "16", "-preset", "medium",
             "-pix_fmt", "yuv420p",
@@ -976,7 +978,7 @@ MARKE: bg #141218 · text #fff · labels #d0d0d0 · accent {accent} · font 'Ari
 EINMALIGE BASIS (NUR EINMAL oben definieren, nicht pro Szene wiederholen):
 <style>
   *{{margin:0;padding:0;box-sizing:border-box}}
-  body{{width:1080px;height:576px;overflow:hidden;background:#141218;position:relative}}
+  body{{width:1080px;height:{BROLL_H}px;overflow:hidden;background:#141218;position:relative}}
   .scene{{position:absolute;inset:0;opacity:0;pointer-events:none}}
   .stat{{font-family:'Arial Black',Impact,sans-serif;font-size:96px;font-weight:900;color:#fff;
          text-shadow:0 0 40px {accent},0 2px 24px rgba(0,0,0,0.9);line-height:1}}
@@ -1375,7 +1377,7 @@ async def render(req: RenderRequest):
                         "-i", str(thumb_img),
                         "-f", "lavfi",
                         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                        "-t", "1.0",
+                        "-t", "0.2",
                         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,"
                                f"crop={W}:{H},setsar=1",
                         "-c:v", "libx264", "-crf", "16", "-preset", "medium",

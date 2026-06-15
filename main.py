@@ -97,32 +97,35 @@ _bootstrap_fonts()
 
 def _bootstrap_gsap():
     if GSAP_LOCAL.exists():
+        log.info("GSAP already cached (%d KB)", GSAP_LOCAL.stat().st_size // 1024)
         return
-    log.info("Downloading GSAP …")
+    log.info("Downloading GSAP from CDN …")
     try:
         r = requests.get(GSAP_CDN, timeout=30)
         r.raise_for_status()
         GSAP_LOCAL.write_bytes(r.content)
         log.info("GSAP cached: %s (%d KB)", GSAP_LOCAL, len(r.content) // 1024)
     except Exception as exc:
-        log.warning("GSAP download failed (CDN animations may not work): %s", exc)
+        log.error("GSAP download FAILED — broll will be grey: %s", exc)
 
 _bootstrap_gsap()
 
 
 def _inject_gsap_inline(html: str) -> str:
-    """Remove all external GSAP script tags and inject inline before first <script>."""
+    """Remove all external GSAP script tags and inject inline. Also strips CSP meta tags."""
     if not GSAP_LOCAL.exists():
         return html
     gsap_js = GSAP_LOCAL.read_text(encoding="utf-8")
     inline  = f"<script>{gsap_js}</script>"
+    # Strip CSP meta tags that would block inline scripts in file:// context
+    patched = re.sub(r'<meta[^>]*Content-Security-Policy[^>]*/?>', '', html, flags=re.IGNORECASE)
     # Remove any <script> tags referencing gsap/greensock (paired and self-closing)
     patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?>.*?</script>',
-                     lambda _: "", html, flags=re.IGNORECASE | re.DOTALL)
+                     lambda _: "", patched, flags=re.IGNORECASE | re.DOTALL)
     patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?/?>',
                      lambda _: "", patched, flags=re.IGNORECASE)
     # Inject inline before the first remaining <script
-    # Use lambda to prevent re.sub from treating GSAP's \d, \w etc. as backreferences
+    # Use lambda so GSAP's \d \w etc. are not treated as regex backreferences
     if "<script" in patched:
         patched = re.sub(r'<script', lambda m: inline + "\n" + m.group(0), patched, count=1)
     else:
@@ -298,6 +301,14 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
                 record_video_dir=str(record_dir),
                 record_video_size={"width": 1080, "height": BROLL_H},
             )
+            # Inject GSAP via init_script — runs before any page script, bypasses CSP
+            if GSAP_LOCAL.exists():
+                gsap_js = GSAP_LOCAL.read_text(encoding="utf-8")
+                await context.add_init_script(script=gsap_js)
+                log.info("[RENDER] GSAP init_script injected (%d KB)", len(gsap_js) // 1024)
+            else:
+                log.error("[RENDER] GSAP_LOCAL missing — broll will be grey!")
+
             page = await context.new_page()
             try:
                 await page.goto(
@@ -308,9 +319,8 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
-            # Wait for GSAP to be available, then seek to 0 and play
+            # GSAP is guaranteed via init_script — just force-play the timeline
             try:
-                await page.wait_for_function("() => !!window.gsap", timeout=3000)
                 await page.evaluate("""() => {
                     if (window.gsap) {
                         gsap.globalTimeline.pause();

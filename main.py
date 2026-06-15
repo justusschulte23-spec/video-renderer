@@ -984,33 +984,73 @@ def _strip_fences(text: str) -> str:
 def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
     n = len(scenes)
     scene_lines = "\n".join(
-        f'  scene{i} (t={s["start"]:.1f}s–{s["end"]:.1f}s): "{s["visual_theme"]}" | '
-        f'data_point={s.get("data_point","—")} | Satz: "{s.get("line","")}"'
+        f'  scene{i} (start={s["start"]:.3f}s, dur={s["end"]-s["start"]:.1f}s): '
+        f'"{s["visual_theme"]}" | data_point={s.get("data_point","—")} | "{s.get("line","")}"'
         for i, s in enumerate(scenes)
     )
-    return f"""Du bist Motion-Graphics-Direktor. Erzeuge {n} Szenen-DIVs für ein B-Roll (1080×{BROLL_H}px, bg #141218, accent {accent}).
+    return f"""Du bist Motion-Graphics-Direktor. Erzeuge {n} Szenen-DIVs + 1 Animations-Script für B-Roll (1080×{BROLL_H}px, bg #141218, accent {accent}).
 
-WICHTIG: Gib NUR die {n} <div>-Blöcke zurück. KEIN html/head/body/style/script.
+AUSGABE-FORMAT (kein Wrapper, kein Markdown):
+  1. {n} × <div class="scene" id="sceneN"> ... </div>
+  2. Danach: EIN <script>-Block mit per-Szene-Animation
+  KEIN <html>/<head>/<body>/<style>/<script src=...>
 
-Verfügbare CSS-Klassen (bereits definiert, nicht nochmal schreiben):
+CSS-Klassen (bereits definiert):
   .scene → position:absolute; inset:0; opacity:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:40px 60px
-  .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1
-  .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center
+  .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1; text-align:center
+  .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center; max-width:920px
 
-{n} SZENEN:
+GSAP-Hilfsfunktionen (global verfügbar, nicht neu definieren):
+  animateCounter(el, target, dur, suffix)      — countUp-Zähler
+  addAmbientPulse(el, scaleAmt=1.15, dur=1.2) — endloser Glow-Pulse
+
+{n} SZENEN (start-Zeiten für gsap.delayedCall):
 {scene_lines}
 
-Pro Szene:
-  - <div class="scene" id="sceneN"> ... </div>
-  - Inline-SVG die den Satz visualisiert (kein Bild-Tag, keine externe URL)
-  - <span class="dp">ZAHL</span> NUR wenn data_point vorhanden (keine Einheit im span)
-  - <span class="lbl">3–5 Wörter</span>
+=== PFLICHT: JEDE SZENE BRAUCHT 3 ANIMATIONS-EBENEN ===
 
-Nur die {n} <div>-Blöcke. Kein Markdown, keine Erklärung."""
+EBENE 1 — ENTRY (erste 0.4s, Pflicht für JEDES Element):
+Kein Element erscheint sofort. Alle Elemente animieren beim Erscheinen:
+  gsap.from(el, {{scale:0, opacity:0, duration:0.4, ease:"back.out(1.7)"}})
+  oder: {{y:20, opacity:0, rotation:-10, duration:0.35, ease:"power3.out"}}
+
+EBENE 2 — SATELLITEN (Pflicht, 3–5 pro Szene):
+Um das Hauptelement: 3–5 kleine Begleitelemente (Mini-Icons, Datenpunkte, Labels).
+Gestaffelter Entry: gsap.from([".sN-0",".sN-1",".sN-2"], {{scale:0, opacity:0, stagger:0.12, duration:0.3, ease:"back.out(2)", delay:0.35}})
+Verbinde Haupt↔Satelliten mit dünnen SVG-Linien (stroke:{accent}, opacity:0.4, stroke-dasharray="4 6").
+
+EBENE 3 — AMBIENT (Pflicht, läuft während der ganzen Szenendauer):
+Nachdem alles eingeblendet ist, muss sich dauerhaft etwas bewegen:
+  Option A: addAmbientPulse(document.querySelector("#sceneN .glow"))
+  Option B: gsap.to([".sN-0",".sN-1"], {{y:"+=6", duration:1.5, repeat:-1, yoyo:true, stagger:{{each:0.1,from:"random"}}, ease:"sine.inOut", delay:0.6}})
+  Option C: gsap.to(lineEl, {{strokeDashoffset:"-=20", duration:2, repeat:-1, ease:"none", delay:0.6}})
+
+TIMING IM SCRIPT-BLOCK: gsap.delayedCall(sceneStart, function(){{...}}) pro Szene.
+Innerhalb der Funktion: gsap.from/to/set mit delay: statt absoluter Position.
+
+BEISPIEL für scene0 (start=0.000s):
+gsap.delayedCall(0.000, function(){{
+  gsap.from("#scene0 .hero", {{scale:0.3, opacity:0, duration:0.45, ease:"back.out(1.7)"}});
+  gsap.from([".s0-0",".s0-1",".s0-2"], {{scale:0, opacity:0, stagger:0.1, duration:0.3, ease:"back.out(2)", delay:0.35}});
+  gsap.to(".s0-line", {{strokeDashoffset:"-=30", duration:2, repeat:-1, ease:"none", delay:0.6}});
+  addAmbientPulse(document.querySelector("#scene0 .glow"));
+}});
+
+CHECK: 3 Frames bei start+0.5s, start+2s, start+3.5s MÜSSEN sich unterscheiden
+(Glow-Intensität ODER Satelliten-Y ODER Linien-Dash-Offset). Nur Counter = FEHLER.
+
+Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 
 
 def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
-    """Wrap Sonnet's scene divs with a Python-generated GSAP timeline (never wrong)."""
+    """Wrap Sonnet's scene divs with Python-generated helpers + GSAP timeline.
+
+    Script order in final HTML (after _inject_gsap_inline replaces src tag):
+      1. GSAP 69KB inline           ← injected before first <script>
+      2. helpers + tl (Python)      ← animateCounter, addAmbientPulse, opacity timeline
+      3. scene_divs HTML            ← Sonnet's divs
+      4. Sonnet's <script> block    ← gsap.delayedCall entries (helpers+tl already defined)
+    """
     tl_lines = []
     for i, s in enumerate(scenes):
         fade_in  = s["start"]
@@ -1031,12 +1071,22 @@ svg{{overflow:visible}}
 </style>
 </head>
 <body>
-{scene_divs}
 <script src="gsap.min.js"></script>
 <script>
+function animateCounter(el, target, dur, suffix) {{
+  var o = {{v: 0}};
+  gsap.to(o, {{v: target, duration: dur, ease: "power2.out",
+    onUpdate: function() {{ el.textContent = Math.round(o.v) + (suffix || ""); }}
+  }});
+}}
+function addAmbientPulse(el, scaleAmt, dur) {{
+  if (!el) return;
+  gsap.to(el, {{scale: scaleAmt||1.15, opacity:0.6, duration: dur||1.2, repeat:-1, yoyo:true, ease:"sine.inOut"}});
+}}
 var tl = gsap.timeline();
 {tl_code}
 </script>
+{scene_divs}
 </body></html>"""
 
 
@@ -1097,7 +1147,7 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         def _gen_full_html():
             return call_openrouter(system_prompt, user_msg,
                                    model="anthropic/claude-sonnet-4.6",
-                                   max_tokens=10000)
+                                   max_tokens=11500)
 
         loop     = asyncio.get_event_loop()
         html_raw = None

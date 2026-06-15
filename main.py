@@ -303,9 +303,8 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             )
             # Inject GSAP via init_script — runs before any page script, bypasses CSP
             if GSAP_LOCAL.exists():
-                gsap_js = GSAP_LOCAL.read_text(encoding="utf-8")
-                await context.add_init_script(script=gsap_js)
-                log.info("[RENDER] GSAP init_script injected (%d KB)", len(gsap_js) // 1024)
+                await context.add_init_script(path=str(GSAP_LOCAL))
+                log.info("[RENDER] GSAP init_script injected from %s", GSAP_LOCAL)
             else:
                 log.error("[RENDER] GSAP_LOCAL missing — broll will be grey!")
 

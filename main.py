@@ -281,9 +281,10 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             log.error("[RENDER] Playwright not installed — cannot render HTML broll")
             return False
 
-        record_secs   = min(duration + 1.5, 66.5)
+        record_secs   = min(duration + 6.0, 72.0)  # generous — dynamic skip handles grey
         log.info("[RENDER] Recording HTML broll via chromium (%.1fs)", duration)
         webm_path_str = None
+        skip_secs     = 2.0  # default fallback; overwritten after page load
 
         async with async_playwright() as p:
             try:
@@ -309,6 +310,7 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
                 log.error("[RENDER] GSAP_LOCAL missing — broll will be grey!")
 
             page = await context.new_page()
+            _t_load_start = time.time()
             try:
                 await page.goto(
                     f"file://{html_path.absolute()}",
@@ -318,7 +320,7 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
-            # GSAP is guaranteed via init_script — just force-play the timeline
+            # GSAP is guaranteed via init_script — seek to 0 and play
             try:
                 await page.evaluate("""() => {
                     if (window.gsap) {
@@ -329,6 +331,10 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
                 }""")
             except Exception as exc:
                 log.warning("[RENDER] GSAP force-start: %s", exc)
+
+            # Measure actual page load time to skip grey startup frames precisely
+            skip_secs = round(time.time() - _t_load_start + 0.3, 2)
+            log.info("[RENDER] Page load took %.2fs — will skip %.2fs in ffmpeg", skip_secs - 0.3, skip_secs)
 
             await asyncio.sleep(record_secs)
 
@@ -347,10 +353,10 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             log.error("[RENDER] Playwright video file not found: %s", webm_path_str)
             return False
 
-        # Convert WebM to H.264 MP4 — force CFR 30fps, skip first 1s grey startup frames
+        # Convert WebM to H.264 MP4 — force CFR 30fps, skip grey startup frames
         cmd = [
             "ffmpeg", "-y",
-            "-ss", "1",
+            "-ss", str(skip_secs),
             "-stream_loop", "-1",
             "-i", str(webm_path_str),
             "-t", str(duration),
@@ -1030,11 +1036,9 @@ WICHTIG:
 
 
 def _validate_broll_html(html: str, n_scenes: int) -> bool:
-    """Returns True if HTML has animateCounter and all scene IDs."""
-    if "animateCounter" not in html:
-        return False
-    last_id = f'id="scene{n_scenes - 1}"'
-    return last_id in html
+    """Returns True if HTML has the last scene ID (single or double quotes)."""
+    last_n = n_scenes - 1
+    return f'id="scene{last_n}"' in html or f"id='scene{last_n}'" in html
 
 
 async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:

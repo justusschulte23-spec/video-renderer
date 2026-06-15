@@ -1007,37 +1007,69 @@ GSAP-Hilfsfunktionen (global verfügbar, nicht neu definieren):
 {n} SZENEN (start-Zeiten für gsap.delayedCall):
 {scene_lines}
 
-=== PFLICHT: JEDE SZENE BRAUCHT 3 ANIMATIONS-EBENEN ===
+=== KERNPRINZIP: ZENTRUM + SCHWEBENDE GEDANKEN-ARTEFAKTE ===
+Jede Szene = als hätte sich der Gedanke, über den gerade gesprochen wird,
+aus dem Kopf gelöst und schwebt als 2D-Szene vor dir. Zwei Ebenen:
 
-EBENE 1 — ENTRY (erste 0.4s, Pflicht für JEDES Element):
-Kein Element erscheint sofort. Alle Elemente animieren beim Erscheinen:
-  gsap.from(el, {{scale:0, opacity:0, duration:0.4, ease:"back.out(1.7)"}})
-  oder: {{y:20, opacity:0, rotation:-10, duration:0.35, ease:"power3.out"}}
+EBENE A — ZENTRUM (1 Objekt, Anker der Szene):
+Ein konkretes Symbol/Icon das die Aussage verkörpert (Gehirn bei Gehirn-Chip,
+Uhr bei Zeit, Rakete bei Wachstum, Graph-Kurve bei Trend). Das Zentrum-Objekt
+MACHT EINE FLIESSENDE AKTION über die volle Szenendauer — pulsiert, füllt sich,
+dreht sich langsam, zeichnet sich, sendet Signalwellen aus. Niemals nur scale-in
+und dann Stillstand. Umhüllt von einem weichen Glow-Halo (addAmbientPulse).
 
-EBENE 2 — SATELLITEN (Pflicht, 3–5 pro Szene):
-Um das Hauptelement: 3–5 kleine Begleitelemente (Mini-Icons, Datenpunkte, Labels).
-Gestaffelter Entry: gsap.from([".sN-0",".sN-1",".sN-2"], {{scale:0, opacity:0, stagger:0.12, duration:0.3, ease:"back.out(2)", delay:0.35}})
-Verbinde Haupt↔Satelliten mit dünnen SVG-Linien (stroke:{accent}, opacity:0.4, stroke-dasharray="4 6").
+EBENE B — SCHWEBENDE ARTEFAKTE (Pflicht, 4–6 pro Szene):
+Um das Zentrum schweben kleine Begleit-Elemente als wären sie Teil desselben Gedankens:
+  - Mini-Stats/Zahlen (kleine eigenständige Werte, nicht der Hauptcounter)
+  - Thematisch verwandte Mini-Icons/Symbole (z.B. bei Gehirn: Datenpakete, Signalwellen)
+  - Feine Partikel/Punkte die langsam treiben
+  - Dünne gestrichelte SVG-Linien (stroke:{accent}, opacity:0.3, stroke-dasharray="4 6")
+    vom Zentrum zu den Artefakten → kontinuierlicher strokeDashoffset-Loop
+Artefakte erscheinen GESTAFFELT (stagger 0.12s) und schweben danach durchgehend:
+  gsap.to(artefakte, {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
+    stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.6}})
 
-EBENE 3 — AMBIENT (Pflicht, läuft während der ganzen Szenendauer):
-Nachdem alles eingeblendet ist, muss sich dauerhaft etwas bewegen:
-  Option A: addAmbientPulse(document.querySelector("#sceneN .glow"))
-  Option B: gsap.to([".sN-0",".sN-1"], {{y:"+=6", duration:1.5, repeat:-1, yoyo:true, stagger:{{each:0.1,from:"random"}}, ease:"sine.inOut", delay:0.6}})
-  Option C: gsap.to(lineEl, {{strokeDashoffset:"-=20", duration:2, repeat:-1, ease:"none", delay:0.6}})
+=== VERBOTEN ===
+- Der gesprochene Satz als Fließtext im Bild
+- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI", "NEURAL NET")
+- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach dem Einblenden
+- Mehr als 3–4 Wörter Text gesamt (nur Einheit zu einer Zahl, z.B. "Std. täglich")
+- Mehr als 1 große Zahl pro Szene (extra Zahlen nur als kleine schwebende Mini-Stats)
 
+=== FARBEN ===
+Zentrum in {accent} mit Glow. Artefakte in Silber/Weiß (#e8e8e8, opacity 0.55–0.8)
+— Hierarchie: Zentrum = Fokus (hell, voll), Artefakte = Atmosphäre (gedämpft).
+Verbindungslinien {accent} bei opacity 0.3. Falls Zahl: animateCounter() als kleines
+Element neben dem Zentrum, nicht als alleiniges Motiv.
+
+=== ANIMATION-SCHEMA (Pflicht) ===
 TIMING IM SCRIPT-BLOCK: gsap.delayedCall(sceneStart, function(){{...}}) pro Szene.
-Innerhalb der Funktion: gsap.from/to/set mit delay: statt absoluter Position.
+Innerhalb der Funktion: delay: für Staffelung, kein absoluter tl-Zeitpunkt.
 
-BEISPIEL für scene0 (start=0.000s):
+Für JEDE Szene mindestens:
+  1. Zentrum: gsap.from(".cN-center", {{scale:0.2, opacity:0, duration:0.5, ease:"back.out(1.7)"}})
+              + addAmbientPulse(document.querySelector(".cN-center .glow"))
+              + kontinuierliche Eigenanimation (Puls, Rotation, Welle, Zeichnung)
+  2. Artefakte Entry: gsap.from([".cN-art0",".cN-art1",...], {{scale:0, opacity:0, stagger:0.12,
+              duration:0.3, ease:"back.out(2)", delay:0.4}})
+  3. Artefakte Ambient: gsap.to([".cN-art0",...], {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
+              stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.7}})
+  4. Linien: gsap.to(".cN-line", {{strokeDashoffset:"-=24", duration:2, repeat:-1, ease:"none", delay:0.6}})
+
+BEISPIEL für scene0 (start=0.000s, visual_theme="Gehirn-Chip"):
 gsap.delayedCall(0.000, function(){{
-  gsap.from("#scene0 .hero", {{scale:0.3, opacity:0, duration:0.45, ease:"back.out(1.7)"}});
-  gsap.from([".s0-0",".s0-1",".s0-2"], {{scale:0, opacity:0, stagger:0.1, duration:0.3, ease:"back.out(2)", delay:0.35}});
-  gsap.to(".s0-line", {{strokeDashoffset:"-=30", duration:2, repeat:-1, ease:"none", delay:0.6}});
-  addAmbientPulse(document.querySelector("#scene0 .glow"));
+  gsap.from(".c0-center", {{scale:0.2, opacity:0, duration:0.5, ease:"back.out(1.7)"}});
+  addAmbientPulse(document.querySelector(".c0-center .glow"));
+  gsap.to(".c0-center", {{rotation:360, duration:12, repeat:-1, ease:"none", delay:0.5}});
+  gsap.from([".c0-art0",".c0-art1",".c0-art2",".c0-art3"], {{scale:0, opacity:0,
+    stagger:0.12, duration:0.3, ease:"back.out(2)", delay:0.4}});
+  gsap.to([".c0-art0",".c0-art1",".c0-art2",".c0-art3"], {{y:"+=8", repeat:-1, yoyo:true,
+    duration:1.8, stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.7}});
+  gsap.to(".c0-line", {{strokeDashoffset:"-=24", duration:2, repeat:-1, ease:"none", delay:0.6}});
 }});
 
-CHECK: 3 Frames bei start+0.5s, start+2s, start+3.5s MÜSSEN sich unterscheiden
-(Glow-Intensität ODER Satelliten-Y ODER Linien-Dash-Offset). Nur Counter = FEHLER.
+CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden
+(Glow-Intensität, Y-Position der Artefakte, Linien-Dashoffset). Nur Counter = FEHLER.
 
 Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 

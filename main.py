@@ -993,80 +993,68 @@ def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
     )
     return f"""Du bist Motion-Graphics-Direktor. Erzeuge {n} Szenen-DIVs + 1 Animations-Script für B-Roll (1080×{BROLL_H}px, bg #141218, accent {accent}).
 
-AUSGABE-FORMAT (kein Wrapper, kein Markdown):
+AUSGABE-FORMAT (exakt, kein Wrapper, kein Markdown):
   1. {n} × <div class="scene" id="sceneN"> ... </div>
   2. Danach: EIN <script>-Block mit per-Szene-Animation
   KEIN <html>/<head>/<body>/<style>/<script src=...>
 
-CSS-Klassen (bereits definiert):
+CSS-Klassen (bereits definiert, nicht wiederholen):
   .scene → position:absolute; inset:0; opacity:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:40px 60px
   .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1; text-align:center
   .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center; max-width:920px
 
-GSAP-Hilfsfunktionen (global verfügbar, nicht neu definieren):
-  animateCounter(el, target, dur, suffix)      — countUp-Zähler
-  addAmbientPulse(el, scaleAmt=1.15, dur=1.2) — endloser Glow-Pulse
+GSAP-Hilfsfunktionen (global verfügbar, NICHT neu definieren):
+  animateCounter(el, target, dur, suffix)  — countUp
+  addAmbientPulse(el, scaleAmt, dur)       — endloser Glow-Pulse
 
 {n} SZENEN (start-Zeiten für gsap.delayedCall):
 {scene_lines}
 
-=== SZENEN-VIELFALT: JEDE SZENE EIN ANDERES LAYOUT ===
-Keine Szene darf gleich aussehen. Wähle pro Szene einen ANDEREN Typ aus dieser Liste
-und fülle ihn thematisch passend. Der Typ bestimmt die Komposition — nicht die Artefakt-Formel.
+=== KERNPRINZIP: ZENTRUM + SCHWEBENDE GEDANKEN-ARTEFAKTE ===
+Jede Szene = als hätte sich der Gedanke, über den gerade gesprochen wird,
+aus dem Kopf gelöst und schwebt als 2D-Szene vor dir. Zwei Ebenen:
 
-TYP A — ORBIT: 1 Zentrum-Symbol (accent, Glow) + 4–6 Mini-Elemente die um es kreisen
-  oder im Raum schweben. Verbunden durch gestrichelte SVG-Linien (dashoffset Loop).
-  Gut für: Netzwerke, Verbindungen, Systeme.
+EBENE A — ZENTRUM (1 Objekt, Anker der Szene):
+Ein konkretes Objekt/Symbol das die Aussage verkörpert (Gehirn bei Gehirn-Chip,
+Uhr bei "X Stunden", Spritze bei medizinisch, Graph-Kurve bei Trend etc.).
+Das Zentrum-Objekt MACHT EINE FLIESSENDE AKTION über die volle Szenendauer —
+pulsiert, füllt sich, dreht sich, zeichnet sich, ein Tropfen fällt.
+Niemals nur scale-in und dann Stillstand.
 
-TYP B — FULLBLEED-ILLUSTRATION: Eine große SVG-Szene die fast die ganze Fläche füllt
-  (z.B. stilisiertes Gehirn als Netz, Stadtsilhouette, abstraktes Datenfeld, Wellen).
-  Fläche ist Stimmung, kein isoliertes Objekt. Einzelne Teile zeichnen sich via
-  stroke-dashoffset, Flächen faden ein, Partikel driften.
+EBENE B — SCHWEBENDE ARTEFAKTE (Pflicht, 4–6 pro Szene):
+Um das Zentrum herum schweben 4–6 kleine Begleit-Elemente als wären sie
+Teil desselben Gedankens:
+  - Kleine Zahlen/Werte/Prozent-Angaben (eigenständige Mini-Stats)
+  - Mini-Icons/Symbole die thematisch verwandt sind
+  - Feine Partikel/Punkte die langsam treiben
+  - Dünne gestrichelte SVG-Linien (stroke-dasharray, opacity 0.25–0.4)
+    vom Zentrum zu den Artefakten → stroke-dashoffset Loop
 
-TYP C — METRIK-MOMENT: Große Zahl im Fokus (animateCounter). Darum herum 3–4 kleine
-  Kontext-Labels + Balken oder Radial-Progress-SVG der sich füllt. Die Zahl ist der Held,
-  alles andere gibt ihr Kontext (Einheit, Vergleichs-Wert, Trend-Pfeil).
+Artefakte erscheinen GESTAFFELT (stagger 0.1–0.15s) und bewegen sich danach
+durchgehend: gsap.to(artefakte, {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
+stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.6}})
 
-TYP D — ZEITSTRAHL / PROZESS: Horizontale oder vertikale Linie mit 3–4 Milestones
-  die sich nacheinander einzeichnen (stroke-dashoffset). Jeder Milestone poppt mit
-  back.out rein, Verbindungslinien zeichnen sich dazwischen.
-
-TYP E — SPLIT-KONTRAST: Zwei Hälften (vorher/nachher, alt/neu, ohne/mit).
-  Linke Seite gedämpft (#606060), rechte Seite leuchtet ({accent}).
-  Trennlinie zeichnet sich von oben nach unten. Beide Seiten faden gestaffelt ein.
-
-TYP F — PARTIKEL-FELD: Keine klare Hauptfigur — stattdessen 20–40 kleine SVG-Punkte/Formen
-  die von verschiedenen Positionen ins Bild driften und danach leicht pulsieren.
-  Thematische Form des Feldes (z.B. Gehirn-Silhouette aus Punkten).
-  Gut für abstrakte Aussagen, Daten-Masse, Bewegung.
-
-TYP G — QUOTE-VISUAL: 1 kurzes Schlüsselwort (max 2 Wörter, 80–120px, accent) das sich
-  per clipPath von links nach rechts enthüllt. Darunter eine dünne accent-Linie die sich
-  zeichnet. Im Hintergrund: dezente geometrische Formen (Kreise, Hex-Grid, opacity 0.08).
-
-PFLICHT-ANIMATION für JEDEN Typ:
-  - Entry: kein Element erscheint ohne Bewegungs-Animation (scale, y, clipPath, opacity)
-  - Idle: nach dem Einblenden bewegt sich dauerhaft etwas (Orbit, Float, Dashoffset, Pulse)
-  - Staffelung: nie alles gleichzeitig — stagger 0.08–0.15s zwischen Elementen
+ZIEL: Szene wirkt VOLL und LEBENDIG — nie ein isoliertes Element auf leerem
+Hintergrund. Artefakte sind leichte schwebende Mini-Elemente, kein Kasten-Layout.
 
 === VERBOTEN ===
 - Der gesprochene Satz als Fließtext im Bild
-- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI")
-- Hartes Pop-in dann Stillstand — IMMER Idle nach dem Einblenden
-- Mehr als 4 Wörter Text pro Szene (Zahlen-Einheiten ausgenommen)
-- Zwei aufeinanderfolgende Szenen vom selben Typ
+- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI", "NEURAL NET")
+- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach dem Einblenden
+- Mehr als 3–4 Wörter Text gesamt (nur Einheit zu einer Zahl, z.B. "Std. täglich")
 
 === FARBEN ===
-bg #141218. Hauptelement {accent} mit Glow (filter:drop-shadow(0 0 18px {accent}88)).
-Sekundärelemente #e8e8e8 / #909090, opacity 0.5–0.8. Linien {accent} opacity 0.3.
+bg #141218. Zentrum in {accent} mit Glow (filter:drop-shadow(0 0 20px {accent}aa)).
+Artefakte in #e8e8e8/#c0c0c0, opacity 0.5–0.8 — Zentrum = Fokus, Artefakte = Atmosphäre.
+Verbindungslinien {accent} opacity 0.3. Falls Zahl: animateCounter() neben dem Zentrum.
 
 === ANIMATION-TIMING ===
 gsap.delayedCall(sceneStart, function(){{...}}) pro Szene im <script>-Block.
-Innerhalb: delay: für Staffelung, alle repeat:-1 Loops ohne absoluten tl-Zeitpunkt.
+Innerhalb: delay: für Staffelung, alle repeat:-1 ohne absoluten tl-Zeitpunkt.
 addAmbientPulse(el) für Glow-Pulse. animateCounter(el, ziel, dauer, suffix) für Zahlen.
 
-CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden.
-Jede Szene MUSS visuell anders sein als die Szene davor (anderer Typ, andere Komposition).
+CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden
+(Glow-Intensität, Artefakt-Y-Position, Linien-Dashoffset). Nur Counter = FEHLER.
 
 Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 
@@ -1074,11 +1062,11 @@ Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
     """Wrap Sonnet's scene divs with Python-generated helpers + GSAP timeline.
 
-    Script order in final HTML (after _inject_gsap_inline replaces src tag):
-      1. GSAP 69KB inline           ← injected before first <script>
-      2. helpers + tl (Python)      ← animateCounter, addAmbientPulse, opacity timeline
-      3. scene_divs HTML            ← Sonnet's divs
-      4. Sonnet's <script> block    ← gsap.delayedCall entries (helpers+tl already defined)
+    Script execution order (critical for correctness):
+      1. GSAP 69KB inline      ← _inject_gsap_inline injects before first <script>
+      2. Helpers script (early) ← animateCounter + addAmbientPulse defined BEFORE scene divs
+      3. {scene_divs}           ← Sonnet's divs + Sonnet's <script> (helpers already defined)
+      4. Python tl (last)       ← opacity timeline runs AFTER all #sceneN elements exist in DOM
     """
     tl_lines = []
     for i, s in enumerate(scenes):
@@ -1102,20 +1090,14 @@ svg{{overflow:visible}}
 <body>
 <script src="gsap.min.js"></script>
 <script>
-function animateCounter(el, target, dur, suffix) {{
-  var o = {{v: 0}};
-  gsap.to(o, {{v: target, duration: dur, ease: "power2.out",
-    onUpdate: function() {{ el.textContent = Math.round(o.v) + (suffix || ""); }}
-  }});
-}}
-function addAmbientPulse(el, scaleAmt, dur) {{
-  if (!el) return;
-  gsap.to(el, {{scale: scaleAmt||1.15, opacity:0.6, duration: dur||1.2, repeat:-1, yoyo:true, ease:"sine.inOut"}});
-}}
+function animateCounter(el,target,dur,suffix){{var o={{v:0}};gsap.to(o,{{v:target,duration:dur,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
+function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opacity:0.6,duration:d||1.2,repeat:-1,yoyo:true,ease:"sine.inOut"}});}}
+</script>
+{scene_divs}
+<script>
 var tl = gsap.timeline();
 {tl_code}
 </script>
-{scene_divs}
 </body></html>"""
 
 

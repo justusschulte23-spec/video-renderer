@@ -119,11 +119,14 @@ def _inject_gsap_inline(html: str) -> str:
     inline  = f"<script>{gsap_js}</script>"
     # Strip CSP meta tags that would block inline scripts in file:// context
     patched = re.sub(r'<meta[^>]*Content-Security-Policy[^>]*/?>', '', html, flags=re.IGNORECASE)
-    # Remove any <script> tags referencing gsap/greensock (paired and self-closing)
-    patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?>.*?</script>',
-                     lambda _: "", patched, flags=re.IGNORECASE | re.DOTALL)
-    patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?/?>',
-                     lambda _: "", patched, flags=re.IGNORECASE)
+    # Remove only <script src="...gsap..."> / <script src="...greensock..."> tags.
+    # Deliberately NOT matching id/class attrs so Sonnet's <script id="gsap-*"> is kept.
+    patched = re.sub(
+        r'<script[^>]+src=["\'][^"\']*(?:gsap|greensock)[^"\']*["\'][^>]*>.*?</script>',
+        lambda _: "", patched, flags=re.IGNORECASE | re.DOTALL)
+    patched = re.sub(
+        r'<script[^>]+src=["\'][^"\']*(?:gsap|greensock)[^"\']*["\'][^>]*/?>',
+        lambda _: "", patched, flags=re.IGNORECASE)
     # Inject inline before the first remaining <script
     # Use lambda so GSAP's \d \w etc. are not treated as regex backreferences
     if "<script" in patched:

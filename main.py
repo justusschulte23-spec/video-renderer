@@ -1102,18 +1102,17 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         html_raw = None
         for attempt in range(1, 4):
             try:
-                candidate = _strip_fences(str(
+                html_raw = _strip_fences(str(
                     await loop.run_in_executor(_html_executor, _gen_full_html)
                 ))
-                if _validate_broll_html(candidate, n_scenes):
-                    html_raw = candidate
-                    log.info("[BROLL_SYNC] HTML valid on attempt %d", attempt)
-                    break
+                if not _validate_broll_html(html_raw, n_scenes):
+                    log.warning("[BROLL_SYNC] validation warn on attempt %d (using anyway)", attempt)
                 else:
-                    log.warning("[BROLL_SYNC] attempt %d: validation failed", attempt)
-                    html_raw = candidate  # keep best-so-far
+                    log.info("[BROLL_SYNC] HTML valid on attempt %d", attempt)
+                break  # use whatever came back — only retry on exception
             except Exception as exc:
-                log.warning("[BROLL_SYNC] attempt %d failed: %s", attempt, exc)
+                log.warning("[BROLL_SYNC] attempt %d call failed: %s", attempt, exc)
+                html_raw = None
                 if attempt < 3:
                     await asyncio.sleep(3)
 

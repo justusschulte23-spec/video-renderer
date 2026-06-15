@@ -1007,69 +1007,63 @@ GSAP-Hilfsfunktionen (global verfügbar, nicht neu definieren):
 {n} SZENEN (start-Zeiten für gsap.delayedCall):
 {scene_lines}
 
-=== KERNPRINZIP: ZENTRUM + SCHWEBENDE GEDANKEN-ARTEFAKTE ===
-Jede Szene = als hätte sich der Gedanke, über den gerade gesprochen wird,
-aus dem Kopf gelöst und schwebt als 2D-Szene vor dir. Zwei Ebenen:
+=== SZENEN-VIELFALT: JEDE SZENE EIN ANDERES LAYOUT ===
+Keine Szene darf gleich aussehen. Wähle pro Szene einen ANDEREN Typ aus dieser Liste
+und fülle ihn thematisch passend. Der Typ bestimmt die Komposition — nicht die Artefakt-Formel.
 
-EBENE A — ZENTRUM (1 Objekt, Anker der Szene):
-Ein konkretes Symbol/Icon das die Aussage verkörpert (Gehirn bei Gehirn-Chip,
-Uhr bei Zeit, Rakete bei Wachstum, Graph-Kurve bei Trend). Das Zentrum-Objekt
-MACHT EINE FLIESSENDE AKTION über die volle Szenendauer — pulsiert, füllt sich,
-dreht sich langsam, zeichnet sich, sendet Signalwellen aus. Niemals nur scale-in
-und dann Stillstand. Umhüllt von einem weichen Glow-Halo (addAmbientPulse).
+TYP A — ORBIT: 1 Zentrum-Symbol (accent, Glow) + 4–6 Mini-Elemente die um es kreisen
+  oder im Raum schweben. Verbunden durch gestrichelte SVG-Linien (dashoffset Loop).
+  Gut für: Netzwerke, Verbindungen, Systeme.
 
-EBENE B — SCHWEBENDE ARTEFAKTE (Pflicht, 4–6 pro Szene):
-Um das Zentrum schweben kleine Begleit-Elemente als wären sie Teil desselben Gedankens:
-  - Mini-Stats/Zahlen (kleine eigenständige Werte, nicht der Hauptcounter)
-  - Thematisch verwandte Mini-Icons/Symbole (z.B. bei Gehirn: Datenpakete, Signalwellen)
-  - Feine Partikel/Punkte die langsam treiben
-  - Dünne gestrichelte SVG-Linien (stroke:{accent}, opacity:0.3, stroke-dasharray="4 6")
-    vom Zentrum zu den Artefakten → kontinuierlicher strokeDashoffset-Loop
-Artefakte erscheinen GESTAFFELT (stagger 0.12s) und schweben danach durchgehend:
-  gsap.to(artefakte, {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
-    stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.6}})
+TYP B — FULLBLEED-ILLUSTRATION: Eine große SVG-Szene die fast die ganze Fläche füllt
+  (z.B. stilisiertes Gehirn als Netz, Stadtsilhouette, abstraktes Datenfeld, Wellen).
+  Fläche ist Stimmung, kein isoliertes Objekt. Einzelne Teile zeichnen sich via
+  stroke-dashoffset, Flächen faden ein, Partikel driften.
+
+TYP C — METRIK-MOMENT: Große Zahl im Fokus (animateCounter). Darum herum 3–4 kleine
+  Kontext-Labels + Balken oder Radial-Progress-SVG der sich füllt. Die Zahl ist der Held,
+  alles andere gibt ihr Kontext (Einheit, Vergleichs-Wert, Trend-Pfeil).
+
+TYP D — ZEITSTRAHL / PROZESS: Horizontale oder vertikale Linie mit 3–4 Milestones
+  die sich nacheinander einzeichnen (stroke-dashoffset). Jeder Milestone poppt mit
+  back.out rein, Verbindungslinien zeichnen sich dazwischen.
+
+TYP E — SPLIT-KONTRAST: Zwei Hälften (vorher/nachher, alt/neu, ohne/mit).
+  Linke Seite gedämpft (#606060), rechte Seite leuchtet ({accent}).
+  Trennlinie zeichnet sich von oben nach unten. Beide Seiten faden gestaffelt ein.
+
+TYP F — PARTIKEL-FELD: Keine klare Hauptfigur — stattdessen 20–40 kleine SVG-Punkte/Formen
+  die von verschiedenen Positionen ins Bild driften und danach leicht pulsieren.
+  Thematische Form des Feldes (z.B. Gehirn-Silhouette aus Punkten).
+  Gut für abstrakte Aussagen, Daten-Masse, Bewegung.
+
+TYP G — QUOTE-VISUAL: 1 kurzes Schlüsselwort (max 2 Wörter, 80–120px, accent) das sich
+  per clipPath von links nach rechts enthüllt. Darunter eine dünne accent-Linie die sich
+  zeichnet. Im Hintergrund: dezente geometrische Formen (Kreise, Hex-Grid, opacity 0.08).
+
+PFLICHT-ANIMATION für JEDEN Typ:
+  - Entry: kein Element erscheint ohne Bewegungs-Animation (scale, y, clipPath, opacity)
+  - Idle: nach dem Einblenden bewegt sich dauerhaft etwas (Orbit, Float, Dashoffset, Pulse)
+  - Staffelung: nie alles gleichzeitig — stagger 0.08–0.15s zwischen Elementen
 
 === VERBOTEN ===
 - Der gesprochene Satz als Fließtext im Bild
-- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI", "NEURAL NET")
-- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach dem Einblenden
-- Mehr als 3–4 Wörter Text gesamt (nur Einheit zu einer Zahl, z.B. "Std. täglich")
-- Mehr als 1 große Zahl pro Szene (extra Zahlen nur als kleine schwebende Mini-Stats)
+- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI")
+- Hartes Pop-in dann Stillstand — IMMER Idle nach dem Einblenden
+- Mehr als 4 Wörter Text pro Szene (Zahlen-Einheiten ausgenommen)
+- Zwei aufeinanderfolgende Szenen vom selben Typ
 
 === FARBEN ===
-Zentrum in {accent} mit Glow. Artefakte in Silber/Weiß (#e8e8e8, opacity 0.55–0.8)
-— Hierarchie: Zentrum = Fokus (hell, voll), Artefakte = Atmosphäre (gedämpft).
-Verbindungslinien {accent} bei opacity 0.3. Falls Zahl: animateCounter() als kleines
-Element neben dem Zentrum, nicht als alleiniges Motiv.
+bg #141218. Hauptelement {accent} mit Glow (filter:drop-shadow(0 0 18px {accent}88)).
+Sekundärelemente #e8e8e8 / #909090, opacity 0.5–0.8. Linien {accent} opacity 0.3.
 
-=== ANIMATION-SCHEMA (Pflicht) ===
-TIMING IM SCRIPT-BLOCK: gsap.delayedCall(sceneStart, function(){{...}}) pro Szene.
-Innerhalb der Funktion: delay: für Staffelung, kein absoluter tl-Zeitpunkt.
+=== ANIMATION-TIMING ===
+gsap.delayedCall(sceneStart, function(){{...}}) pro Szene im <script>-Block.
+Innerhalb: delay: für Staffelung, alle repeat:-1 Loops ohne absoluten tl-Zeitpunkt.
+addAmbientPulse(el) für Glow-Pulse. animateCounter(el, ziel, dauer, suffix) für Zahlen.
 
-Für JEDE Szene mindestens:
-  1. Zentrum: gsap.from(".cN-center", {{scale:0.2, opacity:0, duration:0.5, ease:"back.out(1.7)"}})
-              + addAmbientPulse(document.querySelector(".cN-center .glow"))
-              + kontinuierliche Eigenanimation (Puls, Rotation, Welle, Zeichnung)
-  2. Artefakte Entry: gsap.from([".cN-art0",".cN-art1",...], {{scale:0, opacity:0, stagger:0.12,
-              duration:0.3, ease:"back.out(2)", delay:0.4}})
-  3. Artefakte Ambient: gsap.to([".cN-art0",...], {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
-              stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.7}})
-  4. Linien: gsap.to(".cN-line", {{strokeDashoffset:"-=24", duration:2, repeat:-1, ease:"none", delay:0.6}})
-
-BEISPIEL für scene0 (start=0.000s, visual_theme="Gehirn-Chip"):
-gsap.delayedCall(0.000, function(){{
-  gsap.from(".c0-center", {{scale:0.2, opacity:0, duration:0.5, ease:"back.out(1.7)"}});
-  addAmbientPulse(document.querySelector(".c0-center .glow"));
-  gsap.to(".c0-center", {{rotation:360, duration:12, repeat:-1, ease:"none", delay:0.5}});
-  gsap.from([".c0-art0",".c0-art1",".c0-art2",".c0-art3"], {{scale:0, opacity:0,
-    stagger:0.12, duration:0.3, ease:"back.out(2)", delay:0.4}});
-  gsap.to([".c0-art0",".c0-art1",".c0-art2",".c0-art3"], {{y:"+=8", repeat:-1, yoyo:true,
-    duration:1.8, stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.7}});
-  gsap.to(".c0-line", {{strokeDashoffset:"-=24", duration:2, repeat:-1, ease:"none", delay:0.6}});
-}});
-
-CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden
-(Glow-Intensität, Y-Position der Artefakte, Linien-Dashoffset). Nur Counter = FEHLER.
+CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden.
+Jede Szene MUSS visuell anders sein als die Szene davor (anderer Typ, andere Komposition).
 
 Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 

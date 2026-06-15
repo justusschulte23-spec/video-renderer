@@ -982,61 +982,62 @@ def _strip_fences(text: str) -> str:
 
 
 def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
-    total    = scenes[-1]["end"]
-    n        = len(scenes)
+    n = len(scenes)
     scene_lines = "\n".join(
-        f'  Szene {i+1} (id="scene{i}", t={s["start"]:.1f}s-{s["end"]:.1f}s, '
-        f'dur={s["end"]-s["start"]:.1f}s): "{s["visual_theme"]}" | '
-        f'Hero-Zahl: {s.get("data_point","—")} | Satz: "{s.get("line","")}"'
+        f'  scene{i} (t={s["start"]:.1f}s–{s["end"]:.1f}s): "{s["visual_theme"]}" | '
+        f'data_point={s.get("data_point","—")} | Satz: "{s.get("line","")}"'
         for i, s in enumerate(scenes)
     )
-    return f"""Du bist Motion-Graphics-Direktor. Erzeuge EIN self-contained HTML, {total:.0f}s B-Roll, deutscher KI/Tech-Creator.
+    return f"""Du bist Motion-Graphics-Direktor. Erzeuge {n} Szenen-DIVs für ein B-Roll (1080×{BROLL_H}px, bg #141218, accent {accent}).
 
-MARKE: bg #141218 · text #fff · labels #d0d0d0 · accent {accent} · font 'Arial Black',Impact,sans-serif.
+WICHTIG: Gib NUR die {n} <div>-Blöcke zurück. KEIN html/head/body/style/script.
 
-EINMALIGE BASIS (NUR EINMAL oben definieren, nicht pro Szene wiederholen):
-<style>
-  *{{margin:0;padding:0;box-sizing:border-box}}
-  body{{width:1080px;height:{BROLL_H}px;overflow:hidden;background:#141218;position:relative}}
-  .scene{{position:absolute;inset:0;opacity:0;pointer-events:none}}
-  .stat{{font-family:'Arial Black',Impact,sans-serif;font-size:96px;font-weight:900;color:#fff;
-         text-shadow:0 0 40px {accent},0 2px 24px rgba(0,0,0,0.9);line-height:1}}
-  .label{{font-family:'Arial Black',Impact,sans-serif;font-size:16px;letter-spacing:0.2em;
-          color:#d0d0d0;text-transform:uppercase;margin-top:8px}}
-  .bar{{height:4px;background:{accent};box-shadow:0 0 12px {accent};border-radius:2px;width:0}}
-</style>
+Verfügbare CSS-Klassen (bereits definiert, nicht nochmal schreiben):
+  .scene → position:absolute; inset:0; opacity:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:40px 60px
+  .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1
+  .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center
 
-EINE Helper-Funktion, GENAU SO (nicht abweichen):
-function animateCounter(el, target, dur, suffix) {{
-  var o = {{v: 0}};
-  gsap.to(o, {{v: target, duration: dur, ease: "power2.out",
-    onUpdate: function() {{ el.textContent = Math.round(o.v) + (suffix || ""); }}
-  }});
-}}
-
-{n} SZENEN — Inhalt MUSS zum Satz passen. Pro Szene ein <div class="scene" id="sceneN">:
-  - SVG/Illustration die den gesprochenen Satz visualisiert (kein generisches AI-Bild)
-  - Optional: 1 Hero-Zahl via animateCounter() NUR wenn data_point vorhanden
-  - .label Text, .bar Akzentlinie
-
+{n} SZENEN:
 {scene_lines}
 
-MASTER-TIMELINE:
-const tl = gsap.timeline();
-Pro Szene an absolutem Zeitpunkt start (3. Argument):
-  1. opacity 0→1 in 0.3s (Szene rein)
-  2. Falls Zahl: animateCounter(el, target, dur*0.7, suffix) gleichzeitig
-  3. .bar width 0→"200px" in 0.5s mit +0.3s delay
-  4. .label opacity 0→1 in 0.3s mit +0.15s delay
-  5. Am Ende: opacity 1→0 in 0.2s bei t=(end-0.25)
+Pro Szene:
+  - <div class="scene" id="sceneN"> ... </div>
+  - Inline-SVG die den Satz visualisiert (kein Bild-Tag, keine externe URL)
+  - <span class="dp">ZAHL</span> NUR wenn data_point vorhanden (keine Einheit im span)
+  - <span class="lbl">3–5 Wörter</span>
 
-Szene 0 MUSS bei t=0 beginnen: tl.to("#scene0", {{opacity:1, duration:0.3}}, 0)
+Nur die {n} <div>-Blöcke. Kein Markdown, keine Erklärung."""
 
-WICHTIG:
-- countUp NUR via animateCounter() — kein gsap.to(el, {{innerHTML:...}})
-- Nicht jede Szene braucht eine Zahl — nur wo data_point vorhanden
-- GSAP wird inline injiziert — schreib <script src="gsap.min.js"></script> als Platzhalter
-- Gib NUR rohes HTML zurück, kein Markdown, keine Erklärung"""
+
+def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
+    """Wrap Sonnet's scene divs with a Python-generated GSAP timeline (never wrong)."""
+    tl_lines = []
+    for i, s in enumerate(scenes):
+        fade_in  = s["start"]
+        fade_out = max(s["start"] + 0.31, s["end"] - 0.25)
+        tl_lines.append(f'  tl.to("#scene{i}",{{opacity:1,duration:0.3}},{fade_in:.3f});')
+        tl_lines.append(f'  tl.to("#scene{i}",{{opacity:0,duration:0.2}},{fade_out:.3f});')
+    tl_code = "\n".join(tl_lines)
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{width:1080px;height:{BROLL_H}px;overflow:hidden;background:#141218;position:relative;font-family:"Arial Black",Impact,sans-serif}}
+.scene{{position:absolute;inset:0;opacity:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px 60px}}
+.dp{{font-size:110px;font-weight:900;color:{accent};text-shadow:0 0 40px {accent}88,0 2px 24px rgba(0,0,0,0.9);line-height:1;text-align:center}}
+.lbl{{font-size:28px;font-weight:700;color:#d0d0d0;text-align:center;max-width:920px;line-height:1.3}}
+svg{{overflow:visible}}
+</style>
+</head>
+<body>
+{scene_divs}
+<script src="gsap.min.js"></script>
+<script>
+var tl = gsap.timeline();
+{tl_code}
+</script>
+</body></html>"""
 
 
 def _validate_broll_html(html: str, n_scenes: int) -> bool:
@@ -1119,11 +1120,13 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         if not html_raw:
             raise HTTPException(status_code=500, detail="Broll HTML generation failed after 3 attempts")
 
-        log.info("[BROLL_SYNC] HTML generated (%d chars)", len(html_raw))
+        log.info("[BROLL_SYNC] scene divs (%d chars): %s", len(html_raw),
+                 html_raw[:300].replace('\n', ' '))
 
-        # Write the single HTML and render each scene's time window
+        # Wrap Sonnet's divs with Python-generated GSAP timeline
+        full_html_raw  = _build_broll_html(html_raw, scenes, req.brand_color_primary)
         full_html_path = job_dir / "broll_full.html"
-        full_html_path.write_text(_inject_gsap_inline(html_raw), encoding="utf-8")
+        full_html_path.write_text(_inject_gsap_inline(full_html_raw), encoding="utf-8")
         total_duration = scenes[-1]["end"]
 
         # 4b. Render full HTML as one video, then split by scene timestamps

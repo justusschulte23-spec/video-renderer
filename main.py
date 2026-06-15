@@ -263,9 +263,13 @@ def call_openrouter(system_prompt: str, user_message: str,
             {"role": "user",   "content": user_message},
         ],
     }
-    resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
+    resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    try:
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as exc:
+        log.error("OpenRouter parse error. status=%d body=%s", resp.status_code, resp.text[:400])
+        raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
 
 
 # ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────
@@ -1041,6 +1045,39 @@ def _validate_broll_html(html: str, n_scenes: int) -> bool:
     return f'id="scene{last_n}"' in html or f"id='scene{last_n}'" in html
 
 
+def _fallback_broll_html(scenes: list, accent: str) -> str:
+    """Minimal GSAP broll used when Sonnet call fails — always renders, never grey."""
+    divs = ""
+    tl   = "const tl = gsap.timeline();\n"
+    for i, s in enumerate(scenes):
+        label = s.get("visual_theme", s.get("line", f"Szene {i+1}"))[:70]
+        dp    = s.get("data_point", "")
+        divs += (
+            f'<div class="scene" id="scene{i}">'
+            f'{"<p class=dp>" + dp + "</p>" if dp else ""}'
+            f'<p class="lbl">{label}</p>'
+            f'</div>\n'
+        )
+        tl += f'tl.to("#scene{i}",{{opacity:1,duration:0.3}},{s["start"]});\n'
+        tl += f'tl.to("#scene{i}",{{opacity:0,duration:0.2}},{s["end"]-0.25});\n'
+    return (
+        f'<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
+        f'*{{margin:0;padding:0;box-sizing:border-box}}'
+        f'body{{width:1080px;height:{BROLL_H}px;overflow:hidden;background:#0d0b12;'
+        f'font-family:"Arial Black",Impact,sans-serif;color:#fff}}'
+        f'.scene{{position:absolute;inset:0;opacity:0;display:flex;flex-direction:column;'
+        f'align-items:center;justify-content:center;gap:20px;padding:60px;'
+        f'background:linear-gradient(135deg,#0d0b12 0%,#1a1230 100%)}}'
+        f'.dp{{font-size:110px;font-weight:900;color:#fff;'
+        f'text-shadow:0 0 40px {accent},0 2px 20px rgba(0,0,0,0.9);line-height:1}}'
+        f'.lbl{{font-size:32px;font-weight:700;color:#d0d0d0;text-align:center;'
+        f'text-shadow:0 2px 12px rgba(0,0,0,0.8);max-width:900px;line-height:1.3}}'
+        f'</style></head><body>\n{divs}'
+        f'<script src="gsap.min.js"></script>'
+        f'<script>{tl}</script></body></html>'
+    )
+
+
 async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
     html_path  = job_dir / f"scene_{idx}.html"
     video_path = job_dir / f"scene_{idx}.mp4"
@@ -1093,17 +1130,25 @@ async def generate_broll_synced(req: BrollSyncedRequest):
                                    model="anthropic/claude-sonnet-4.6",
                                    max_tokens=10000)
 
-        loop     = asyncio.get_event_loop()
-        html_raw = await loop.run_in_executor(_html_executor, _gen_full_html)
-        html_raw = _strip_fences(str(html_raw))
-
-        # Validator: check animateCounter + last scene ID, retry once on fail
-        if not _validate_broll_html(html_raw, n_scenes):
-            log.warning("[BROLL_SYNC] validation failed — retrying once")
-            html_raw = await loop.run_in_executor(_html_executor, _gen_full_html)
-            html_raw = _strip_fences(str(html_raw))
+        loop = asyncio.get_event_loop()
+        html_raw = None
+        try:
+            html_raw = _strip_fences(str(await loop.run_in_executor(_html_executor, _gen_full_html)))
             if not _validate_broll_html(html_raw, n_scenes):
-                log.warning("[BROLL_SYNC] retry also failed validation — using anyway")
+                log.warning("[BROLL_SYNC] validation failed — retrying once")
+                try:
+                    html_raw = _strip_fences(str(await loop.run_in_executor(_html_executor, _gen_full_html)))
+                    if not _validate_broll_html(html_raw, n_scenes):
+                        log.warning("[BROLL_SYNC] retry also failed validation — using anyway")
+                except Exception as retry_exc:
+                    log.warning("[BROLL_SYNC] retry call failed: %s — using first attempt", retry_exc)
+        except Exception as gen_exc:
+            log.error("[BROLL_SYNC] Sonnet call failed: %s — using fallback HTML", gen_exc)
+            html_raw = None
+
+        if not html_raw:
+            log.warning("[BROLL_SYNC] Using fallback minimal broll HTML")
+            html_raw = _fallback_broll_html(scenes, req.brand_color_primary)
 
         log.info("[BROLL_SYNC] HTML generated (%d chars)", len(html_raw))
 

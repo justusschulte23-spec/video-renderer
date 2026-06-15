@@ -111,21 +111,21 @@ _bootstrap_gsap()
 
 
 def _inject_gsap_inline(html: str) -> str:
-    """Replace any external GSAP <script> tag with an inline version."""
+    """Remove all external GSAP script tags and inject inline before first <script>."""
     if not GSAP_LOCAL.exists():
         return html
     gsap_js = GSAP_LOCAL.read_text(encoding="utf-8")
     inline  = f"<script>{gsap_js}</script>"
-    # Replace CDN script tags (with or without closing tag variations)
-    patched = re.sub(
-        r'<script[^>]*gsap[^>]*>\s*</script>',
-        lambda _: inline,  # lambda avoids re.sub escape-processing of \d \w etc in minified JS
-        html,
-        flags=re.IGNORECASE,
-    )
-    # If no CDN tag found, prepend inline before first <script>
-    if patched == html and "<script>" in html.lower():
-        patched = html.replace("<script>", f"{inline}\n<script>", 1)
+    # Remove any <script> tags referencing gsap/greensock (paired and self-closing)
+    patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?>.*?</script>',
+                     lambda _: "", html, flags=re.IGNORECASE | re.DOTALL)
+    patched = re.sub(r'<script[^>]*?(gsap|greensock)[^>]*?/?>',
+                     lambda _: "", patched, flags=re.IGNORECASE)
+    # Inject inline before the first remaining <script
+    if "<script" in patched:
+        patched = re.sub(r'<script', inline + "\n<script", patched, count=1)
+    else:
+        patched = patched.replace("</body>", inline + "\n</body>")
     return patched
 
 
@@ -301,26 +301,24 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             try:
                 await page.goto(
                     f"file://{html_path.absolute()}",
-                    wait_until="networkidle",
+                    wait_until="load",
                     timeout=30000,
                 )
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
-            # Force GSAP + CSS animations to start from t=0 immediately
+            # Wait for GSAP to be available, then seek to 0 and play
             try:
+                await page.wait_for_function("() => !!window.gsap", timeout=3000)
                 await page.evaluate("""() => {
                     if (window.gsap) {
+                        gsap.globalTimeline.pause();
                         gsap.globalTimeline.seek(0);
                         gsap.globalTimeline.play();
                     }
-                    document.querySelectorAll('*').forEach(function(el) {
-                        el.style.animationPlayState = 'running';
-                        el.style.animationDelay = '0s';
-                    });
                 }""")
             except Exception as exc:
-                log.warning("[RENDER] force-start eval: %s", exc)
+                log.warning("[RENDER] GSAP force-start: %s", exc)
 
             await asyncio.sleep(record_secs)
 
@@ -920,23 +918,24 @@ Return ONLY raw HTML. No markdown. No explanation."""
 
 
 def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
-    n_scenes = max(3, min(6, int(duration / 10)))
+    n_scenes = max(8, min(15, int(duration / 4)))
     system_prompt = (
         "You are a video editor. Segment a transcript into visual scenes for B-Roll sync.\n"
         f"Total duration: {duration:.1f}s. Create exactly {n_scenes} scenes covering 0s to {duration:.1f}s.\n"
-        "Per scene: start, end (seconds), visual_theme (what to SHOW, specific), "
-        "data_point (one key stat/number), mood (dark|urgent|bright).\n"
-        'Return ONLY valid JSON: {"scenes":[{"start":0,"end":12.5,"visual_theme":"...","data_point":"...","mood":"dark"}]}\n'
-        "Scenes must be contiguous — end of scene N == start of scene N+1. Last end == total duration."
+        "Per scene: start, end (seconds), visual_theme (what to SHOW — specific, not generic), "
+        "data_point (one key stat/number or empty), mood (dark|urgent|bright), "
+        "line (the EXACT spoken sentence(s) in that time window — copy from transcript).\n"
+        'Return ONLY valid JSON: {"scenes":[{"start":0,"end":4.0,"visual_theme":"...","data_point":"...","mood":"dark","line":"..."}]}\n'
+        "Scenes must be contiguous. Last end == total duration."
     )
-    sample = [{"word": w["word"], "t": round(w["start"], 1)}
-              for w in words[::max(1, len(words)//60)]]
+    # Full word list for line extraction
+    full_words = [{"word": w["word"], "t": round(w["start"], 1)} for w in words]
     try:
         raw = call_openrouter(
             system_prompt,
-            f"Topic: {topic}\nTranscript sample: {json.dumps(sample)}",
+            f"Topic: {topic}\nFull transcript: {json.dumps(full_words)}",
             model="anthropic/claude-haiku-4.5",
-            max_tokens=800,
+            max_tokens=1200,
         )
         m      = re.search(r'\{.*\}', raw, re.DOTALL)
         scenes = json.loads(m.group()).get("scenes", []) if m else []
@@ -948,7 +947,7 @@ def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
         log.warning("[BROLL_SYNC] Segmentation failed: %s", exc)
     seg = duration / n_scenes
     return [{"start": i*seg, "end": (i+1)*seg,
-              "visual_theme": topic, "data_point": "", "mood": "dark"}
+              "visual_theme": topic, "data_point": "", "mood": "dark", "line": ""}
             for i in range(n_scenes)]
 
 
@@ -959,6 +958,72 @@ def _strip_fences(text: str) -> str:
         end   = -1 if lines[-1].strip() == "```" else len(lines)
         s     = "\n".join(lines[1:end])
     return s
+
+
+def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
+    total    = scenes[-1]["end"]
+    n        = len(scenes)
+    scene_lines = "\n".join(
+        f'  Szene {i+1} (id="scene{i}", t={s["start"]:.1f}s-{s["end"]:.1f}s, '
+        f'dur={s["end"]-s["start"]:.1f}s): "{s["visual_theme"]}" | '
+        f'Hero-Zahl: {s.get("data_point","—")} | Satz: "{s.get("line","")}"'
+        for i, s in enumerate(scenes)
+    )
+    return f"""Du bist Motion-Graphics-Direktor. Erzeuge EIN self-contained HTML, {total:.0f}s B-Roll, deutscher KI/Tech-Creator.
+
+MARKE: bg #141218 · text #fff · labels #d0d0d0 · accent {accent} · font 'Arial Black',Impact,sans-serif.
+
+EINMALIGE BASIS (NUR EINMAL oben definieren, nicht pro Szene wiederholen):
+<style>
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  body{{width:1080px;height:576px;overflow:hidden;background:#141218;position:relative}}
+  .scene{{position:absolute;inset:0;opacity:0;pointer-events:none}}
+  .stat{{font-family:'Arial Black',Impact,sans-serif;font-size:96px;font-weight:900;color:#fff;
+         text-shadow:0 0 40px {accent},0 2px 24px rgba(0,0,0,0.9);line-height:1}}
+  .label{{font-family:'Arial Black',Impact,sans-serif;font-size:16px;letter-spacing:0.2em;
+          color:#d0d0d0;text-transform:uppercase;margin-top:8px}}
+  .bar{{height:4px;background:{accent};box-shadow:0 0 12px {accent};border-radius:2px;width:0}}
+</style>
+
+EINE Helper-Funktion, GENAU SO (nicht abweichen):
+function animateCounter(el, target, dur, suffix) {{
+  var o = {{v: 0}};
+  gsap.to(o, {{v: target, duration: dur, ease: "power2.out",
+    onUpdate: function() {{ el.textContent = Math.round(o.v) + (suffix || ""); }}
+  }});
+}}
+
+{n} SZENEN — Inhalt MUSS zum Satz passen. Pro Szene ein <div class="scene" id="sceneN">:
+  - SVG/Illustration die den gesprochenen Satz visualisiert (kein generisches AI-Bild)
+  - Optional: 1 Hero-Zahl via animateCounter() NUR wenn data_point vorhanden
+  - .label Text, .bar Akzentlinie
+
+{scene_lines}
+
+MASTER-TIMELINE:
+const tl = gsap.timeline();
+Pro Szene an absolutem Zeitpunkt start (3. Argument):
+  1. opacity 0→1 in 0.3s (Szene rein)
+  2. Falls Zahl: animateCounter(el, target, dur*0.7, suffix) gleichzeitig
+  3. .bar width 0→"200px" in 0.5s mit +0.3s delay
+  4. .label opacity 0→1 in 0.3s mit +0.15s delay
+  5. Am Ende: opacity 1→0 in 0.2s bei t=(end-0.25)
+
+Szene 0 MUSS bei t=0 beginnen: tl.to("#scene0", {{opacity:1, duration:0.3}}, 0)
+
+WICHTIG:
+- countUp NUR via animateCounter() — kein gsap.to(el, {{innerHTML:...}})
+- Nicht jede Szene braucht eine Zahl — nur wo data_point vorhanden
+- GSAP wird inline injiziert — schreib <script src="gsap.min.js"></script> als Platzhalter
+- Gib NUR rohes HTML zurück, kein Markdown, keine Erklärung"""
+
+
+def _validate_broll_html(html: str, n_scenes: int) -> bool:
+    """Returns True if HTML has animateCounter and all scene IDs."""
+    if "animateCounter" not in html:
+        return False
+    last_id = f'id="scene{n_scenes - 1}"'
+    return last_id in html
 
 
 async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
@@ -1002,56 +1067,64 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         scenes = _segment_into_scenes(words, duration, req.topic)
         log.info("[BROLL_SYNC] %d scenes", len(scenes))
 
-        # 4a. Generate ALL HTML in parallel (unblocks Railway 5-min timeout)
-        log.info("[BROLL_SYNC] generating %d HTMLs in parallel", len(scenes))
-        loop = asyncio.get_event_loop()
+        # 4. Generate full B-Roll HTML in ONE Sonnet call
+        n_scenes = len(scenes)
+        log.info("[BROLL_SYNC] generating %d-scene HTML in one call", n_scenes)
+        system_prompt = _broll_system_prompt_v2(req.topic, req.brand_color_primary, scenes)
+        user_msg      = f"Topic: {req.topic}. Erzeuge alle {n_scenes} Szenen."
 
-        def _gen_html(i_scene):
-            i, scene = i_scene
-            scene_dur = scene["end"] - scene["start"]
-            prompt  = _broll_system_prompt(
-                scene.get("visual_theme", req.topic),
-                req.brand_color_primary,
-                scene_dur,
-            )
-            user_msg = (
-                f"Topic: {req.topic}. This scene: {scene.get('visual_theme', req.topic)}. "
-                f"Key data: {scene.get('data_point', '')}. Mood: {scene.get('mood', 'dark')}. "
-                f"Duration: {scene_dur:.1f}s."
-            )
-            return call_openrouter(prompt, user_msg,
+        def _gen_full_html():
+            return call_openrouter(system_prompt, user_msg,
                                    model="anthropic/claude-sonnet-4.6",
-                                   max_tokens=7000)
+                                   max_tokens=10000)
 
-        html_futures = await asyncio.gather(
-            *[loop.run_in_executor(_html_executor, _gen_html, (i, s))
-              for i, s in enumerate(scenes)],
-            return_exceptions=True,
-        )
-        log.info("[BROLL_SYNC] all HTML generated")
+        loop     = asyncio.get_event_loop()
+        html_raw = await loop.run_in_executor(_html_executor, _gen_full_html)
+        html_raw = _strip_fences(str(html_raw))
 
-        # 4b. Render sequentially (Playwright needs serial execution)
+        # Validator: check animateCounter + last scene ID, retry once on fail
+        if not _validate_broll_html(html_raw, n_scenes):
+            log.warning("[BROLL_SYNC] validation failed — retrying once")
+            html_raw = await loop.run_in_executor(_html_executor, _gen_full_html)
+            html_raw = _strip_fences(str(html_raw))
+            if not _validate_broll_html(html_raw, n_scenes):
+                log.warning("[BROLL_SYNC] retry also failed validation — using anyway")
+
+        log.info("[BROLL_SYNC] HTML generated (%d chars)", len(html_raw))
+
+        # Write the single HTML and render each scene's time window
+        full_html_path = job_dir / "broll_full.html"
+        full_html_path.write_text(_inject_gsap_inline(html_raw), encoding="utf-8")
+        total_duration = scenes[-1]["end"]
+
+        # 4b. Render full HTML as one video, then split by scene timestamps
+        full_video_path = job_dir / "broll_full.mp4"
+        ok = await render_html_to_video(full_html_path, full_video_path, total_duration)
+
+        # Extract per-scene clips from the full render
         scene_videos = []
-        for i, (scene, html_raw) in enumerate(zip(scenes, html_futures)):
-            scene_dur = scene["end"] - scene["start"]
-            try:
-                if isinstance(html_raw, Exception):
-                    raise html_raw
-                video_path = await _render_scene_html(
-                    _strip_fences(str(html_raw)), job_dir, i, scene_dur
-                )
-            except Exception as exc:
-                log.error("[BROLL_SYNC] scene %d failed: %s — black fallback", i+1, exc)
-                video_path = job_dir / f"scene_{i}.mp4"
+        for i, scene in enumerate(scenes):
+            scene_dur  = scene["end"] - scene["start"]
+            clip_path  = job_dir / f"scene_{i}.mp4"
+            if ok:
+                run([
+                    "ffmpeg", "-y",
+                    "-ss", str(scene["start"]),
+                    "-i", str(full_video_path),
+                    "-t", str(scene_dur),
+                    "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                    "-pix_fmt", "yuv420p", str(clip_path)
+                ], f"clip_scene_{i}")
+            else:
                 run([
                     "ffmpeg", "-y", "-f", "lavfi",
                     "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
                     "-t", str(scene_dur),
                     "-c:v", "libx264", "-crf", "16", "-preset", "medium",
-                    "-pix_fmt", "yuv420p", str(video_path)
+                    "-pix_fmt", "yuv420p", str(clip_path)
                 ], f"black_fallback_{i}")
-            scene_videos.append(str(video_path))
-            log.info("[BROLL_SYNC] scene %d/%d rendered", i+1, len(scenes))
+            scene_videos.append(str(clip_path))
+            log.info("[BROLL_SYNC] scene %d/%d clipped", i+1, n_scenes)
 
         # 5. Concatenate scenes
         broll_final = job_dir / "broll_synced.mp4"

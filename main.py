@@ -327,17 +327,16 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
-            # GSAP is guaranteed via init_script — seek to 0 and play
+            # Log DOM state for debugging; CSS animations run automatically (no GSAP seek needed)
             try:
-                await page.evaluate("""() => {
-                    if (window.gsap) {
-                        gsap.globalTimeline.pause();
-                        gsap.globalTimeline.seek(0);
-                        gsap.globalTimeline.play();
-                    }
-                }""")
+                debug = await page.evaluate("""() => ({
+                    gsap: !!window.gsap,
+                    scenes: document.querySelectorAll('.scene').length,
+                    s0opacity: (document.getElementById('scene0') || {}).style?.opacity || 'css'
+                })""")
+                log.info("[RENDER] DOM check: %s", debug)
             except Exception as exc:
-                log.warning("[RENDER] GSAP force-start: %s", exc)
+                log.warning("[RENDER] evaluate: %s", exc)
 
             # Measure actual page load time to skip grey startup frames precisely
             skip_secs = round(time.time() - _t_load_start + 0.3, 2)
@@ -1060,21 +1059,21 @@ Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 
 
 def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
-    """Wrap Sonnet's scene divs with Python-generated helpers + GSAP timeline.
+    """Wrap Sonnet's scene divs with CSS-driven scene visibility + GSAP helpers.
 
-    Script execution order (critical for correctness):
-      1. GSAP 69KB inline      ← _inject_gsap_inline injects before first <script>
-      2. Helpers script (early) ← animateCounter + addAmbientPulse defined BEFORE scene divs
-      3. {scene_divs}           ← Sonnet's divs + Sonnet's <script> (helpers already defined)
-      4. Python tl (last)       ← opacity timeline runs AFTER all #sceneN elements exist in DOM
+    Scene opacity is controlled by CSS @keyframes (no GSAP timeline needed).
+    This avoids all variable-collision issues where Sonnet's 'var tl' could
+    interfere with a Python-generated GSAP timeline.
+    GSAP is still available for Sonnet's inner-element animations.
     """
-    tl_lines = []
+    # Per-scene CSS: fade in at scene["start"], hold, fade out at scene["end"]
+    scene_css_lines = []
     for i, s in enumerate(scenes):
-        fade_in  = s["start"]
-        fade_out = max(s["start"] + 0.31, s["end"] - 0.25)
-        tl_lines.append(f'  tl.to("#scene{i}",{{opacity:1,duration:0.3}},{fade_in:.3f});')
-        tl_lines.append(f'  tl.to("#scene{i}",{{opacity:0,duration:0.2}},{fade_out:.3f});')
-    tl_code = "\n".join(tl_lines)
+        dur = max(round(s["end"] - s["start"], 3), 0.5)
+        scene_css_lines.append(
+            f"  #scene{i}{{animation:_broll_scene {dur:.3f}s {s['start']:.3f}s both;}}"
+        )
+    scene_css = "\n".join(scene_css_lines)
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -1085,6 +1084,13 @@ body{{width:1080px;height:{BROLL_H}px;overflow:hidden;background:#141218;positio
 .dp{{font-size:110px;font-weight:900;color:{accent};text-shadow:0 0 40px {accent}88,0 2px 24px rgba(0,0,0,0.9);line-height:1;text-align:center}}
 .lbl{{font-size:28px;font-weight:700;color:#d0d0d0;text-align:center;max-width:920px;line-height:1.3}}
 svg{{overflow:visible}}
+@keyframes _broll_scene{{
+  0%{{opacity:0}}
+  5%{{opacity:1}}
+  95%{{opacity:1}}
+  100%{{opacity:0}}
+}}
+{scene_css}
 </style>
 </head>
 <body>
@@ -1094,10 +1100,6 @@ function animateCounter(el,target,dur,suffix){{var o={{v:0}};gsap.to(o,{{v:targe
 function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opacity:0.6,duration:d||1.2,repeat:-1,yoyo:true,ease:"sine.inOut"}});}}
 </script>
 {scene_divs}
-<script>
-var tl = gsap.timeline();
-{tl_code}
-</script>
 </body></html>"""
 
 

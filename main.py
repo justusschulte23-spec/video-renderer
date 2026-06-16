@@ -334,6 +334,8 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
                 log.error("[RENDER] GSAP_LOCAL missing — broll will be grey!")
 
             page = await context.new_page()
+            page.on("console", lambda msg: log.warning("[BROLL-JS] %s", msg.text)
+                    if msg.type in ("error", "warning") else None)
             _t_load_start = time.time()
             try:
                 await page.goto(
@@ -1410,6 +1412,20 @@ animateCounter(el, ziel, dauer, suffix) für Zahlen (Hilfsfunktion global).
 addAmbientPulse(el) für Glow-Pulse (Hilfsfunktion global).
 Eigene typeText-Funktion für Terminal-Typing SELBST definieren (ist NICHT global).
 Ambient-Glows und Hero-Pulse starten SOFORT (kein delayedCall nötig).
+
+=== SVG SICHERHEITSREGEL (PFLICHT) ===
+Bevor du path.getTotalLength(), strokeDashoffset oder andere SVG-Pfad-Methoden
+aufrufst, MUSS das Element per Guard geprüft werden:
+
+  var path = document.getElementById("myPath");
+  if (path) {{
+    var len = path.getTotalLength();
+    gsap.fromTo(path, {{strokeDashoffset: len}}, {{strokeDashoffset: 0, duration: 2}});
+  }}
+
+NIEMALS ohne null-Check: path.getTotalLength() auf einem Ergebnis von getElementById/querySelector.
+Ein einziger null-Fehler bricht ALLE nachfolgenden Animationen im selben Callback ab —
+inklusive aller animateCounter()-Aufrufe. Jede SVG-Referenz MUSS if(el){{...}} haben.
 
 === VERBOTEN ===
 - var tl = gsap.timeline() — NIEMALS eine Timeline erstellen (bricht Opacity-System)

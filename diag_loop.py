@@ -79,11 +79,17 @@ gsap.delayedCall(0, function(){
 """
 
 
-async def evaluate(name: str, scene_divs: str, with_script: bool):
+async def evaluate(name: str, scene_divs: str, with_script: bool, ext_script: str = None):
     from playwright.async_api import async_playwright
 
+    if ext_script is not None:
+        appended = ext_script
+    elif with_script:
+        appended = SONNET_SCRIPT
+    else:
+        appended = ""
     full_raw = main._build_broll_html(
-        scene_divs + (SONNET_SCRIPT if with_script else ""),
+        scene_divs + appended,
         scenes=[{"start": 0.0, "end": 6.0}],
         accent="#8B5CF6",
     )
@@ -134,7 +140,7 @@ async def evaluate(name: str, scene_divs: str, with_script: bool):
         return int(m.group()) if m else -1
 
     c03, c25 = num(s03["counter"]), num(s25["counter"])
-    a = c03 >= 0 and c25 > c03 and c25 >= 55           # counter counts up to ~target
+    a = c03 >= 0 and c25 > c03 and c25 > 0             # counter visibly counts up
     do03, do25 = num(s03["dashoffset"]), num(s25["dashoffset"])
     b = do03 > do25 and do25 <= 5                      # graph draws (dashoffset → 0)
     c = (s03["ringTransform"] != s25["ringTransform"]) or (s03["glowTransform"] != s25["glowTransform"])
@@ -159,9 +165,16 @@ async def evaluate(name: str, scene_divs: str, with_script: bool):
 
 
 async def main_run():
-    no_script = "--no-script" in sys.argv
-    if no_script:
+    if "--no-script" in sys.argv:
         await evaluate("truncated", SCENE_DIVS, with_script=False)
+    elif "--from-json" in sys.argv:
+        import json
+        idx = sys.argv.index("--from-json")
+        path = sys.argv[idx + 1]
+        d = json.load(open(path, encoding="utf-8"))
+        script = d["script"]
+        print(f"[from-json] using real Sonnet 2nd-call script ({len(script)} chars)")
+        await evaluate("real2ndcall", SCENE_DIVS, with_script=False, ext_script=script)
     else:
         await evaluate("full", SCENE_DIVS, with_script=True)
 

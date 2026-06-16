@@ -1520,6 +1520,53 @@ def _safe_wrap_scripts(scene_divs: str) -> str:
                   flags=re.DOTALL | re.IGNORECASE)
 
 
+def _has_complete_animation_script(html: str) -> bool:
+    """True only if there's a CLOSED <script>...</script> that actually drives animations.
+    Sonnet truncation drops the trailing script entirely (or cuts it mid-way), which
+    leaves all counters/graphs static. We detect both: missing AND incomplete scripts."""
+    blocks = re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.DOTALL | re.IGNORECASE)
+    for b in blocks:
+        if "gsap." in b or "animateCounter" in b or "addAmbientPulse" in b:
+            return True
+    return False
+
+
+def _gen_animation_script(scene_divs_html: str, scenes: list, accent: str) -> str:
+    """Second, focused Sonnet call: generate ONLY the GSAP <script> for already-built divs.
+    Small output → no truncation. Touches nothing about layout/content/timing/colors —
+    it only produces the animation logic for the exact element IDs Sonnet already emitted."""
+    n = len(scenes)
+    starts = ", ".join(f'scene{i}={s["start"]:.2f}s' for i, s in enumerate(scenes))
+    sys_p = f"""Du bekommst {n} fertige Szenen-DIVs einer B-Roll-Animation (1080x{BROLL_H}px, accent {accent}).
+Erzeuge AUSSCHLIESSLICH EINEN <script>-Block mit GSAP-Animationen für GENAU diese DIVs.
+Ändere KEINE Inhalte, kein Layout — nur Animationen.
+
+GLOBALE HELFER (bereits definiert, NICHT neu definieren):
+  animateCounter(el, target, dur, suffix)  — zählt eine Zahl von 0 hoch
+  addAmbientPulse(el, scaleAmt, dur)        — endloser Glow-Pulse
+
+REGELN:
+- Pro Szene EIN gsap.delayedCall(sceneStart, function(){{ ... }}) mit diesen Start-Zeiten: {starts}
+- Jede sichtbare Kennzahl (Elemente mit class "dp" oder id counter*/num*/val*) → animateCounter(el, zielzahl, dauer, " einheit")
+- Jeder SVG-Pfad der sich zeichnen soll — NULL-GUARD ist PFLICHT:
+    var p=document.getElementById("DEINE_ID");
+    if(p){{var L=p.getTotalLength();gsap.set(p,{{strokeDasharray:L,strokeDashoffset:L}});gsap.to(p,{{strokeDashoffset:0,duration:2,ease:"power2.out"}});}}
+- Glows/Ringe/Hero-SVGs: kontinuierliche Bewegung (rotation/scale/opacity, repeat:-1, yoyo:true) — starten SOFORT
+- Metric-Fill-Bars: gsap.to(el,{{width:"NN%",duration:2}})
+- VERBOTEN: gsap.timeline(), <html>/<style>/<head>, Helfer neu definieren
+- Verwende AUSSCHLIESSLICH die EXAKTEN id-Attribute aus den DIVs unten.
+- Gib NUR den einen <script>...</script>-Block zurück. Kein Markdown, kein Text drumherum.
+
+SZENEN-DIVS:
+{scene_divs_html}
+"""
+    out = _strip_fences(str(call_openrouter(
+        sys_p, f"Erzeuge den vollständigen <script>-Block für alle {n} Szenen.",
+        model="anthropic/claude-sonnet-4.6", max_tokens=8000)))
+    if "<script" not in out.lower():
+        out = f"<script>\n{out}\n</script>"
+    return out
+
 
 async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
     html_path  = job_dir / f"scene_{idx}.html"
@@ -1594,10 +1641,27 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         if not html_raw:
             raise HTTPException(status_code=500, detail="Broll HTML generation failed after 3 attempts")
 
-        has_script = "<script" in html_raw.lower()
-        log.info("[BROLL_SYNC] scene divs (%d chars) has_script=%s tail=%s",
+        has_script = _has_complete_animation_script(html_raw)
+        log.info("[BROLL_SYNC] scene divs (%d chars) has_anim_script=%s tail=%s",
                  len(html_raw), has_script,
                  repr(html_raw[-200:].replace('\n', ' ')))
+
+        # If Sonnet's animation <script> is missing/truncated (the common 8-scene
+        # token-limit case), generate it in a focused second call. Without this the
+        # counters/graphs stay frozen at 0 because no GSAP tween ever runs.
+        if not has_script:
+            log.warning("[BROLL_SYNC] animation script missing — generating it in a 2nd call")
+            try:
+                anim = await loop.run_in_executor(
+                    _html_executor,
+                    lambda: _gen_animation_script(html_raw, scenes, req.brand_color_primary))
+                if _has_complete_animation_script(anim):
+                    html_raw = html_raw.rstrip() + "\n" + anim
+                    log.info("[BROLL_SYNC] 2nd-call animation script added (%d chars)", len(anim))
+                else:
+                    log.error("[BROLL_SYNC] 2nd-call script still invalid — counters may stay 0")
+            except Exception as exc:
+                log.error("[BROLL_SYNC] 2nd-call animation script failed: %s", exc)
 
         # Wrap Sonnet's divs with Python-generated GSAP timeline
         full_html_raw  = _build_broll_html(html_raw, scenes, req.brand_color_primary)

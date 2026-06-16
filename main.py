@@ -983,6 +983,325 @@ def _strip_fences(text: str) -> str:
     return s
 
 
+# ── FEW-SHOT REFERENZ (visueller Anker für _broll_system_prompt_v2) ─────────
+_BROLL_REFERENCE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  width:1080px; height:1920px; overflow:hidden;
+  background: #0a0910;
+  font-family: 'SF Mono','Fira Code','Consolas',monospace;
+  position:relative;
+  color:#e8e8e8;
+}
+.scanlines {
+  position:absolute; inset:0; pointer-events:none; z-index:100;
+  background: repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px);
+}
+.glow { position:absolute; border-radius:50%; pointer-events:none; }
+.header {
+  position:absolute; top:80px; left:60px; right:60px;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.header-tag {
+  font-size:11px; letter-spacing:.2em; color:#8B5CF6;
+  text-transform:uppercase; border:1px solid rgba(139,92,246,0.3);
+  padding:6px 16px; border-radius:20px;
+  background:rgba(139,92,246,0.06);
+}
+.header-live {
+  font-size:11px; color:#06B6D4; letter-spacing:.15em;
+  display:flex; align-items:center; gap:8px;
+}
+.live-dot {
+  width:7px; height:7px; border-radius:50%; background:#06B6D4;
+}
+.hero-wrap {
+  position:absolute; top:180px; left:50%; transform:translateX(-50%);
+  width:400px; height:400px; display:flex; align-items:center; justify-content:center;
+}
+.big-section {
+  position:absolute; top:620px; left:60px; right:60px;
+  text-align:center;
+}
+.big-pre { font-size:12px; color:#555; letter-spacing:.2em; text-transform:uppercase; margin-bottom:8px; }
+.big-num {
+  font-size:160px; font-weight:900; line-height:1;
+  font-family:'Arial Black','Arial',sans-serif;
+  background:linear-gradient(135deg,#fff 0%,#C0C0C0 40%,#8B5CF6 100%);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 0 50px rgba(139,92,246,0.6));
+}
+.big-post { font-size:18px; color:#06B6D4; letter-spacing:.12em; margin-top:8px; }
+.hdivider {
+  position:absolute; top:870px; left:60px; right:60px; height:1px;
+  background:linear-gradient(90deg,transparent,#8B5CF6,#06B6D4,transparent);
+  opacity:0.35;
+}
+.terminal {
+  position:absolute; top:910px; left:60px; right:60px;
+  background:rgba(139,92,246,0.04);
+  border:1px solid rgba(139,92,246,0.18);
+  border-radius:12px; overflow:hidden;
+}
+.tbar {
+  background:rgba(139,92,246,0.08); padding:12px 20px;
+  display:flex; align-items:center; gap:8px;
+  border-bottom:1px solid rgba(139,92,246,0.12);
+}
+.tdot { width:10px; height:10px; border-radius:50%; }
+.ttitle { margin-left:6px; font-size:12px; color:#555; letter-spacing:.06em; }
+.tbody { padding:18px 24px; font-size:14px; line-height:2.1; }
+.tline { display:flex; gap:10px; align-items:baseline; min-height:30px; }
+.tprompt { color:#8B5CF6; }
+.tcmd { color:#e8e8e8; }
+.tout { padding-left:22px; }
+.tok { color:#10B981; }
+.tinfo { color:#06B6D4; }
+.twarn { color:#F59E0B; }
+.tcursor { display:inline-block; width:9px; height:17px; background:#8B5CF6; margin-left:2px; vertical-align:middle; }
+.mcards {
+  position:absolute; top:1400px; left:60px; right:60px;
+  display:flex; gap:14px;
+}
+.mcard {
+  flex:1; border:1px solid rgba(139,92,246,0.2); border-radius:10px;
+  padding:18px; background:rgba(139,92,246,0.04); position:relative; overflow:hidden;
+}
+.mcard::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,#8B5CF6,#06B6D4); }
+.mval { font-size:32px; font-weight:900; color:#fff; font-family:'Arial Black',sans-serif; }
+.mkey { font-size:10px; color:#555; margin-top:4px; letter-spacing:.1em; text-transform:uppercase; }
+.mdelta { font-size:11px; color:#10B981; margin-top:6px; }
+.mbar { height:3px; background:rgba(255,255,255,0.06); border-radius:2px; margin-top:10px; overflow:hidden; }
+.mfill { height:100%; border-radius:2px; background:linear-gradient(90deg,#8B5CF6,#06B6D4); width:0; }
+.graphsec {
+  position:absolute; top:1650px; left:60px; right:60px;
+}
+.gtitle { font-size:10px; color:#444; letter-spacing:.12em; text-transform:uppercase; margin-bottom:10px; }
+.dstream {
+  position:absolute; top:180px; right:0; width:50px; height:700px;
+  overflow:hidden; opacity:0.3;
+  display:flex; flex-direction:column; gap:2px; padding:0 6px;
+}
+.dsnum { font-size:9px; color:#8B5CF6; text-align:right; }
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+<div class="glow" id="g1" style="width:900px;height:900px;top:-300px;left:-200px;background:radial-gradient(circle,rgba(139,92,246,0.13) 0%,transparent 65%);filter:blur(30px);"></div>
+<div class="glow" id="g2" style="width:700px;height:700px;top:500px;right:-200px;background:radial-gradient(circle,rgba(6,182,212,0.09) 0%,transparent 65%);filter:blur(25px);"></div>
+<div class="glow" id="g3" style="width:500px;height:500px;bottom:200px;left:-100px;background:radial-gradient(circle,rgba(139,92,246,0.07) 0%,transparent 65%);filter:blur(20px);"></div>
+<div class="header">
+  <div class="header-tag">NEURALINK · MONITOR</div>
+  <div class="header-live"><div class="live-dot" id="liveDot"></div>LIVE FEED</div>
+</div>
+<div class="hero-wrap">
+  <svg id="heroSvg" viewBox="0 0 400 400" width="400" height="400">
+    <circle id="r1" cx="200" cy="200" r="160" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.15" stroke-dasharray="8 12"/>
+    <circle id="r2" cx="200" cy="200" r="130" fill="none" stroke="#06B6D4" stroke-width="1" opacity="0.1" stroke-dasharray="4 16"/>
+    <g id="brain" transform="translate(200,200)">
+      <path d="M 0,-60 C -20,-80 -70,-80 -80,-50 C -90,-25 -85,10 -70,30 C -55,50 -40,65 -20,70 C -10,72 0,70 0,70 Z" fill="rgba(139,92,246,0.15)" stroke="#8B5CF6" stroke-width="2"/>
+      <path d="M 0,-60 C 20,-80 70,-80 80,-50 C 90,-25 85,10 70,30 C 55,50 40,65 20,70 C 10,72 0,70 0,70 Z" fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" stroke-width="2"/>
+      <line x1="0" y1="-55" x2="0" y2="68" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5" stroke-dasharray="4 4"/>
+      <path d="M -70,-30 Q -50,-40 -40,-20" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5"/>
+      <path d="M -75,5 Q -55,-5 -45,15" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+      <path d="M -65,35 Q -45,25 -38,42" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+      <path d="M 70,-30 Q 50,-40 40,-20" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5"/>
+      <path d="M 75,5 Q 55,-5 45,15" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+      <path d="M 65,35 Q 45,25 38,42" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+    </g>
+    <g id="chip" transform="translate(200,150)">
+      <rect x="-22" y="-22" width="44" height="44" rx="6" fill="#0a0910" stroke="#06B6D4" stroke-width="2"/>
+      <rect x="-14" y="-14" width="28" height="28" rx="3" fill="rgba(6,182,212,0.15)" stroke="#06B6D4" stroke-width="1" opacity="0.8"/>
+      <line x1="-22" y1="-10" x2="-32" y2="-10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="-22" y1="0" x2="-32" y2="0" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="-22" y1="10" x2="-32" y2="10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="22" y1="-10" x2="32" y2="-10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="22" y1="0" x2="32" y2="0" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="22" y1="10" x2="32" y2="10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="-10" y1="-22" x2="-10" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="0" y1="-22" x2="0" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="10" y1="-22" x2="10" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
+      <line x1="-10" y1="-14" x2="-10" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+      <line x1="0" y1="-14" x2="0" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+      <line x1="10" y1="-14" x2="10" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+      <line x1="-14" y1="-10" x2="14" y2="-10" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+      <line x1="-14" y1="0" x2="14" y2="0" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+      <line x1="-14" y1="10" x2="14" y2="10" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
+    </g>
+    <circle id="sp1" cx="200" cy="150" r="30" fill="none" stroke="#06B6D4" stroke-width="2" opacity="0"/>
+    <circle id="sp2" cx="200" cy="150" r="30" fill="none" stroke="#06B6D4" stroke-width="1.5" opacity="0"/>
+    <line x1="200" y1="150" x2="80" y2="80" stroke="#06B6D4" stroke-width="1" stroke-dasharray="4 6" opacity="0.3"/>
+    <line x1="200" y1="150" x2="320" y2="80" stroke="#06B6D4" stroke-width="1" stroke-dasharray="4 6" opacity="0.3"/>
+    <line x1="200" y1="150" x2="60" y2="300" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="4 6" opacity="0.2"/>
+    <line x1="200" y1="150" x2="340" y2="300" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="4 6" opacity="0.2"/>
+    <g id="dn1" transform="translate(65,75)" opacity="0">
+      <rect x="-28" y="-11" width="56" height="22" rx="11" fill="rgba(6,182,212,0.12)" stroke="#06B6D4" stroke-width="1"/>
+      <text x="0" y="4" text-anchor="middle" fill="#06B6D4" font-size="9" font-family="monospace">SIGNAL</text>
+    </g>
+    <g id="dn2" transform="translate(335,75)" opacity="0">
+      <rect x="-28" y="-11" width="56" height="22" rx="11" fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" stroke-width="1"/>
+      <text x="0" y="4" text-anchor="middle" fill="#8B5CF6" font-size="9" font-family="monospace">STABLE</text>
+    </g>
+    <g id="dn3" transform="translate(55,305)" opacity="0">
+      <rect x="-24" y="-11" width="48" height="22" rx="11" fill="rgba(192,192,192,0.08)" stroke="#C0C0C0" stroke-width="1"/>
+      <text x="0" y="4" text-anchor="middle" fill="#C0C0C0" font-size="9" font-family="monospace">10h/d</text>
+    </g>
+    <g id="dn4" transform="translate(345,305)" opacity="0">
+      <rect x="-24" y="-11" width="48" height="22" rx="11" fill="rgba(16,185,129,0.1)" stroke="#10B981" stroke-width="1"/>
+      <text x="0" y="4" text-anchor="middle" fill="#10B981" font-size="9" font-family="monospace">99.8%</text>
+    </g>
+  </svg>
+</div>
+<div class="big-section">
+  <div class="big-pre">GESAMT-NUTZUNGSZEIT</div>
+  <div class="big-num" id="bigNum">0</div>
+  <div class="big-post">STUNDEN · 12 NUTZER AKTIV</div>
+</div>
+<div class="hdivider" id="hdiv"></div>
+<div class="terminal" id="term">
+  <div class="tbar">
+    <div class="tdot" style="background:#EF4444;"></div>
+    <div class="tdot" style="background:#F59E0B;"></div>
+    <div class="tdot" style="background:#10B981;"></div>
+    <span class="ttitle">justus@automates ~ neuralink-cli</span>
+  </div>
+  <div class="tbody">
+    <div class="tline"><span class="tprompt">&#x203A;</span><span class="tcmd" id="c1"></span></div>
+    <div class="tline"><span class="tout tok" id="o1" style="opacity:0">&#x2713; device_count: 12 &middot; status: ACTIVE</span></div>
+    <div class="tline"><span class="tprompt" id="p2" style="opacity:0">&#x203A;</span><span class="tcmd" id="c2" style="opacity:0"></span></div>
+    <div class="tline"><span class="tout tinfo" id="o2" style="opacity:0">&#x2192; avg_usage: 10.2h &middot; stability: 99.8%</span></div>
+    <div class="tline"><span class="tprompt" id="p3" style="opacity:0">&#x203A;</span><span class="tcmd" id="c3" style="opacity:0"></span></div>
+    <div class="tline"><span class="tout twarn" id="o3" style="opacity:0">&#x26A1; prototype &#x2192; everyday tool confirmed</span></div>
+    <div class="tline"><span class="tprompt" id="p4" style="opacity:0">&#x203A;</span><span class="tcursor" id="cur"></span></div>
+  </div>
+</div>
+<div class="dstream" id="ds"></div>
+<div class="mcards">
+  <div class="mcard">
+    <div class="mval" id="mv1">0</div>
+    <div class="mkey">Nutzer</div>
+    <div class="mdelta">&#x25B2; +2 this week</div>
+    <div class="mbar"><div class="mfill" id="mf1"></div></div>
+  </div>
+  <div class="mcard">
+    <div class="mval" id="mv2">0h</div>
+    <div class="mkey">&#xD8; t&#xe4;glich</div>
+    <div class="mdelta">&#x25B2; +2.1h MoM</div>
+    <div class="mbar"><div class="mfill" id="mf2" style="background:linear-gradient(90deg,#06B6D4,#10B981);"></div></div>
+  </div>
+  <div class="mcard">
+    <div class="mval" id="mv3">0%</div>
+    <div class="mkey">Stabilit&#xe4;t</div>
+    <div class="mdelta" style="color:#06B6D4;">&#x25CF; live</div>
+    <div class="mbar"><div class="mfill" id="mf3" style="background:linear-gradient(90deg,#10B981,#06B6D4);"></div></div>
+  </div>
+</div>
+<div class="graphsec">
+  <div class="gtitle">USAGE TREND &middot; 8 WOCHEN</div>
+  <svg viewBox="0 0 960 120" width="100%">
+    <defs>
+      <linearGradient id="gfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.3"/>
+        <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="lgrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#8B5CF6"/>
+        <stop offset="100%" stop-color="#06B6D4"/>
+      </linearGradient>
+    </defs>
+    <line x1="0" y1="30" x2="960" y2="30" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
+    <line x1="0" y1="60" x2="960" y2="60" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
+    <line x1="0" y1="90" x2="960" y2="90" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
+    <path id="ga" d="M 0,120" fill="url(#gfill)"/>
+    <path id="gl" d="" fill="none" stroke="url(#lgrad)" stroke-width="3" stroke-linecap="round"/>
+    <circle id="gd" cx="0" cy="120" r="5" fill="#06B6D4"/>
+  </svg>
+</div>
+<script>
+gsap.to("#g1",{x:50,y:40,scale:1.2,duration:7,repeat:-1,yoyo:true,ease:"sine.inOut"});
+gsap.to("#g2",{x:-30,y:-20,scale:1.15,duration:6,repeat:-1,yoyo:true,ease:"sine.inOut",delay:1});
+gsap.to("#g3",{scale:1.3,duration:5,repeat:-1,yoyo:true,ease:"sine.inOut",delay:0.5});
+gsap.to("#liveDot",{opacity:0.2,duration:0.7,repeat:-1,yoyo:true,ease:"steps(1)"});
+gsap.to("#hdiv",{opacity:0.8,duration:1.5,repeat:-1,yoyo:true,ease:"sine.inOut"});
+gsap.to("#brain",{scale:1.04,duration:1.8,repeat:-1,yoyo:true,ease:"sine.inOut",transformOrigin:"center"});
+gsap.to("#chip",{filter:"drop-shadow(0 0 12px #06B6D4)",duration:1.2,repeat:-1,yoyo:true,ease:"sine.inOut"});
+function chipPulse(el,delay){
+  gsap.fromTo(el,{attr:{r:30},opacity:0.7},{attr:{r:100},opacity:0,duration:1.8,repeat:-1,delay:delay,ease:"power1.out"});
+}
+chipPulse("#sp1",0); chipPulse("#sp2",0.9);
+gsap.to("#r1",{rotation:360,duration:20,repeat:-1,ease:"linear",transformOrigin:"200px 200px"});
+gsap.to("#r2",{rotation:-360,duration:30,repeat:-1,ease:"linear",transformOrigin:"200px 200px"});
+gsap.delayedCall(0.5,function(){
+  ["#dn1","#dn2","#dn3","#dn4"].forEach(function(n,i){
+    gsap.to(n,{opacity:1,duration:0.4,delay:i*0.2});
+    gsap.to(n,{y:"+=8",duration:2+i*0.4,repeat:-1,yoyo:true,ease:"sine.inOut",delay:i*0.3});
+  });
+});
+var ds=document.getElementById("ds");
+for(var i=0;i<80;i++){var d=document.createElement("div");d.className="dsnum";d.textContent=(Math.random()*999|0).toString().padStart(3,"0");ds.appendChild(d);}
+gsap.to("#ds",{y:-600,duration:10,repeat:-1,ease:"linear"});
+animateCounter(document.getElementById("bigNum"),15284,2.5);
+gsap.delayedCall(0.4,function(){animateCounter(document.getElementById("mv1"),12,1.5);});
+gsap.delayedCall(0.7,function(){animateCounter(document.getElementById("mv2"),10,1.4,"h");});
+gsap.delayedCall(1.0,function(){animateCounter(document.getElementById("mv3"),99,1.6,"%");});
+gsap.to("#mf1",{width:"80%",duration:2,ease:"power2.out",delay:0.5});
+gsap.to("#mf2",{width:"92%",duration:2.2,ease:"power2.out",delay:0.7});
+gsap.to("#mf3",{width:"99%",duration:2.4,ease:"power2.out",delay:1.0});
+function typeText(el,text,dur,cb){var i=0;var chars=text.split("");var iv=setInterval(function(){el.textContent+=chars[i++];if(i>=chars.length){clearInterval(iv);if(cb)cb();}},dur/chars.length*1000);}
+gsap.delayedCall(0.3,function(){
+  typeText(document.getElementById("c1"),"neuralink status --all",0.6,function(){
+    gsap.to("#o1",{opacity:1,duration:0.3});
+    gsap.delayedCall(0.4,function(){
+      gsap.set("#p2",{opacity:1}); gsap.set("#c2",{opacity:1});
+      typeText(document.getElementById("c2"),"fetch usage --live",0.5,function(){
+        gsap.to("#o2",{opacity:1,duration:0.3});
+        gsap.delayedCall(0.4,function(){
+          gsap.set("#p3",{opacity:1}); gsap.set("#c3",{opacity:1});
+          typeText(document.getElementById("c3"),"analyze --trend now",0.5,function(){
+            gsap.to("#o3",{opacity:1,duration:0.3});
+            gsap.delayedCall(0.3,function(){
+              gsap.set("#p4",{opacity:1});
+              gsap.to("#cur",{opacity:0,duration:0.5,repeat:-1,yoyo:true,ease:"steps(1)"});
+            });
+          });
+        });
+      });
+    });
+  });
+});
+var pts=[[0,110],[120,95],[240,82],[360,70],[480,55],[600,42],[720,30],[840,18],[960,8]];
+var p=0;
+gsap.to({},{duration:3,delay:0.5,ease:"power1.inOut",onUpdate:function(){
+  p=this.progress();
+  var idx=Math.floor(p*(pts.length-1));
+  var fr=(p*(pts.length-1))-idx;
+  var curr=idx<pts.length-1?[pts[idx][0]+fr*(pts[idx+1][0]-pts[idx][0]),pts[idx][1]+fr*(pts[idx+1][1]-pts[idx][1])]:pts[pts.length-1];
+  var ld="M "+pts[0][0]+","+pts[0][1];
+  var ad="M 0,120 L "+pts[0][0]+","+pts[0][1];
+  for(var i=1;i<=idx;i++){ld+=" L "+pts[i][0]+","+pts[i][1];ad+=" L "+pts[i][0]+","+pts[i][1];}
+  ld+=" L "+curr[0]+","+curr[1];
+  ad+=" L "+curr[0]+","+curr[1]+" L "+curr[0]+",120 Z";
+  document.getElementById("gl").setAttribute("d",ld);
+  document.getElementById("ga").setAttribute("d",ad);
+  document.getElementById("gd").setAttribute("cx",curr[0]);
+  document.getElementById("gd").setAttribute("cy",curr[1]);
+}});
+gsap.delayedCall(3.5,function(){
+  gsap.to("#gd",{attr:{r:8},opacity:0.4,duration:0.8,repeat:-1,yoyo:true,ease:"sine.inOut"});
+});
+gsap.from("#term",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.2});
+gsap.from(".mcards",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.4});
+gsap.from(".graphsec",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.6});
+gsap.from("#heroSvg",{scale:0.85,opacity:0,duration:1,ease:"back.out(1.4)",delay:0.1,transformOrigin:"center"});
+</script>
+</body>
+</html>"""
+
+
 def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
     n = len(scenes)
     scene_lines = "\n".join(
@@ -990,70 +1309,87 @@ def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
         f'"{s["visual_theme"]}" | data_point={s.get("data_point","—")} | "{s.get("line","")}"'
         for i, s in enumerate(scenes)
     )
-    return f"""Du bist Motion-Graphics-Direktor. Erzeuge {n} Szenen-DIVs + 1 Animations-Script für B-Roll (1080×{BROLL_H}px, bg #141218, accent {accent}).
+    ref = _BROLL_REFERENCE_HTML
+    return f"""Du bist Motion-Graphics-Direktor für hochwertige Social-Media B-Roll im Terminal/Monitor-Stil.
+Erzeuge {n} Szenen-DIVs + 1 Animations-Script (1080×{BROLL_H}px, accent {accent}).
 
 AUSGABE-FORMAT (exakt, kein Wrapper, kein Markdown):
   1. {n} × <div class="scene" id="sceneN"> ... </div>
-  2. Danach: EIN <script>-Block mit per-Szene-Animation
+  2. Danach: EIN <script>-Block mit allen Animationen
   KEIN <html>/<head>/<body>/<style>/<script src=...>
 
-CSS-Klassen (bereits definiert, nicht wiederholen):
-  .scene → position:absolute; inset:0; opacity:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:40px 60px
+CSS-Klassen (bereits definiert, NICHT wiederholen):
+  .scene → position:absolute; inset:0; opacity:0 (Sichtbarkeit via CSS-Animation — NICHT anfassen)
   .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1; text-align:center
   .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center; max-width:920px
 
 GSAP-Hilfsfunktionen (global verfügbar, NICHT neu definieren):
-  animateCounter(el, target, dur, suffix)  — countUp
+  animateCounter(el, target, dur, suffix)  — countUp-Zähler
   addAmbientPulse(el, scaleAmt, dur)       — endloser Glow-Pulse
 
 {n} SZENEN (start-Zeiten für gsap.delayedCall):
 {scene_lines}
 
-=== KERNPRINZIP: ZENTRUM + SCHWEBENDE GEDANKEN-ARTEFAKTE ===
-Jede Szene = als hätte sich der Gedanke, über den gerade gesprochen wird,
-aus dem Kopf gelöst und schwebt als 2D-Szene vor dir. Zwei Ebenen:
+=== FEW-SHOT REFERENZ-BEISPIEL ===
+Das folgende Beispiel zeigt das exakte visuelle Niveau, den Stil und die
+Animationsqualität, die deine Ausgabe erreichen MUSS. Es ist ein ANKER,
+kein Template. Du füllst KEINE Platzhalter aus — du baust eine KOMPLETT
+NEUE Szene passend zum aktuellen Thema, die dieselbe visuelle Qualität,
+Dichte und Ästhetik erreicht. Das Referenz-Beispiel ist für 1080×1920px —
+passe das Layout für den 1080×{BROLL_H}px-Viewport an (kompaktere Abstände,
+kleinere Hero-SVG ~180×180px, Terminal 3–4 Zeilen, 2–3 Metric Cards).
 
-EBENE A — ZENTRUM (1 Objekt, Anker der Szene):
-Ein konkretes Objekt/Symbol das die Aussage verkörpert (Gehirn bei Gehirn-Chip,
-Uhr bei "X Stunden", Spritze bei medizinisch, Graph-Kurve bei Trend etc.).
-Das Zentrum-Objekt MACHT EINE FLIESSENDE AKTION über die volle Szenendauer —
-pulsiert, füllt sich, dreht sich, zeichnet sich, ein Tropfen fällt.
-Niemals nur scale-in und dann Stillstand.
+{ref}
 
-EBENE B — SCHWEBENDE ARTEFAKTE (Pflicht, 4–6 pro Szene):
-Um das Zentrum herum schweben 4–6 kleine Begleit-Elemente als wären sie
-Teil desselben Gedankens:
-  - Kleine Zahlen/Werte/Prozent-Angaben (eigenständige Mini-Stats)
-  - Mini-Icons/Symbole die thematisch verwandt sind
-  - Feine Partikel/Punkte die langsam treiben
-  - Dünne gestrichelte SVG-Linien (stroke-dasharray, opacity 0.25–0.4)
-    vom Zentrum zu den Artefakten → stroke-dashoffset Loop
+ENDE REFERENZ. Baue jetzt eine NEUE Szene auf exakt diesem visuellen Niveau,
+passend zum Thema des aktuellen Requests. Erfinde ein eigenes Hero-Objekt,
+eigene Zahlen, eigene Terminal-Befehle, eigene Metriken — alles thematisch
+passend. Kopiere NICHT den Inhalt des Beispiels.
 
-Artefakte erscheinen GESTAFFELT (stagger 0.1–0.15s) und bewegen sich danach
-durchgehend: gsap.to(artefakte, {{y:"+=8", repeat:-1, yoyo:true, duration:1.8,
-stagger:{{each:0.2,from:"random"}}, ease:"sine.inOut", delay:0.6}})
+=== STIL-DIREKTIVEN (VERBINDLICH) ===
 
-ZIEL: Szene wirkt VOLL und LEBENDIG — nie ein isoliertes Element auf leerem
-Hintergrund. Artefakte sind leichte schwebende Mini-Elemente, kein Kasten-Layout.
+ÄSTHETIK: Terminal-/Monitor-Look.
+  - Jede Szene bekommt `style="background:#0a0910"` auf dem .scene-div
+  - Scanlines-Overlay: <div style="position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg,transparent,transparent 3px,
+    rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px);z-index:10;"></div>
+  - Ambient Radial Glows (2–3 absolute-positioned divs, blur, rgba purple/cyan)
+  - Header-Zeile oben: pill-badge links (Thema-Tag), LIVE-dot + Text rechts
+  - Monospace-Schrift: 'SF Mono','Fira Code','Consolas',monospace
+  - Data-Stream-Streifen rechts (scrollende Zahlen, opacity 0.25–0.35)
 
-=== VERBOTEN ===
-- Der gesprochene Satz als Fließtext im Bild
-- Bedeutungslose Deko-Labels ("CORTEX LINK", "DECISION AI", "NEURAL NET")
-- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach dem Einblenden
-- Mehr als 3–4 Wörter Text gesamt (nur Einheit zu einer Zahl, z.B. "Std. täglich")
+HERO-OBJEKT: Jede Szene hat EIN zentrales, themenspezifisches SVG-Hero-Objekt.
+  Beispiele: "Nvidia GPU" → Chip-Die mit Transistor-Grid, "Quantencomputing" →
+  Bloch-Sphäre/Qubit, "Robotics" → humanoider Kopf/Arm-Gelenk, "Biotech" →
+  DNA-Helix, "Finanzen" → Candle-Chart. Das Hero-Objekt rotiert, pulst oder
+  zeichnet sich kontinuierlich — niemals nur scale-in und Stillstand.
 
-=== FARBEN ===
-bg #141218. Zentrum in {accent} mit Glow (filter:drop-shadow(0 0 20px {accent}aa)).
-Artefakte in #e8e8e8/#c0c0c0, opacity 0.5–0.8 — Zentrum = Fokus, Artefakte = Atmosphäre.
-Verbindungslinien {accent} opacity 0.3. Falls Zahl: animateCounter() neben dem Zentrum.
+BIG-DATA-MOMENTE (wähle 2–3 pro Szene passend zum Thema):
+  - Große animierte Zahl: animateCounter() + Label (Einheit/Kontext)
+  - Terminal-Block: typing-Effekt, 3–4 Zeilen, themenspezifische CLI-Befehle
+  - Metric Cards (2–3): fill-bar, Wert, Delta-Indikator (▲/▼)
+  - Trend-Graph: SVG-Linie die sich live zeichnet
+
+FARBPALETTE (FIX — keine anderen Leitfarben):
+  Primär: Amethyst #8B5CF6, Silber #C0C0C0, Cyan #06B6D4
+  Akzente (sparsam): Grün #10B981, Amber #F59E0B
+  BG: #0a0910, Text: #e8e8e8/#555, Borders: rgba(139,92,246,0.18–0.3)
+  Hero-Glow: filter:drop-shadow(0 0 20px #8B5CF6) oder #06B6D4
 
 === ANIMATION-TIMING ===
 gsap.delayedCall(sceneStart, function(){{...}}) pro Szene im <script>-Block.
-Innerhalb: delay: für Staffelung, alle repeat:-1 ohne absoluten tl-Zeitpunkt.
-addAmbientPulse(el) für Glow-Pulse. animateCounter(el, ziel, dauer, suffix) für Zahlen.
+Innerhalb: delay: für Staffelung, repeat:-1 für Idle-Loops.
+animateCounter(el, ziel, dauer, suffix) für Zahlen (Hilfsfunktion global).
+addAmbientPulse(el) für Glow-Pulse (Hilfsfunktion global).
+Eigene typeText-Funktion für Terminal-Typing SELBST definieren (ist NICHT global).
+Ambient-Glows und Hero-Pulse starten SOFORT (kein delayedCall nötig).
 
-CHECK: 3 Frames bei start+0.5s / start+2s / start+3.5s MÜSSEN sich unterscheiden
-(Glow-Intensität, Artefakt-Y-Position, Linien-Dashoffset). Nur Counter = FEHLER.
+=== VERBOTEN ===
+- var tl = gsap.timeline() — NIEMALS eine Timeline erstellen (bricht Opacity-System)
+- Der gesprochene Satz als Fließtext
+- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach Einblenden
+- Andere Leitfarben als die definierten
+- Bedeutungslose Labels ohne Datenbezug
 
 Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
 

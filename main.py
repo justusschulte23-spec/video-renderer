@@ -503,18 +503,7 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
         "-vf", (
             f"scale={tw}:{th}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop={tw}:{th},"
-            # S-curve: crush blacks, lift mids, keep highlights clean
-            # Blue slightly up in shadows → cool/brand-matching darkness
-            # Red slightly up in mids → natural warm skin tones
-            "curves="
-                "r='0/0 0.12/0.08 0.5/0.54 0.88/0.93 1/1':"
-                "g='0/0 0.12/0.07 0.5/0.52 0.88/0.92 1/1':"
-                "b='0/0 0.12/0.11 0.5/0.52 0.88/0.92 1/1',"
-            # Shadow push: cool blues, mid warmth, highlight neutral
-            "colorbalance=rs=-0.06:gs=-0.04:bs=0.10:rm=0.04:gm=0.01:bm=-0.06:rh=0.02:gh=0.01:bh=-0.02,"
-            "unsharp=5:5:0.7:3:3:0,"
-            "eq=contrast=1.04:brightness=0.005:saturation=0.88,"
-            "vignette=angle=PI/4"
+            "unsharp=3:3:0.4:3:3:0"
         ),
         "-c:v", "libx264", "-crf", "16", "-preset", "medium",
         "-c:a", "copy",
@@ -1905,19 +1894,19 @@ async def render(req: RenderRequest):
 
         fadeout_start  = max(0.0, duration - 1.0)
         filter_complex = (
-            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,"
-            f"zoompan=z='min(zoom+0.0002,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x{BROLL_H}:fps={FPS},"
-            f"eq=brightness=0.08:contrast=1.1:saturation=1.05,"
-            f"setsar=1[broll];"
+            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];"
             "[1:v]setsar=1[div];"
-            "[2:v]setsar=1[face];"
+            f"[2:v]zoompan="
+                f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
+                f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
+                f"d=1:s={W}x{FACECAM_H}:fps={FPS},"
+            "setsar=1[face];"
             "[broll][div][face]vstack=inputs=3[stacked];"
             "[stacked][5:v]overlay=x=0:y=0[with_scan];"
             f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
             "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
             f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
-            f"[with_prog]zoompan=z='if(lte(on,5),1+0.15*(on/5),1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps={FPS},"
-            f"fade=t=out:st={fadeout_start:.3f}:d=1[final]"
+            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
         )
 
         cmd = [

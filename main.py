@@ -2412,8 +2412,12 @@ def debug_last_broll_scripts():
     html = p.read_text(encoding="utf-8")
     import re as _re
     scripts = _re.findall(r'<script[^>]*>.*?</script>', html, flags=_re.DOTALL | _re.IGNORECASE)
+    # Extract scene0 div to see what Sonnet generated
+    scene0_match = _re.search(r'(<div[^>]*id=["\']scene0["\'][^>]*>.*?)((?=<div[^>]*id=["\']scene1)|$)', html, flags=_re.DOTALL)
+    scene0_preview = scene0_match.group(1)[:4000] if scene0_match else "scene0 NOT FOUND"
     return {
         "total_html_chars": len(html),
         "script_count": len(scripts),
+        "scene0_preview": scene0_preview,
         "scripts": [s[:3000] for s in scripts],
     }

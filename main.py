@@ -1344,20 +1344,17 @@ def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
 Erzeuge {n} Szenen-DIVs + 1 Animations-Script (1080×{BROLL_H}px, accent {accent}).
 
 AUSGABE-FORMAT (exakt, kein Wrapper, kein Markdown):
-  1. {n} × <div class="scene" id="sceneN"> ... </div>
-  2. Danach: EIN <script>-Block mit allen Animationen
-  KEIN <html>/<head>/<body>/<style>/<script src=...>
+  NUR {n} × <div class="scene" id="sceneN"> ... </div>
+  KEIN <script>-Block, KEIN <html>/<head>/<body>/<style>/<script src=...>
+  Das System animiert deine Szenen vollautomatisch (siehe ANIMATION unten) —
+  du schreibst NUR die reichen, fertig-gestylten DIVs. Kein einziges <script>.
 
 CSS-Klassen (bereits definiert, NICHT wiederholen):
   .scene → position:absolute; inset:0; opacity:0 (Sichtbarkeit via CSS-Animation — NICHT anfassen)
   .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1; text-align:center
   .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center; max-width:920px
 
-GSAP-Hilfsfunktionen (global verfügbar, NICHT neu definieren):
-  animateCounter(el, target, dur, suffix)  — countUp-Zähler
-  addAmbientPulse(el, scaleAmt, dur)       — endloser Glow-Pulse
-
-{n} SZENEN (start-Zeiten für gsap.delayedCall):
+{n} SZENEN:
 {scene_lines}
 
 === FEW-SHOT REFERENZ-BEISPIEL ===
@@ -1375,6 +1372,11 @@ ENDE REFERENZ. Baue jetzt eine NEUE Szene auf exakt diesem visuellen Niveau,
 passend zum Thema des aktuellen Requests. Erfinde ein eigenes Hero-Objekt,
 eigene Zahlen, eigene Terminal-Befehle, eigene Metriken — alles thematisch
 passend. Kopiere NICHT den Inhalt des Beispiels.
+
+WICHTIG zur Referenz: Sie enthält <style> und <script> NUR zur Illustration des
+visuellen Niveaus. Du übernimmst NUR die visuelle Dichte/Struktur der DIVs —
+NIEMALS den <script>-Teil, NIEMALS <style>, NIEMALS gsap-Aufrufe. Zahlen bekommen
+den Endwert als Text + data-count (z.B. data-count="15284"), NIE "0".
 
 === STIL-DIREKTIVEN (VERBINDLICH) ===
 
@@ -1395,10 +1397,14 @@ HERO-OBJEKT: Jede Szene hat EIN zentrales, themenspezifisches SVG-Hero-Objekt.
   zeichnet sich kontinuierlich — niemals nur scale-in und Stillstand.
 
 BIG-DATA-MOMENTE (wähle 2–3 pro Szene passend zum Thema):
-  - Große animierte Zahl: animateCounter() + Label (Einheit/Kontext)
-  - Terminal-Block: typing-Effekt, 3–4 Zeilen, themenspezifische CLI-Befehle
-  - Metric Cards (2–3): fill-bar, Wert, Delta-Indikator (▲/▼)
-  - Trend-Graph: SVG-Linie die sich live zeichnet
+  - Große Zahl mit class="dp": Schreibe den ENDWERT als Text UND als data-count.
+    Bsp: <div class="dp" data-count="60">60 Mrd $</div>  oder  <div class="dp" data-count="99">99%</div>
+    NIEMALS "0" hineinschreiben — immer den fertigen Zielwert. Das System zählt ihn hoch.
+  - Terminal-Block: 3–4 Zeilen, themenspezifische CLI-Befehle (statisch ausformuliert)
+  - Metric Cards (2–3): Wert (auch mit data-count), Delta-Indikator (▲/▼), und eine
+    Fill-Bar als <div ... data-fill="80%" style="width:0"></div> (System füllt sie)
+  - Trend-Graph: <svg><path stroke="..." .../></svg> — JEDER gestrichelte Pfad
+    zeichnet sich automatisch selbst (kein Script nötig, einfach den Pfad zeichnen)
 
 FARBPALETTE (FIX — keine anderen Leitfarben):
   Primär: Amethyst #8B5CF6, Silber #C0C0C0, Cyan #06B6D4
@@ -1406,36 +1412,126 @@ FARBPALETTE (FIX — keine anderen Leitfarben):
   BG: #0a0910, Text: #e8e8e8/#555, Borders: rgba(139,92,246,0.18–0.3)
   Hero-Glow: filter:drop-shadow(0 0 20px #8B5CF6) oder #06B6D4
 
-=== ANIMATION-TIMING ===
-gsap.delayedCall(sceneStart, function(){{...}}) pro Szene im <script>-Block.
-Innerhalb: delay: für Staffelung, repeat:-1 für Idle-Loops.
-animateCounter(el, ziel, dauer, suffix) für Zahlen (Hilfsfunktion global).
-addAmbientPulse(el) für Glow-Pulse (Hilfsfunktion global).
-Eigene typeText-Funktion für Terminal-Typing SELBST definieren (ist NICHT global).
-Ambient-Glows und Hero-Pulse starten SOFORT (kein delayedCall nötig).
-
-=== SVG SICHERHEITSREGEL (PFLICHT) ===
-Bevor du path.getTotalLength(), strokeDashoffset oder andere SVG-Pfad-Methoden
-aufrufst, MUSS das Element per Guard geprüft werden:
-
-  var path = document.getElementById("myPath");
-  if (path) {{
-    var len = path.getTotalLength();
-    gsap.fromTo(path, {{strokeDashoffset: len}}, {{strokeDashoffset: 0, duration: 2}});
-  }}
-
-NIEMALS ohne null-Check: path.getTotalLength() auf einem Ergebnis von getElementById/querySelector.
-Ein einziger null-Fehler bricht ALLE nachfolgenden Animationen im selben Callback ab —
-inklusive aller animateCounter()-Aufrufe. Jede SVG-Referenz MUSS if(el){{...}} haben.
+=== ANIMATION (vollautomatisch — du schreibst KEIN Script) ===
+Das System animiert jede Szene GENAU wenn sie eingeblendet wird, an Ort und Stelle:
+  - jede Zahl (class="dp"/.big-num/.stat/.mval oder data-count) zählt von 0 hoch
+  - jede Fill-Bar (data-fill) wächst auf ihre Breite
+  - jeder gestrichelte SVG-<path> zeichnet sich selbst
+  - Ring-Kreise (circle fill="none") und data-spin rotieren langsam
+  - das Hero-SVG pulsiert sanft (Idle-Bewegung, nie Stillstand)
+  - Radial-Gradient-Glows pulsieren als Ambient
+Deine EINZIGE Aufgabe für Animation: die Zahlen/Bars korrekt taggen (data-count/data-fill)
+und gestrichelte Graph-Pfade als <path stroke=...> zeichnen. Sonst NICHTS — kein <script>,
+kein gsap, kein animateCounter-Aufruf. Das macht alles das System deterministisch.
 
 === VERBOTEN ===
-- var tl = gsap.timeline() — NIEMALS eine Timeline erstellen (bricht Opacity-System)
+- JEGLICHER <script>-Block oder gsap/animateCounter-Aufruf (System macht Animation)
+- "0" als Counter-Text — immer den Endwert + data-count
 - Der gesprochene Satz als Fließtext
-- Hartes Pop-in dann Stillstand — IMMER Idle-Bewegung nach Einblenden
 - Andere Leitfarben als die definierten
 - Bedeutungslose Labels ohne Datenbezug
 
-Gib NUR die {n} divs + abschließenden <script>-Block zurück. Kein Markdown."""
+Gib NUR die {n} <div class="scene" id="sceneN">…</div> Blöcke zurück. KEIN <script>, kein Markdown."""
+
+
+def _broll_anim_bootstrap(scenes: list) -> str:
+    """Deterministic, Python-generated animation driver — CANNOT be truncated.
+
+    Sonnet only has to produce richly-designed DIVs and TAG the animated bits
+    (numbers get data-count, bars get data-fill). This bootstrap then animates
+    each element IN PLACE, exactly when its scene fades in, so the motion is
+    contextual (the number Sonnet placed counts up where it sits — not a bare
+    centred 0). Runs entirely in Python-emitted JS, so it can never be cut off
+    by Sonnet's token limit. Per scene, at its start time:
+      - numbers ([data-count] / .dp .big-num .stat .mval .num) -> count 0->value in place
+      - bars ([data-fill] / .mfill .bar .fill)                 -> grow to target width
+      - stroked SVG <path> (len>40)                            -> draw themselves
+      - ring <circle> (fill=none) & [data-spin]                -> slow continuous spin
+      - hero <svg>                                             -> gentle idle scale-pulse
+      - radial-gradient glow divs                              -> ambient pulse
+    animateCounter is idempotent (data-counting guard) so nothing double-runs.
+    """
+    sc = ",".join(
+        f'{{s:{s["start"]:.3f},d:{max(s["end"]-s["start"],0.5):.3f}}}'
+        for s in scenes
+    )
+    return f"""<script>
+;(function(){{
+  if(!window.gsap) return;
+  var SC=[{sc}];
+  function parseNum(raw){{
+    if(raw==null) return null;
+    raw=""+raw;
+    var m=raw.match(/-?\\d[\\d.,]*/);
+    if(!m) return null;
+    var ns=m[0];
+    var val=parseFloat(ns.replace(/\\./g,"").replace(/,/g,"."));
+    if(isNaN(val)) return null;
+    var suffix=raw.substring(raw.indexOf(ns)+ns.length); // keep original spacing/unit
+    return {{val:val, suffix:suffix}};
+  }}
+  function animNumber(el,dur){{
+    var disp=el.textContent||"";
+    var pv=parseNum(el.getAttribute("data-count"));
+    var pt=parseNum(disp);
+    var val=pv?pv.val:(pt?pt.val:null);
+    if(val==null) return;
+    var suffix=pt?pt.suffix:(pv?pv.suffix:"");
+    animateCounter(el, val, dur, suffix);
+  }}
+  SC.forEach(function(o,i){{
+    gsap.delayedCall(o.s, function(){{
+      var sc=document.getElementById("scene"+i);
+      if(!sc) return;
+      var cdur=Math.min(o.d*0.7,2.2);
+      // 1) counters — animate Sonnet's number elements in place
+      sc.querySelectorAll("[data-count],.dp,.big-num,.bignum,.stat,.mval,.num,.counter").forEach(function(el){{
+        animNumber(el,cdur);
+      }});
+      // 2) fill / progress bars -> grow to target width
+      sc.querySelectorAll("[data-fill],.mfill,.bar,.fill").forEach(function(b){{
+        if(b.getAttribute("data-filled")) return;
+        b.setAttribute("data-filled","1");
+        var w=b.getAttribute("data-fill")||b.getAttribute("data-width")||"80%";
+        gsap.fromTo(b,{{width:"0%"}},{{width:w,duration:Math.min(o.d*0.6,2.0),ease:"power2.out",delay:0.2}});
+      }});
+      // 3) self-drawing stroked paths (graphs, line icons)
+      var di=0;
+      sc.querySelectorAll("svg path").forEach(function(pth){{
+        if(pth.getAttribute("data-drawn")) return;
+        try{{
+          var L=pth.getTotalLength();
+          if(!L || L<40) return;
+          var stroke=pth.getAttribute("stroke")||getComputedStyle(pth).stroke;
+          if(!stroke || stroke==="none" || stroke==="rgba(0, 0, 0, 0)") return;
+          pth.setAttribute("data-drawn","1");
+          gsap.set(pth,{{strokeDasharray:L,strokeDashoffset:L}});
+          gsap.to(pth,{{strokeDashoffset:0,duration:Math.min(o.d*0.6,2.0),delay:di*0.08,ease:"power2.out"}});
+          di++;
+        }}catch(e){{}}
+      }});
+      // 4) ring outlines + [data-spin] -> slow continuous rotation (idle life)
+      sc.querySelectorAll('svg circle[fill="none"],[data-spin]').forEach(function(r,idx){{
+        if(r.getAttribute("data-spinning")) return;
+        r.setAttribute("data-spinning","1");
+        gsap.to(r,{{rotation:(idx%2?-360:360),duration:14+idx*4,repeat:-1,ease:"none",transformOrigin:"50% 50%",svgOrigin:"90 90"}});
+      }});
+      // 5) hero svg -> gentle idle scale-pulse so nothing is frozen after entry
+      var hero=sc.querySelector("svg");
+      if(hero && !hero.getAttribute("data-pulsed")){{
+        hero.setAttribute("data-pulsed","1");
+        gsap.to(hero,{{scale:1.04,duration:1.8,repeat:-1,yoyo:true,ease:"sine.inOut",transformOrigin:"center"}});
+      }}
+      // 6) radial-gradient glow divs -> ambient pulse
+      sc.querySelectorAll('div[style*="radial-gradient"]').forEach(function(g,idx){{
+        if(g.getAttribute("data-glowed")) return;
+        g.setAttribute("data-glowed","1");
+        gsap.to(g,{{scale:1.18,opacity:0.6,duration:2.4+idx*0.3,repeat:-1,yoyo:true,ease:"sine.inOut"}});
+      }});
+    }});
+  }});
+}})();
+</script>"""
 
 
 def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
@@ -1445,6 +1541,8 @@ def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
     This avoids all variable-collision issues where Sonnet's 'var tl' could
     interfere with a Python-generated GSAP timeline.
     GSAP is still available for Sonnet's inner-element animations.
+    A Python-generated bootstrap (_broll_anim_bootstrap) guarantees that every
+    counter/graph animates even when Sonnet's own <script> is missing/truncated.
     """
     # Per-scene CSS: fade in at scene["start"], hold, fade out at scene["end"]
     scene_css_lines = []
@@ -1455,6 +1553,7 @@ def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
         )
     scene_css = "\n".join(scene_css_lines)
     safe_divs = _safe_wrap_scripts(scene_divs)
+    anim_bootstrap = _broll_anim_bootstrap(scenes)
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -1477,7 +1576,7 @@ svg{{overflow:visible}}
 <body>
 <script src="gsap.min.js"></script>
 <script>
-function animateCounter(el,target,dur,suffix){{if(!el)return;var o={{v:0}};gsap.to(o,{{v:target,duration:dur||2,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
+function animateCounter(el,target,dur,suffix){{if(!el)return;if(el.getAttribute("data-counting"))return;el.setAttribute("data-counting","1");var o={{v:0}};gsap.to(o,{{v:target,duration:dur||2,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
 function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opacity:0.6,duration:d||1.2,repeat:-1,yoyo:true,ease:"sine.inOut"}});}}
 </script>
 <script>
@@ -1496,6 +1595,7 @@ function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opaci
 }})();
 </script>
 {safe_divs}
+{anim_bootstrap}
 </body></html>"""
 
 
@@ -1645,25 +1745,12 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         log.info("[BROLL_SYNC] scene divs (%d chars) has_anim_script=%s tail=%s",
                  len(html_raw), has_script,
                  repr(html_raw[-200:].replace('\n', ' ')))
+        # NOTE: animations are now driven deterministically by the Python bootstrap
+        # in _build_broll_html (_broll_anim_bootstrap). No 2nd Sonnet call needed —
+        # counters/graphs animate from the divs' data-count tags regardless of
+        # whether Sonnet's own <script> survived the token limit.
 
-        # If Sonnet's animation <script> is missing/truncated (the common 8-scene
-        # token-limit case), generate it in a focused second call. Without this the
-        # counters/graphs stay frozen at 0 because no GSAP tween ever runs.
-        if not has_script:
-            log.warning("[BROLL_SYNC] animation script missing — generating it in a 2nd call")
-            try:
-                anim = await loop.run_in_executor(
-                    _html_executor,
-                    lambda: _gen_animation_script(html_raw, scenes, req.brand_color_primary))
-                if _has_complete_animation_script(anim):
-                    html_raw = html_raw.rstrip() + "\n" + anim
-                    log.info("[BROLL_SYNC] 2nd-call animation script added (%d chars)", len(anim))
-                else:
-                    log.error("[BROLL_SYNC] 2nd-call script still invalid — counters may stay 0")
-            except Exception as exc:
-                log.error("[BROLL_SYNC] 2nd-call animation script failed: %s", exc)
-
-        # Wrap Sonnet's divs with Python-generated GSAP timeline
+        # Wrap Sonnet's divs with Python-generated GSAP timeline + animation bootstrap
         full_html_raw  = _build_broll_html(html_raw, scenes, req.brand_color_primary)
         full_html_path = job_dir / "broll_full.html"
         _injected_html = _inject_gsap_inline(full_html_raw)

@@ -28,7 +28,7 @@ class _M:  # namespace holder so test code reads like main.<fn>
     pass
 main = _M()
 _ns = {"re": __import__("re"), "Path": Path, "BROLL_H": BROLL_H, "GSAP_LOCAL": GSAP_DST}
-_wanted = {"_inject_gsap_inline", "_safe_wrap_scripts", "_build_broll_html"}
+_wanted = {"_inject_gsap_inline", "_safe_wrap_scripts", "_build_broll_html", "_broll_anim_bootstrap"}
 for _node in ast.walk(_tree):
     if isinstance(_node, ast.FunctionDef) and _node.name in _wanted:
         exec("".join(_lines[_node.lineno - 1:_node.end_lineno]), _ns)
@@ -48,8 +48,12 @@ SCENE_DIVS = """
     <circle id="ring1" cx="90" cy="90" r="60" fill="none" stroke="#8B5CF6" stroke-width="3" stroke-dasharray="6 10"/>
     <circle id="ring2" cx="90" cy="90" r="40" fill="none" stroke="#06B6D4" stroke-width="2" stroke-dasharray="3 8"/>
   </svg>
-  <div class="dp" id="counter0">0</div>
+  <div class="dp" id="counter0" data-count="60">60 Mrd $</div>
   <div class="lbl">Milliarden USD Deal-Volumen</div>
+  <div class="mval" id="pct" data-count="99">99%</div>
+  <div class="mbar" style="height:4px;background:rgba(255,255,255,0.06);width:200px;border-radius:2px;overflow:hidden;">
+    <div class="mfill" id="bar0" data-fill="92%" style="height:100%;width:0;background:linear-gradient(90deg,#8B5CF6,#06B6D4);"></div>
+  </div>
   <svg id="graphSvg" viewBox="0 0 400 120" width="400" height="120">
     <path id="gl" d="M 0,110 L 60,90 L 120,82 L 180,60 L 240,48 L 300,30 L 360,18 L 400,8"
           fill="none" stroke="#06B6D4" stroke-width="3" stroke-linecap="round"/>
@@ -118,11 +122,15 @@ async def evaluate(name: str, scene_divs: str, with_script: bool, ext_script: st
                 var gl = document.getElementById('gl');
                 var r1 = document.getElementById('ring1');
                 var g1 = document.getElementById('g1');
+                var bar = document.getElementById('bar0');
+                var pct = document.getElementById('pct');
                 return {
                     counter: c ? c.textContent : 'NONE',
+                    pct: pct ? pct.textContent : 'NONE',
                     dashoffset: gl ? getComputedStyle(gl).strokeDashoffset : 'NONE',
                     ringTransform: r1 ? getComputedStyle(r1).transform : 'NONE',
-                    glowTransform: g1 ? getComputedStyle(g1).transform : 'NONE'
+                    glowTransform: g1 ? getComputedStyle(g1).transform : 'NONE',
+                    barWidth: bar ? getComputedStyle(bar).width : 'NONE'
                 };
             }""")
 
@@ -145,11 +153,16 @@ async def evaluate(name: str, scene_divs: str, with_script: bool, ext_script: st
     b = do03 > do25 and do25 <= 5                      # graph draws (dashoffset → 0)
     c = (s03["ringTransform"] != s25["ringTransform"]) or (s03["glowTransform"] != s25["glowTransform"])
     d = not any("TypeError" in l or "null" in l or "PAGEERROR" in l for l in console)
+    bw03, bw25 = num(s03["barWidth"]), num(s25["barWidth"])
+    e = bw25 > bw03 and bw25 > 0                        # fill bar grows
+    suffix_ok = ("Mrd" in (s25["counter"] or "")) and ("%" in (s25["pct"] or ""))  # units preserved
 
     print(f"\n{'='*64}\nSCENARIO {name}  (with_script={with_script})\n{'='*64}")
     print(f"  tweens registered : {tweens}")
     print(f"  counter   t0.3={s03['counter']!r}  t1.5={s15['counter']!r}  t2.5={s25['counter']!r}")
+    print(f"  pct       t0.3={s03['pct']!r}  t2.5={s25['pct']!r}")
     print(f"  dashoffset t0.3={s03['dashoffset']!r}  t2.5={s25['dashoffset']!r}")
+    print(f"  barWidth   t0.3={s03['barWidth']!r}  t2.5={s25['barWidth']!r}")
     print(f"  ringXform changed : {s03['ringTransform'] != s25['ringTransform']}")
     print(f"  glowXform changed : {s03['glowTransform'] != s25['glowTransform']}")
     print(f"  console ({len(console)}):")
@@ -158,25 +171,21 @@ async def evaluate(name: str, scene_divs: str, with_script: bool, ext_script: st
     print(f"\n  [a] counter counts up      : {'PASS' if a else 'FAIL'}")
     print(f"  [b] graph draws itself     : {'PASS' if b else 'FAIL'}")
     print(f"  [c] artifacts move         : {'PASS' if c else 'FAIL'}")
+    print(f"  [e] fill bar grows         : {'PASS' if e else 'FAIL'}")
+    print(f"  [f] units preserved (Mrd/%): {'PASS' if suffix_ok else 'FAIL'}")
     print(f"  [d] no TypeError/null      : {'PASS' if d else 'FAIL'}")
-    allpass = a and b and c and d
+    allpass = a and b and c and d and e and suffix_ok
     print(f"\n  ==> {'ALL PASS' if allpass else 'FAIL'}")
     return allpass
 
 
 async def main_run():
-    if "--no-script" in sys.argv:
-        await evaluate("truncated", SCENE_DIVS, with_script=False)
-    elif "--from-json" in sys.argv:
-        import json
-        idx = sys.argv.index("--from-json")
-        path = sys.argv[idx + 1]
-        d = json.load(open(path, encoding="utf-8"))
-        script = d["script"]
-        print(f"[from-json] using real Sonnet 2nd-call script ({len(script)} chars)")
-        await evaluate("real2ndcall", SCENE_DIVS, with_script=False, ext_script=script)
+    # Default = production reality: Sonnet emits ONLY divs (no script),
+    # the Python bootstrap must animate everything deterministically.
+    if "--with-script" in sys.argv:
+        await evaluate("divs+sonnetscript", SCENE_DIVS, with_script=True)
     else:
-        await evaluate("full", SCENE_DIVS, with_script=True)
+        await evaluate("divs-only-bootstrap", SCENE_DIVS, with_script=False)
 
 
 if __name__ == "__main__":

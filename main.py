@@ -2487,3 +2487,31 @@ def debug_last_broll_scripts():
         "scene0_preview": scene0_preview,
         "scripts": [s[:3000] for s in scripts],
     }
+
+
+@app.get("/debug/gen-anim-script")
+def debug_gen_anim_script():
+    """Isolated proof of the 2nd-call fix: run _gen_animation_script on a fixed
+    representative scene (counter + self-drawing SVG graph + hero rings) and return
+    the real Sonnet-generated <script>. Lets us verify the fix without the full pipeline."""
+    divs = (
+        '<div class="scene" id="scene0" style="background:#0a0910;">'
+        '<svg id="heroSvg" viewBox="0 0 180 180" width="180" height="180">'
+        '<circle id="ring1" cx="90" cy="90" r="60" fill="none" stroke="#8B5CF6" stroke-width="3"/>'
+        '<circle id="ring2" cx="90" cy="90" r="40" fill="none" stroke="#06B6D4" stroke-width="2"/></svg>'
+        '<div class="dp" id="counter0">0</div>'
+        '<div class="lbl">Milliarden USD Deal-Volumen</div>'
+        '<svg id="graphSvg" viewBox="0 0 400 120" width="400" height="120">'
+        '<path id="gl" d="M 0,110 L 120,82 L 240,48 L 360,18 L 400,8" fill="none" '
+        'stroke="#06B6D4" stroke-width="3"/></svg></div>'
+    )
+    scenes = [{"start": 0.0, "end": 6.0}]
+    try:
+        script = _gen_animation_script(divs, scenes, "#8B5CF6")
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {
+        "complete": _has_complete_animation_script(script),
+        "script_chars": len(script),
+        "script": script[:6000],
+    }

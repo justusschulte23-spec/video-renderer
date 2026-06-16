@@ -1415,6 +1415,7 @@ def _build_broll_html(scene_divs: str, scenes: list, accent: str) -> str:
             f"  #scene{i}{{animation:_broll_scene {dur:.3f}s {s['start']:.3f}s both;}}"
         )
     scene_css = "\n".join(scene_css_lines)
+    safe_divs = _safe_wrap_scripts(scene_divs)
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -1437,17 +1438,32 @@ svg{{overflow:visible}}
 <body>
 <script src="gsap.min.js"></script>
 <script>
-function animateCounter(el,target,dur,suffix){{var o={{v:0}};gsap.to(o,{{v:target,duration:dur,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
+function animateCounter(el,target,dur,suffix){{if(!el)return;var o={{v:0}};gsap.to(o,{{v:target,duration:dur||2,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
 function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opacity:0.6,duration:d||1.2,repeat:-1,yoyo:true,ease:"sine.inOut"}});}}
 </script>
-{scene_divs}
+{safe_divs}
 </body></html>"""
 
 
+def _count_broll_scenes(html: str, n_scenes: int) -> int:
+    return sum(1 for i in range(n_scenes)
+               if f'id="scene{i}"' in html or f"id='scene{i}'" in html)
+
+
 def _validate_broll_html(html: str, n_scenes: int) -> bool:
-    """Returns True if HTML has the last scene ID (single or double quotes)."""
-    last_n = n_scenes - 1
-    return f'id="scene{last_n}"' in html or f"id='scene{last_n}'" in html
+    return _count_broll_scenes(html, n_scenes) >= n_scenes
+
+
+def _safe_wrap_scripts(scene_divs: str) -> str:
+    """Wrap Sonnet's <script> blocks in try-catch so one JS error doesn't kill all animations."""
+    def _wrap(m):
+        attrs = m.group(1); content = m.group(2)
+        if 'src=' in attrs.lower() or 'try{' in content or 'try {' in content:
+            return m.group(0)
+        return (f'<script{attrs}>\ntry{{\n{content}\n}}'
+                f'catch(e){{console.error("[BROLL-JS]",e.message,e);}}\n</script>')
+    return re.sub(r'<script([^>]*)>(.*?)</script>', _wrap, scene_divs,
+                  flags=re.DOTALL | re.IGNORECASE)
 
 
 
@@ -1501,7 +1517,7 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         def _gen_full_html():
             return call_openrouter(system_prompt, user_msg,
                                    model="anthropic/claude-sonnet-4.6",
-                                   max_tokens=11500)
+                                   max_tokens=32000)
 
         loop     = asyncio.get_event_loop()
         html_raw = None
@@ -1510,11 +1526,18 @@ async def generate_broll_synced(req: BrollSyncedRequest):
                 html_raw = _strip_fences(str(
                     await loop.run_in_executor(_html_executor, _gen_full_html)
                 ))
-                if not _validate_broll_html(html_raw, n_scenes):
-                    log.warning("[BROLL_SYNC] validation warn on attempt %d (using anyway)", attempt)
+                found = _count_broll_scenes(html_raw, n_scenes)
+                if found >= n_scenes:
+                    log.info("[BROLL_SYNC] HTML valid on attempt %d (%d/%d scenes)", attempt, found, n_scenes)
+                    break
+                elif attempt < 3:
+                    log.warning("[BROLL_SYNC] only %d/%d scenes on attempt %d — retrying", found, n_scenes, attempt)
+                    html_raw = None
+                    await asyncio.sleep(2)
+                    continue
                 else:
-                    log.info("[BROLL_SYNC] HTML valid on attempt %d", attempt)
-                break  # use whatever came back — only retry on exception
+                    log.warning("[BROLL_SYNC] only %d/%d scenes on final attempt — using partial", found, n_scenes)
+                    break
             except Exception as exc:
                 log.warning("[BROLL_SYNC] attempt %d call failed: %s", attempt, exc)
                 html_raw = None

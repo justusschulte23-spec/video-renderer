@@ -1594,8 +1594,10 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         if not html_raw:
             raise HTTPException(status_code=500, detail="Broll HTML generation failed after 3 attempts")
 
-        log.info("[BROLL_SYNC] scene divs (%d chars): %s", len(html_raw),
-                 html_raw[:300].replace('\n', ' '))
+        has_script = "<script" in html_raw.lower()
+        log.info("[BROLL_SYNC] scene divs (%d chars) has_script=%s tail=%s",
+                 len(html_raw), has_script,
+                 repr(html_raw[-200:].replace('\n', ' ')))
 
         # Wrap Sonnet's divs with Python-generated GSAP timeline
         full_html_raw  = _build_broll_html(html_raw, scenes, req.brand_color_primary)

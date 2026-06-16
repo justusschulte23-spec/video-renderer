@@ -946,7 +946,7 @@ Return ONLY raw HTML. No markdown. No explanation."""
 
 
 def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
-    n_scenes = max(8, min(15, int(duration / 4)))
+    n_scenes = max(7, min(9, int(duration / 6)))
     system_prompt = (
         "You are a video editor. Segment a transcript into visual scenes for B-Roll sync.\n"
         f"Total duration: {duration:.1f}s. Create exactly {n_scenes} scenes covering 0s to {duration:.1f}s.\n"
@@ -1527,17 +1527,11 @@ async def generate_broll_synced(req: BrollSyncedRequest):
                     await loop.run_in_executor(_html_executor, _gen_full_html)
                 ))
                 found = _count_broll_scenes(html_raw, n_scenes)
-                if found >= n_scenes:
-                    log.info("[BROLL_SYNC] HTML valid on attempt %d (%d/%d scenes)", attempt, found, n_scenes)
-                    break
-                elif attempt < 3:
-                    log.warning("[BROLL_SYNC] only %d/%d scenes on attempt %d — retrying", found, n_scenes, attempt)
-                    html_raw = None
-                    await asyncio.sleep(2)
-                    continue
+                if found < n_scenes:
+                    log.warning("[BROLL_SYNC] %d/%d scenes — using partial HTML (no retry)", found, n_scenes)
                 else:
-                    log.warning("[BROLL_SYNC] only %d/%d scenes on final attempt — using partial", found, n_scenes)
-                    break
+                    log.info("[BROLL_SYNC] HTML valid (%d/%d scenes)", found, n_scenes)
+                break  # accept whatever came back; only retry on exception below
             except Exception as exc:
                 log.warning("[BROLL_SYNC] attempt %d call failed: %s", attempt, exc)
                 html_raw = None

@@ -344,12 +344,33 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             except Exception as exc:
                 log.warning("[RENDER] Page load warning (continuing): %s", exc)
 
-            # Log DOM state for debugging; CSS animations run automatically (no GSAP seek needed)
+            # Ensure GSAP is loaded before doing anything
+            try:
+                await page.wait_for_function("() => !!window.gsap", timeout=3000)
+            except Exception as exc:
+                log.warning("[RENDER] GSAP wait_for_function: %s", exc)
+
+            # Reset GSAP to t=0 so all delayedCall animations sync with recording start
+            try:
+                await page.evaluate("""() => {
+                    if (window.gsap) {
+                        gsap.globalTimeline.pause();
+                        gsap.globalTimeline.seek(0);
+                        gsap.globalTimeline.play();
+                    }
+                }""")
+                log.info("[RENDER] GSAP globalTimeline reset to t=0 and playing")
+            except Exception as exc:
+                log.warning("[RENDER] GSAP reset failed: %s", exc)
+
+            # Enhanced DOM check — includes tween count to verify animations registered
             try:
                 debug = await page.evaluate("""() => ({
                     gsap: !!window.gsap,
                     scenes: document.querySelectorAll('.scene').length,
-                    s0opacity: (document.getElementById('scene0') || {}).style?.opacity || 'css'
+                    s0opacity: (document.getElementById('scene0') || {}).style?.opacity || 'css',
+                    gsapTime: window.gsap ? gsap.globalTimeline.time().toFixed(3) : 'n/a',
+                    tweens: window.gsap ? gsap.globalTimeline.getChildren(true,true,true).length : 0
                 })""")
                 log.info("[RENDER] DOM check: %s", debug)
             except Exception as exc:
@@ -1441,6 +1462,21 @@ svg{{overflow:visible}}
 <script>
 function animateCounter(el,target,dur,suffix){{if(!el)return;var o={{v:0}};gsap.to(o,{{v:target,duration:dur||2,ease:"power2.out",onUpdate:function(){{el.textContent=Math.round(o.v)+(suffix||"");}}}});}}
 function addAmbientPulse(el,s,d){{if(!el)return;gsap.to(el,{{scale:s||1.15,opacity:0.6,duration:d||1.2,repeat:-1,yoyo:true,ease:"sine.inOut"}});}}
+</script>
+<script>
+/* Patch gsap.delayedCall: auto-wrap every callback in try-catch.
+   Prevents a single null-SVG-path or undefined-var error from silently
+   killing animateCounter() and other animations that come after it. */
+;(function(){{
+  if(!window.gsap)return;
+  var _dc=gsap.delayedCall.bind(gsap);
+  gsap.delayedCall=function(t,fn,params,scope){{
+    return _dc(t,function(){{
+      try{{fn.apply(scope||this,params||[]);}}
+      catch(e){{console.error('[BROLL-DC]',e.message,e.stack||'');}}
+    }},undefined,scope);
+  }};
+}})();
 </script>
 {safe_divs}
 </body></html>"""

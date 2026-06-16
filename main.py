@@ -2402,3 +2402,18 @@ async def generate_infosheet(req: InfosheetRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/debug/last-broll-scripts")
+def debug_last_broll_scripts():
+    """Return only the <script> blocks from the last broll HTML — for diagnosing JS errors."""
+    p = Path("/tmp/last_broll.html")
+    if not p.exists():
+        return {"error": "No broll HTML saved yet — trigger a /generate-broll-synced run first"}
+    html = p.read_text(encoding="utf-8")
+    import re as _re
+    scripts = _re.findall(r'<script[^>]*>.*?</script>', html, flags=_re.DOTALL | _re.IGNORECASE)
+    return {
+        "total_html_chars": len(html),
+        "script_count": len(scripts),
+        "scripts": [s[:3000] for s in scripts],
+    }

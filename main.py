@@ -246,6 +246,22 @@ class DetectImpactsRequest(BaseModel):
     facecam: str
 
 
+class KeyFact(BaseModel):
+    value: str
+    label: str
+
+
+class InfosheetRequest(BaseModel):
+    topic_tag:          str
+    headline:           str
+    subhook:            str
+    key_facts:          list[KeyFact]
+    was_passiert:       list[str]
+    was_bringt_mir:     list[str]
+    justus_take:        str
+    konkreter_schritt:  str
+
+
 # ── OpenRouter helper ─────────────────────────────────────────────────────────
 def call_openrouter(system_prompt: str, user_message: str,
                     model: str = "anthropic/claude-haiku-4.5",
@@ -1965,6 +1981,326 @@ async def render(req: RenderRequest):
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
         log.info("Cleaned up %s", job_dir)
+
+
+# ── Infosheet: HTML template ──────────────────────────────────────────────────
+def _build_infosheet_html(req: InfosheetRequest) -> str:
+    import html as _html
+
+    def esc(s: str) -> str:
+        return _html.escape(str(s))
+
+    facts_html = "".join(
+        f'<div class="fact-card">'
+        f'<div class="fact-val">{esc(f.value)}</div>'
+        f'<div class="fact-lbl">{esc(f.label)}</div>'
+        f'</div>'
+        for f in req.key_facts
+    )
+    was_passiert_html = "\n".join(
+        f'<div class="bullet"><span class="bpre">›</span><span>{esc(b)}</span></div>'
+        for b in req.was_passiert
+    )
+    was_bringt_html = "\n".join(
+        f'<div class="bullet"><span class="bpre bpre-cyan">◆</span><span>{esc(b)}</span></div>'
+        for b in req.was_bringt_mir
+    )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+@page {{ size:1080px 1920px; margin:0; }}
+
+.page {{
+  width:1080px; height:1920px;
+  background:#0a0910;
+  color:#e8e8e8;
+  font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;
+  position:relative; overflow:hidden;
+  -webkit-print-color-adjust:exact; print-color-adjust:exact;
+}}
+.page::after {{
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:1;
+  background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.04) 3px,rgba(0,0,0,0.04) 4px);
+}}
+.gl1,.gl2 {{ position:absolute; border-radius:50%; pointer-events:none; }}
+.gl1 {{ width:800px; height:800px; top:-200px; left:-200px;
+  background:radial-gradient(circle,rgba(139,92,246,0.12) 0%,transparent 70%); filter:blur(40px); }}
+.gl2 {{ width:600px; height:600px; bottom:50px; right:-150px;
+  background:radial-gradient(circle,rgba(6,182,212,0.08) 0%,transparent 70%); filter:blur(30px); }}
+
+.content {{
+  position:relative; z-index:2;
+  padding:72px 84px;
+}}
+
+/* HEADER */
+.header {{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:44px;
+}}
+.handle {{ font-size:22px; font-weight:700; color:#e8e8e8; letter-spacing:-0.01em; }}
+.handle em {{ color:#8B5CF6; font-style:normal; }}
+.topic-tag {{
+  display:flex; align-items:center; gap:8px;
+  background:rgba(139,92,246,0.1); border:1px solid rgba(139,92,246,0.3);
+  border-radius:20px; padding:8px 18px;
+  font-size:12px; font-weight:700; color:#8B5CF6;
+  letter-spacing:0.1em; text-transform:uppercase; font-family:'SF Mono','Fira Code',monospace;
+}}
+.tdot {{ width:6px; height:6px; background:#8B5CF6; transform:rotate(45deg); flex-shrink:0; }}
+
+/* HEADLINE */
+.headline {{
+  font-size:76px; font-weight:900; line-height:1.1;
+  color:#fff; letter-spacing:-0.03em; margin-bottom:18px;
+}}
+.subhook {{
+  font-size:26px; font-weight:400; color:#666; line-height:1.5; margin-bottom:44px;
+}}
+
+/* DIVIDER */
+.hdivider {{
+  height:1px; margin-bottom:36px;
+  background:linear-gradient(90deg,transparent,rgba(139,92,246,0.5),rgba(6,182,212,0.3),transparent);
+}}
+
+/* KEY FACTS */
+.facts-label {{
+  font-size:11px; font-weight:700; color:#8B5CF6;
+  letter-spacing:0.18em; text-transform:uppercase; margin-bottom:16px;
+  font-family:'SF Mono','Fira Code',monospace;
+}}
+.facts-grid {{ display:flex; gap:14px; margin-bottom:36px; }}
+.fact-card {{
+  flex:1; background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.22);
+  border-radius:14px; padding:26px 16px; text-align:center; position:relative; overflow:hidden;
+}}
+.fact-card::before {{
+  content:''; position:absolute; top:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg,#8B5CF6,#06B6D4);
+}}
+.fact-val {{
+  font-size:56px; font-weight:900; line-height:1; letter-spacing:-0.02em;
+  background:linear-gradient(135deg,#fff 0%,#C0C0C0 45%,#8B5CF6 100%);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  margin-bottom:10px;
+}}
+.fact-lbl {{
+  font-size:10px; font-weight:700; color:#444; letter-spacing:0.12em;
+  text-transform:uppercase; line-height:1.35;
+}}
+
+/* SECTIONS */
+.sec-title {{
+  font-size:11px; font-weight:700; color:#8B5CF6;
+  letter-spacing:0.18em; text-transform:uppercase; margin-bottom:14px;
+  font-family:'SF Mono','Fira Code',monospace;
+}}
+.section {{ margin-bottom:28px; }}
+.bullet {{
+  display:flex; gap:14px; align-items:flex-start;
+  margin-bottom:10px; font-size:22px; line-height:1.5; color:#c0c0c0;
+}}
+.bpre {{ color:#8B5CF6; font-size:22px; flex-shrink:0; margin-top:1px; }}
+.bpre-cyan {{ color:#06B6D4; font-size:14px; margin-top:5px; }}
+
+/* JUSTUS TAKE */
+.take-block {{
+  border-left:3px solid #8B5CF6; padding:20px 24px;
+  background:rgba(139,92,246,0.05); border-radius:0 10px 10px 0;
+  margin-bottom:26px;
+}}
+.take-label {{
+  font-size:10px; font-weight:700; color:#8B5CF6;
+  letter-spacing:0.15em; text-transform:uppercase; margin-bottom:8px;
+  font-family:'SF Mono','Fira Code',monospace;
+}}
+.take-text {{ font-size:21px; line-height:1.55; color:#d0d0d0; font-style:italic; }}
+
+/* KONKRETER SCHRITT */
+.step-block {{
+  background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.25);
+  border-radius:12px; padding:22px 24px;
+  display:flex; gap:16px; align-items:flex-start;
+}}
+.step-check {{ color:#10B981; font-size:22px; flex-shrink:0; margin-top:2px; }}
+.step-label {{
+  font-size:10px; font-weight:700; color:#10B981;
+  letter-spacing:0.15em; text-transform:uppercase; margin-bottom:6px;
+  font-family:'SF Mono','Fira Code',monospace;
+}}
+.step-text {{ font-size:20px; line-height:1.5; color:#c0c0c0; }}
+
+/* PAGE 2 */
+.p2 {{
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  text-align:center; padding:100px 100px;
+  height:100%;
+}}
+.p2-eyebrow {{
+  font-size:12px; color:#8B5CF6; letter-spacing:0.2em;
+  text-transform:uppercase; margin-bottom:50px;
+  font-family:'SF Mono','Fira Code',monospace;
+}}
+.p2-headline {{
+  font-size:70px; font-weight:900; color:#fff;
+  line-height:1.15; letter-spacing:-0.03em; margin-bottom:48px;
+}}
+.p2-headline em {{ color:#8B5CF6; font-style:normal; }}
+.p2-body {{
+  font-size:27px; color:#666; line-height:1.65;
+  max-width:820px; margin-bottom:80px;
+}}
+.p2-deco {{
+  width:80px; height:2px; border-radius:1px; margin:0 auto 80px;
+  background:linear-gradient(90deg,#8B5CF6,#06B6D4);
+}}
+.p2-footer {{
+  border-top:1px solid rgba(139,92,246,0.18); padding-top:40px; width:100%;
+}}
+.p2-handle {{ font-size:26px; font-weight:700; color:#8B5CF6; margin-bottom:8px; }}
+.p2-url {{ font-size:18px; color:#333; }}
+</style>
+</head>
+<body>
+
+<!-- PAGE 1 -->
+<div class="page" style="page-break-after:always;">
+  <div class="gl1"></div><div class="gl2"></div>
+  <div class="content">
+
+    <div class="header">
+      <div class="handle">@<em>justus</em>.automates</div>
+      <div class="topic-tag"><div class="tdot"></div>{esc(req.topic_tag)}</div>
+    </div>
+
+    <div class="headline">{esc(req.headline)}</div>
+    <div class="subhook">{esc(req.subhook)}</div>
+
+    <div class="hdivider"></div>
+
+    <div class="facts-label">Key Facts</div>
+    <div class="facts-grid">{facts_html}</div>
+
+    <div class="hdivider"></div>
+
+    <div class="section">
+      <div class="sec-title">Was passiert gerade?</div>
+      {was_passiert_html}
+    </div>
+
+    <div class="section">
+      <div class="sec-title">Was bringt mir das?</div>
+      {was_bringt_html}
+    </div>
+
+    <div class="take-block">
+      <div class="take-label">Justus&rsquo; Take</div>
+      <div class="take-text">{esc(req.justus_take)}</div>
+    </div>
+
+    <div class="step-block">
+      <div class="step-check">&#x2713;</div>
+      <div>
+        <div class="step-label">1 konkreter Schritt den du heute tun kannst</div>
+        <div class="step-text">{esc(req.konkreter_schritt)}</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- PAGE 2: CTA (statisch) -->
+<div class="page">
+  <div class="gl1"></div><div class="gl2"></div>
+  <div class="p2">
+    <div class="p2-eyebrow">Justus Schulte &middot; KI-Automatisierung</div>
+    <div class="p2-headline">Willst du wissen wie ich sowas <em>automatisiere?</em></div>
+    <div class="p2-body">
+      Folg mir f&uuml;r t&auml;gliche KI-Insights &mdash; und kommentier wenn du den vollst&auml;ndigen Automation-Blueprint willst.
+    </div>
+    <div class="p2-deco"></div>
+    <div class="p2-footer">
+      <div class="p2-handle">@justus.automates</div>
+      <div class="p2-url">justus.automates</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>"""
+
+
+# ── Infosheet: HTML → PDF via Playwright ──────────────────────────────────────
+async def render_html_to_pdf(html_path: Path, output_path: Path) -> bool:
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.error("[PDF] Playwright not installed")
+        return False
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = await browser.new_page(viewport={"width": 1080, "height": 1920})
+            await page.goto(f"file://{html_path.absolute()}", wait_until="load", timeout=30000)
+            await page.pdf(
+                path=str(output_path),
+                print_background=True,
+                width="1080px",
+                height="1920px",
+            )
+            await browser.close()
+        log.info("[PDF] rendered: %s (%d bytes)", output_path.name, output_path.stat().st_size)
+        return True
+    except Exception as exc:
+        log.error("[PDF] render failed: %s", exc)
+        return False
+
+
+# ── POST /generate-infosheet ──────────────────────────────────────────────────
+@app.post("/generate-infosheet")
+async def generate_infosheet(req: InfosheetRequest):
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/infosheet_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log.info("[INFOSHEET] START topic=%s", req.topic_tag)
+    try:
+        html      = _build_infosheet_html(req)
+        html_path = job_dir / "infosheet.html"
+        html_path.write_text(html, encoding="utf-8")
+
+        pdf_path = job_dir / "infosheet.pdf"
+        ok = await render_html_to_pdf(html_path, pdf_path)
+        if not ok or not pdf_path.exists():
+            raise HTTPException(status_code=500, detail="PDF rendering failed")
+
+        result = cloudinary.uploader.upload(
+            str(pdf_path),
+            resource_type="raw",
+            folder="infosheets",
+            public_id=f"infosheet_{job_id}",
+            overwrite=True,
+        )
+        url = result["secure_url"]
+        log.info("[INFOSHEET] uploaded: %s", url)
+        return {"url": url}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[INFOSHEET] Error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Infosheet generation failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.get("/health")

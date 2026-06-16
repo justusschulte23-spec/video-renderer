@@ -15,6 +15,7 @@ from typing import Optional
 import httpx
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 import cloudinary
@@ -1484,8 +1485,7 @@ async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: floa
 
 
 # ── POST /generate-broll-synced ───────────────────────────────────────────────
-@app.post("/generate-broll-synced")
-async def generate_broll_synced(req: BrollSyncedRequest):
+async def _generate_broll_synced_impl(req: BrollSyncedRequest):
     job_id  = str(uuid.uuid4())
     job_dir = Path(f"/tmp/brollsync_{job_id}")
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -1633,6 +1633,40 @@ async def generate_broll_synced(req: BrollSyncedRequest):
         raise HTTPException(status_code=500, detail=f"Broll sync failed: {exc}")
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@app.post("/generate-broll-synced")
+async def generate_broll_synced(req: BrollSyncedRequest):
+    """Streaming wrapper — sends keepalive bytes every 20s to survive Railway proxy timeout."""
+    result_holder: dict = {}
+    done_event = asyncio.Event()
+
+    async def _worker():
+        try:
+            result_holder["ok"] = await _generate_broll_synced_impl(req)
+        except HTTPException as exc:
+            result_holder["err"] = exc.detail
+        except Exception as exc:
+            result_holder["err"] = str(exc)
+        finally:
+            done_event.set()
+
+    asyncio.create_task(_worker())
+
+    async def _stream():
+        while not done_event.is_set():
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                yield b" "  # keepalive — JSON.parse skips leading whitespace
+        payload = result_holder.get("ok") or {"error": result_holder.get("err", "unknown")}
+        yield json.dumps(payload).encode()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/json",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ── POST /generate-broll ──────────────────────────────────────────────────────

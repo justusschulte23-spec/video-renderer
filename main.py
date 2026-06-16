@@ -336,6 +336,7 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             page = await context.new_page()
             page.on("console", lambda msg: log.warning("[BROLL-JS] %s", msg.text)
                     if msg.type in ("error", "warning") else None)
+            page.on("pageerror", lambda err: log.error("[BROLL-PAGEERROR] %s", err))
             _t_load_start = time.time()
             try:
                 await page.goto(
@@ -1599,7 +1600,10 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         # Wrap Sonnet's divs with Python-generated GSAP timeline
         full_html_raw  = _build_broll_html(html_raw, scenes, req.brand_color_primary)
         full_html_path = job_dir / "broll_full.html"
-        full_html_path.write_text(_inject_gsap_inline(full_html_raw), encoding="utf-8")
+        _injected_html = _inject_gsap_inline(full_html_raw)
+        full_html_path.write_text(_injected_html, encoding="utf-8")
+        Path("/tmp/last_broll.html").write_text(_injected_html, encoding="utf-8")
+        log.info("[BROLL_SYNC] HTML saved to /tmp/last_broll.html for inspection")
         total_duration = scenes[-1]["end"]
 
         # 4b. Render full HTML as one video, then split by scene timestamps

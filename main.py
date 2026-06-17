@@ -1339,99 +1339,289 @@ def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
         f'"{s["visual_theme"]}" | data_point={s.get("data_point","—")} | "{s.get("line","")}"'
         for i, s in enumerate(scenes)
     )
-    ref = _BROLL_REFERENCE_HTML
-    return f"""Du bist Motion-Graphics-Direktor für hochwertige Social-Media B-Roll im Terminal/Monitor-Stil.
-Erzeuge {n} Szenen-DIVs + 1 Animations-Script (1080×{BROLL_H}px, accent {accent}).
+    ref = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  width:1080px; height:1920px; overflow:hidden;
+  background:#09090B;
+  font-family:'SF Mono','Fira Code','Consolas',monospace;
+  position:relative;
+}
+.glow {
+  position:absolute; border-radius:50%; pointer-events:none;
+  animation: glowPulse 4s ease-in-out infinite alternate;
+}
+@keyframes glowPulse {
+  0%   { transform:scale(0.85) translate(0,0);       opacity:0.7; }
+  100% { transform:scale(1.2)  translate(30px,-20px); opacity:1;   }
+}
+.scanlines {
+  position:absolute; inset:0; pointer-events:none; z-index:50;
+  background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.05) 3px,rgba(0,0,0,0.05) 4px);
+}
+.hero-wrap {
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-60%);
+  animation:heroFloat 5s ease-in-out infinite;
+}
+@keyframes heroFloat {
+  0%,100% { transform:translate(-50%,-60%) translateY(0px); }
+  50%      { transform:translate(-50%,-60%) translateY(-28px); }
+}
+.pulse-ring {
+  position:absolute; top:50%; left:50%;
+  width:320px; height:320px; border-radius:50%;
+  border:2px solid rgba(139,92,246,0.5);
+  transform:translate(-50%,-50%) scale(0.5);
+  animation:ringExpand 2.4s ease-out infinite;
+}
+.pulse-ring:nth-child(2){ animation-delay:1.2s; border-color:rgba(6,182,212,0.4); }
+@keyframes ringExpand {
+  0%   { transform:translate(-50%,-50%) scale(0.5); opacity:0.8; }
+  100% { transform:translate(-50%,-50%) scale(2.2); opacity:0;   }
+}
+.glass-card {
+  position:absolute;
+  background:rgba(255,255,255,0.04);
+  backdrop-filter:blur(24px);
+  -webkit-backdrop-filter:blur(24px);
+  border:1px solid rgba(255,255,255,0.1);
+  border-radius:20px;
+  padding:18px 28px;
+  opacity:0;
+  animation:cardFlyIn 0.7s cubic-bezier(0.175,0.885,0.32,1.275) forwards;
+}
+@keyframes cardFlyIn {
+  0%   { opacity:0; transform:translateY(40px) scale(0.85); }
+  100% { opacity:1; transform:translateY(0)    scale(1);    }
+}
+.glass-card.floating {
+  animation:cardFlyIn 0.7s cubic-bezier(0.175,0.885,0.32,1.275) forwards,
+            cardFloat  3s ease-in-out infinite;
+  animation-delay:0s,0.7s;
+}
+@keyframes cardFloat {
+  0%,100% { transform:translateY(0px)    rotate(0deg);   }
+  50%      { transform:translateY(-12px) rotate(0.5deg); }
+}
+.card-label { font-size:11px; letter-spacing:.15em; text-transform:uppercase; color:rgba(192,192,192,0.7); margin-bottom:6px; }
+.card-value { font-size:32px; font-weight:900; font-family:'Arial Black','Arial',sans-serif; background:linear-gradient(135deg,#fff,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.card-sub   { font-size:12px; color:rgba(192,192,192,0.6); margin-top:4px; }
+.big-number-wrap { position:absolute; bottom:280px; left:0; right:0; text-align:center; opacity:0; animation:fadeUp 0.8s ease forwards; animation-delay:0.4s; }
+@keyframes fadeUp { 0%{opacity:0;transform:translateY(30px);} 100%{opacity:1;transform:translateY(0);} }
+.big-pre { font-size:12px; letter-spacing:.25em; color:#8B5CF6; text-transform:uppercase; margin-bottom:10px; }
+.big-num  { font-size:160px; font-weight:900; line-height:1; font-family:'Arial Black','Arial',sans-serif; background:linear-gradient(135deg,#fff 0%,#C0C0C0 40%,#8B5CF6 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 60px rgba(139,92,246,0.5)); }
+.big-post { font-size:18px; color:#06B6D4; letter-spacing:.12em; margin-top:8px; }
+.bottom-bar { position:absolute; bottom:80px; left:60px; right:60px; background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.2); border-radius:14px; padding:16px 24px; display:flex; justify-content:space-between; align-items:center; opacity:0; animation:fadeUp 0.8s ease forwards; animation-delay:0.9s; }
+.bar-item { text-align:center; }
+.bar-val  { font-size:20px; font-weight:700; color:#fff; font-family:'Arial Black',sans-serif; }
+.bar-lbl  { font-size:10px; color:#666; letter-spacing:.1em; text-transform:uppercase; margin-top:3px; }
+.bar-sep  { width:1px; height:36px; background:rgba(139,92,246,0.2); }
+.header   { position:absolute; top:80px; left:60px; right:60px; display:flex; justify-content:space-between; align-items:center; opacity:0; animation:fadeUp 0.6s ease forwards; }
+.header-tag { font-size:11px; letter-spacing:.2em; color:#8B5CF6; border:1px solid rgba(139,92,246,0.3); padding:6px 16px; border-radius:100px; background:rgba(139,92,246,0.06); }
+.header-live { font-size:11px; color:#06B6D4; display:flex; align-items:center; gap:7px; }
+.live-dot { width:7px; height:7px; border-radius:50%; background:#06B6D4; animation:liveBlink 1s steps(1) infinite; }
+@keyframes liveBlink { 0%,100%{opacity:1;} 50%{opacity:0.2;} }
+#flame1,#flame2 { animation:flameFlicker 0.15s ease-in-out infinite alternate; transform-origin:center top; }
+#flame3,#flame4 { animation:flameFlicker 0.12s ease-in-out infinite alternate; animation-delay:0.06s; transform-origin:center top; }
+@keyframes flameFlicker {
+  0%   { transform:scaleY(1)   scaleX(1);    opacity:0.9; }
+  100% { transform:scaleY(1.3) scaleX(0.85); opacity:0.7; }
+}
+</style>
+</head>
+<body>
 
-AUSGABE-FORMAT (exakt, kein Wrapper, kein Markdown):
-  NUR {n} × <div class="scene" id="sceneN"> ... </div>
-  KEIN <script>-Block, KEIN <html>/<head>/<body>/<style>/<script src=...>
-  Das System animiert deine Szenen vollautomatisch (siehe ANIMATION unten) —
-  du schreibst NUR die reichen, fertig-gestylten DIVs. Kein einziges <script>.
+<div class="scanlines"></div>
+<div class="glow" style="width:900px;height:900px;top:-150px;left:-150px;background:radial-gradient(circle,rgba(139,92,246,0.13) 0%,transparent 65%);filter:blur(30px);"></div>
+<div class="glow" style="width:700px;height:700px;bottom:-100px;right:-100px;background:radial-gradient(circle,rgba(6,182,212,0.09) 0%,transparent 65%);filter:blur(25px);animation-delay:1.5s;"></div>
 
-CSS-Klassen (bereits definiert, NICHT wiederholen):
-  .scene → position:absolute; inset:0; opacity:0 (Sichtbarkeit via CSS-Animation — NICHT anfassen)
-  .dp    → font-size:110px; font-weight:900; color:{accent}; line-height:1; text-align:center
-  .lbl   → font-size:28px; font-weight:700; color:#d0d0d0; text-align:center; max-width:920px
+<div class="header">
+  <div class="header-tag">SPACEX · CURSOR AI</div>
+  <div class="header-live"><div class="live-dot"></div>LIVE DEAL</div>
+</div>
 
-{n} SZENEN:
-{scene_lines}
+<div class="pulse-ring"></div>
+<div class="pulse-ring" style="width:280px;height:280px;"></div>
 
-=== FEW-SHOT REFERENZ-BEISPIEL ===
-Das folgende Beispiel zeigt das exakte visuelle Niveau, den Stil und die
-Animationsqualität, die deine Ausgabe erreichen MUSS. Es ist ein ANKER,
-kein Template. Du füllst KEINE Platzhalter aus — du baust eine KOMPLETT
-NEUE Szene passend zum aktuellen Thema, die dieselbe visuelle Qualität,
-Dichte und Ästhetik erreicht. Das Referenz-Beispiel ist für 1080×1920px —
-passe das Layout für den 1080×{BROLL_H}px-Viewport an (kompaktere Abstände,
-kleinere Hero-SVG ~180×180px, Terminal 3–4 Zeilen, 2–3 Metric Cards).
+<div class="hero-wrap">
+  <svg width="260" height="260" viewBox="0 0 260 260" fill="none">
+    <ellipse cx="130" cy="185" rx="55" ry="18" fill="rgba(139,92,246,0.2)"/>
+    <path d="M130 30 C155 55 165 110 162 160 L98 160 C95 110 105 55 130 30 Z" fill="#1a1726" stroke="#8B5CF6" stroke-width="3"/>
+    <path d="M130 30 C140 42 148 60 150 80 L110 80 C112 60 120 42 130 30 Z" fill="rgba(139,92,246,0.3)" stroke="#8B5CF6" stroke-width="2"/>
+    <circle cx="130" cy="112" r="22" fill="#0a0910" stroke="#06B6D4" stroke-width="2.5"/>
+    <circle cx="130" cy="112" r="15" fill="rgba(6,182,212,0.15)" stroke="#06B6D4" stroke-width="1.5"/>
+    <circle cx="124" cy="106" r="4" fill="rgba(255,255,255,0.3)"/>
+    <path d="M98 140 L68 175 L98 160 Z" fill="#8B5CF6" opacity="0.85"/>
+    <path d="M98 130 L75 155 L98 145 Z" fill="rgba(139,92,246,0.5)"/>
+    <path d="M162 140 L192 175 L162 160 Z" fill="#8B5CF6" opacity="0.85"/>
+    <path d="M162 130 L185 155 L162 145 Z" fill="rgba(139,92,246,0.5)"/>
+    <rect x="114" y="160" width="24" height="22" rx="4" fill="#2a2040" stroke="#8B5CF6" stroke-width="1.5"/>
+    <rect x="122" y="158" width="16" height="24" rx="3" fill="#1a1726" stroke="#06B6D4" stroke-width="1"/>
+    <ellipse id="flame1" cx="122" cy="192" rx="8"  ry="16" fill="#F59E0B" opacity="0.9"/>
+    <ellipse id="flame2" cx="138" cy="192" rx="8"  ry="16" fill="#F59E0B" opacity="0.9"/>
+    <ellipse id="flame3" cx="122" cy="196" rx="5"  ry="10" fill="#fff"    opacity="0.6"/>
+    <ellipse id="flame4" cx="138" cy="196" rx="5"  ry="10" fill="#fff"    opacity="0.6"/>
+    <text x="178" y="55"  font-size="22" font-family="monospace" fill="#06B6D4" opacity="0.8">&lt;/&gt;</text>
+    <text x="175" y="72"  font-size="10" font-family="monospace" fill="rgba(6,182,212,0.6)" letter-spacing="1">CURSOR</text>
+    <text x="88"  y="46"  font-size="9"  font-family="monospace" fill="rgba(192,192,192,0.5)" letter-spacing="1.5">SPACEX</text>
+  </svg>
+</div>
+
+<div class="glass-card floating" style="top:330px;left:70px;animation-delay:0.3s;">
+  <div class="card-label">Übernahme-Option</div>
+  <div class="card-value">$60 Mrd.</div>
+  <div class="card-sub">vollständig · später</div>
+</div>
+<div class="glass-card floating" style="top:310px;right:70px;animation-delay:0.55s;">
+  <div class="card-label">Partnerschaft</div>
+  <div class="card-value">$10 Mrd.</div>
+  <div class="card-sub">sofort · Option</div>
+</div>
+<div class="glass-card floating" style="top:600px;left:70px;animation-delay:0.7s;">
+  <div class="card-label">Zeitplan</div>
+  <div class="card-value" style="font-size:26px;">Q3 2026</div>
+  <div class="card-sub">mögliche Übernahme</div>
+</div>
+<div class="glass-card floating" style="top:580px;right:70px;animation-delay:0.85s;">
+  <div class="card-label">Entwickler täglich</div>
+  <div class="card-value" id="devCount" style="font-size:26px;">0</div>
+  <div class="card-sub">Nutzer · Cursor AI</div>
+</div>
+
+<div class="big-number-wrap">
+  <div class="big-pre">DEAL-VOLUMEN GESAMT</div>
+  <div class="big-num" id="bigNum">0</div>
+  <div class="big-post">MRD. DOLLAR · OPTION GESICHERT</div>
+</div>
+
+<div class="bottom-bar">
+  <div class="bar-item"><div class="bar-val" style="color:#8B5CF6;">SpaceX</div><div class="bar-lbl">Käufer</div></div>
+  <div class="bar-sep"></div>
+  <div class="bar-item"><div class="bar-val" style="color:#06B6D4;">Cursor</div><div class="bar-lbl">KI-Tool</div></div>
+  <div class="bar-sep"></div>
+  <div class="bar-item"><div class="bar-val" style="color:#10B981;">Musk</div><div class="bar-lbl">Deal</div></div>
+  <div class="bar-sep"></div>
+  <div class="bar-item"><div class="bar-val" style="color:#F59E0B;">Option</div><div class="bar-lbl">nicht sofort</div></div>
+</div>
+
+<script>
+window.animateCounter = function(el, target, dur, suffix) {
+  if (!el) return;
+  const start = performance.now();
+  const durationMs = dur * 1000;
+  function step(now) {
+    const p = Math.min((now - start) / durationMs, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(ease * target).toLocaleString('de-DE') + (suffix || '');
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+};
+setTimeout(function() {
+  animateCounter(document.getElementById('bigNum'), 60, 2.2, '');
+  animateCounter(document.getElementById('devCount'), 800, 1.8, 'k+');
+}, 600);
+</script>
+</body>
+</html>"""
+    return f"""Du bist Senior Motion-Graphics-Direktor für premium Social-Media B-Roll.
+Erzeuge {n} Szenen-DIVs (Viewport 1080×{BROLL_H}px, accent {accent}).
+
+DESIGN-PHILOSOPHIE (ersetzt alles Bisherige): WENIGER ELEMENTE, MEHR ANIMATION.
+Nicht 15 Dinge gleichzeitig — lieber 5 Dinge die wirklich LEBEN. Clean, premium,
+relatable. Kein überladenes Dashboard. Bekannte Brand-Logos/Symbole > abstrakte Deko.
+
+AUSGABE-FORMAT (kein Wrapper, kein Markdown):
+  1. EIN <style>-Block mit allen @keyframes (wie in der Referenz: glowPulse, heroFloat,
+     ringExpand, cardFlyIn, cardFloat, flameFlicker bzw. Hero-Aktion, liveBlink, fadeUp)
+  2. {n} × <div class="scene" id="sceneN"> … </div> in der Struktur unten
+  3. EIN <script>-Block, der NUR window.animateCounter definiert (Pattern unten)
+  KEIN <html>/<head>/<body>, KEIN <script src=...>
+  (.scene ist bereits position:absolute;inset:0 + Opacity wird vom System gesteuert — NICHT anfassen)
+
+PRO SZENE — GENAU DIESE STRUKTUR (nicht mehr, nicht weniger):
+
+1. HEADER (oben): Topic-Tag links (pill) + LIVE-Badge rechts (blinkender Punkt).
+
+2. HERO-OBJEKT (Mitte): EIN sauber gezeichnetes SVG-Icon zum Thema (~150–190px).
+   PFLICHT BRAND/SYMBOL: Nennt das Thema eine bekannte Brand/Firma/Tool (SpaceX,
+   Google, OpenAI, Cursor, Meta, Apple, Tesla, Nvidia …), MUSS deren Name/Kürzel/
+   Logo-Symbol am Hero stehen — gezeichnet + Text-Label (wie "SPACEX" + "</> CURSOR"
+   in der Referenz). Immer relatable, lieber bekanntes Symbol als Abstraktes.
+   Das Hero macht eine PHYSISCHE LOOP-AKTION (CSS): Rakete→schwebt+Flammen flackern ·
+   Gehirn→pulsiert · Uhr→Zeiger dreht · Editor→Cursor blinkt. NIE statisch.
+
+3. PULSE-RINGE: 2 expandierende Ringe (CSS ringExpand) zentriert hinterm Hero, permanent.
+
+4. GLASS-CARDS (2–4, gestaffelt): fliegen mit cubic-bezier(0.175,0.885,0.32,1.275)
+   rein (cardFlyIn) und schweben danach (cardFloat). Inhalt: die wichtigsten
+   Daten/Fakten der Szene (Label + Wert + kurzer Sub). KEINE Card mit Skript-Text.
+
+5. BIG COUNTER (unten/zentral): die EINE große Leitzahl der Szene.
+   Element: <div class="big-num" id="..." data-count="ENDWERT">ENDWERT</div>
+   data-count = reine Zahl (z.B. 60), Text = derselbe Endwert. Einheit als
+   kurzes Label darunter (z.B. .big-post). Das System zählt die Zahl hoch GENAU
+   wenn die Szene erscheint — mit DEINER animateCounter (unten). Du rufst sie NICHT
+   selbst auf, KEIN setTimeout. Nur das Element taggen.
+
+6. BOTTOM-BAR: 4 Key-Terms zum Thema, farbig (z.B. Käufer/Tool/Person/Status).
+
+ANIMATIONS-REGELN:
+- ALLE Basis-Animationen (Float, Pulse-Ringe, Card-FlyIn, Hero-Aktion/Flammen, Glow,
+  Live-Blink, fadeUp) AUSSCHLIESSLICH per CSS @keyframes — headless-bombensicher.
+- KEINE gsap-Aufrufe, KEINE SVG-Methoden im JS (kein getTotalLength etc.).
+- Counter: definiere im <script> NUR diese Funktion, EXAKT so (window-Zuweisung ist Pflicht):
+
+<script>
+window.animateCounter = function(el, target, dur, suffix) {{
+  if (!el) return;
+  const start = performance.now();
+  const durationMs = dur * 1000;
+  function step(now) {{
+    const p = Math.min((now - start) / durationMs, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(ease * target).toLocaleString('de-DE') + (suffix || '');
+    if (p < 1) requestAnimationFrame(step);
+  }}
+  requestAnimationFrame(step);
+}};
+</script>
+
+LAYOUT-ANPASSUNG (WICHTIG): Die Referenz ist 1080×1920. DEIN Viewport ist 1080×{BROLL_H}px
+— viel flacher. Komprimiere konsequent: Header oben (~top:16px), Hero+Ringe zentriert,
+Glass-Cards kompakt links/rechts neben dem Hero, Big-Counter unten-zentral, Bottom-Bar
+ganz unten (~bottom:14px). position:absolute INNERHALB des .scene-divs (das ist der
+Positions-Container). Keine 1920er-Abstände, nichts darf abgeschnitten werden.
+
+FARBPALETTE (FIX): Amethyst #8B5CF6 · Cyan #06B6D4 · Silber #C0C0C0 ·
+Grün #10B981 · Amber #F59E0B · BG #09090B/#0a0910 · Text #fff/#C0C0C0.
+
+=== VISUELLER STYLE-ANKER (Niveau treffen, NICHT 1:1 kopieren) ===
+Dieses fertige Beispiel zeigt EXAKT Stil, Sauberkeit und Animations-Niveau, das du
+treffen MUSST — gezeichnetes Brand-Icon mit Label, Pulse-Ringe, Glass-Cards, großer
+Counter, Bottom-Bar, alles via CSS-Keyframes + die animateCounter oben. Baue pro Thema
+eine NEUE Szene auf diesem Niveau — nicht überladen, immer relatable, eigene Daten/Icons.
 
 {ref}
 
-ENDE REFERENZ. Baue jetzt eine NEUE Szene auf exakt diesem visuellen Niveau,
-passend zum Thema des aktuellen Requests. Erfinde ein eigenes Hero-Objekt,
-eigene Zahlen, eigene Terminal-Befehle, eigene Metriken — alles thematisch
-passend. Kopiere NICHT den Inhalt des Beispiels.
-
-WICHTIG zur Referenz: Sie enthält <style> und <script> NUR zur Illustration des
-visuellen Niveaus. Du übernimmst NUR die visuelle Dichte/Struktur der DIVs —
-NIEMALS den <script>-Teil, NIEMALS <style>, NIEMALS gsap-Aufrufe. Zahlen bekommen
-den Endwert als Text + data-count (z.B. data-count="15284"), NIE "0".
-
-=== STIL-DIREKTIVEN (VERBINDLICH) ===
-
-ÄSTHETIK: Terminal-/Monitor-Look.
-  - Jede Szene bekommt `style="background:#0a0910"` auf dem .scene-div
-  - Scanlines-Overlay: <div style="position:absolute;inset:0;pointer-events:none;
-    background:repeating-linear-gradient(0deg,transparent,transparent 3px,
-    rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px);z-index:10;"></div>
-  - Ambient Radial Glows (2–3 absolute-positioned divs, blur, rgba purple/cyan)
-  - Header-Zeile oben: pill-badge links (Thema-Tag), LIVE-dot + Text rechts
-  - Monospace-Schrift: 'SF Mono','Fira Code','Consolas',monospace
-  - Data-Stream-Streifen rechts (scrollende Zahlen, opacity 0.25–0.35)
-
-HERO-OBJEKT: Jede Szene hat EIN zentrales, themenspezifisches SVG-Hero-Objekt.
-  Beispiele: "Nvidia GPU" → Chip-Die mit Transistor-Grid, "Quantencomputing" →
-  Bloch-Sphäre/Qubit, "Robotics" → humanoider Kopf/Arm-Gelenk, "Biotech" →
-  DNA-Helix, "Finanzen" → Candle-Chart. Das Hero-Objekt rotiert, pulst oder
-  zeichnet sich kontinuierlich — niemals nur scale-in und Stillstand.
-
-BIG-DATA-MOMENTE (wähle 2–3 pro Szene passend zum Thema):
-  - Große Zahl mit class="dp": Schreibe den ENDWERT als Text UND als data-count.
-    Bsp: <div class="dp" data-count="60">60 Mrd $</div>  oder  <div class="dp" data-count="99">99%</div>
-    NIEMALS "0" hineinschreiben — immer den fertigen Zielwert. Das System zählt ihn hoch.
-  - Terminal-Block: 3–4 Zeilen, themenspezifische CLI-Befehle (statisch ausformuliert)
-  - Metric Cards (2–3): Wert (auch mit data-count), Delta-Indikator (▲/▼), und eine
-    Fill-Bar als <div ... data-fill="80%" style="width:0"></div> (System füllt sie)
-  - Trend-Graph: <svg><path stroke="..." .../></svg> — JEDER gestrichelte Pfad
-    zeichnet sich automatisch selbst (kein Script nötig, einfach den Pfad zeichnen)
-
-FARBPALETTE (FIX — keine anderen Leitfarben):
-  Primär: Amethyst #8B5CF6, Silber #C0C0C0, Cyan #06B6D4
-  Akzente (sparsam): Grün #10B981, Amber #F59E0B
-  BG: #0a0910, Text: #e8e8e8/#555, Borders: rgba(139,92,246,0.18–0.3)
-  Hero-Glow: filter:drop-shadow(0 0 20px #8B5CF6) oder #06B6D4
-
-=== ANIMATION (vollautomatisch — du schreibst KEIN Script) ===
-Das System animiert jede Szene GENAU wenn sie eingeblendet wird, an Ort und Stelle:
-  - jede Zahl (class="dp"/.big-num/.stat/.mval oder data-count) zählt von 0 hoch
-  - jede Fill-Bar (data-fill) wächst auf ihre Breite
-  - jeder gestrichelte SVG-<path> zeichnet sich selbst
-  - Ring-Kreise (circle fill="none") und data-spin rotieren langsam
-  - das Hero-SVG pulsiert sanft (Idle-Bewegung, nie Stillstand)
-  - Radial-Gradient-Glows pulsieren als Ambient
-Deine EINZIGE Aufgabe für Animation: die Zahlen/Bars korrekt taggen (data-count/data-fill)
-und gestrichelte Graph-Pfade als <path stroke=...> zeichnen. Sonst NICHTS — kein <script>,
-kein gsap, kein animateCounter-Aufruf. Das macht alles das System deterministisch.
+{n} SZENEN (Inhalt/Daten pro Szene):
+{scene_lines}
 
 === VERBOTEN ===
-- JEGLICHER <script>-Block oder gsap/animateCounter-Aufruf (System macht Animation)
-- "0" als Counter-Text — immer den Endwert + data-count
-- Der gesprochene Satz als Fließtext
+- Überladene Dashboards / 10+ Mini-Elemente pro Szene
+- Skript-Satz als Fließtext oder in einer Glass-Card
+- Bedeutungslose Deko-Labels ohne echten Datenbezug
+- gsap.*, getTotalLength, innerHTML-Tweens, eigene setTimeout/Counter-Aufrufe
+- "0" als finaler Counter-Text (immer Endwert als Text + data-count)
 - Andere Leitfarben als die definierten
-- Bedeutungslose Labels ohne Datenbezug
 
-Gib NUR die {n} <div class="scene" id="sceneN">…</div> Blöcke zurück. KEIN <script>, kein Markdown."""
+Gib NUR den <style>-Block, die {n} <div class="scene" id="sceneN">…</div> Blöcke und
+den einen window.animateCounter-<script>-Block zurück. Kein Markdown."""
 
 
 def _broll_anim_bootstrap(scenes: list) -> str:

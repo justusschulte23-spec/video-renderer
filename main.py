@@ -71,13 +71,71 @@ FONT_URLS = {
     FONT_SEMIBOLD: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
 }
 
-# ── SFX ───────────────────────────────────────────────────────────────────────
-SFX_DIR  = Path("/tmp/sfx")
-SFX_URLS = {
-    "whoosh":  "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/whoosh.mp3",
-    "impact":  "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/impact.mp3",
-    "benefit": "https://res.cloudinary.com/poweroflillith/raw/upload/audio/sfx/benefit.mp3",
+# ── SFX library ───────────────────────────────────────────────────────────────
+SFX_DIR = Path("/tmp/sfx")
+
+# Per-category mix behaviour applied by the FFmpeg mixer.
+#   volume  : gain multiplier
+#   trim    : hard cut length in seconds (None = full clip)
+#   fadeout : linear fade-out length over the clip's final seconds (0 = none)
+SFX_CATEGORY_RULES = {
+    "first0":     {"volume": 1.00, "trim": None, "fadeout": 0.0},   # intro stinger @ t=0
+    "hook":       {"volume": 0.32, "trim": 3.5,  "fadeout": 1.0},   # background bed
+    "impact":     {"volume": 0.95, "trim": None, "fadeout": 0.0},   # one-shot punctuation
+    "pop":        {"volume": 0.60, "trim": 0.40, "fadeout": 0.0},   # micro interaction
+    "transition": {"volume": 0.78, "trim": None, "fadeout": 0.0},   # media swap
 }
+
+# asset_id -> (category, cloudinary url)
+SFX_LIBRARY = {
+    "hook_000_app_ping":       ("first0", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/first0/hook_000_app_ping.mp3"),
+    "hook_000_tech_thud":      ("first0", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/first0/hook_000_tech_thud.mp3"),
+    "distant_police_siren_bg": ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/distant_police_siren_bg.mp3"),
+    "hook_cash_register_01":   ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_cash_register_01.mp3"),
+    "hook_clock_tick_01":      ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_clock_tick_01.mp3"),
+    "hook_coin_drop_01":       ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_coin_drop_01.mp3"),
+    "hook_error_buzz_01":      ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_error_buzz_01.mp3"),
+    "hook_notification_01":    ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_notification_01.mp3"),
+    "hook_success_chime_01":   ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_success_chime_01.mp3"),
+    "hook_warning_sonar_01":   ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_warning_sonar_01.mp3"),
+    "impact_bass_drop_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_bass_drop_01.mp3"),
+    "impact_cinematic_hit_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_cinematic_hit_01.mp3"),
+    "impact_digital_boom_01":  ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_digital_boom_01.mp3"),
+    "impact_gong_reversed_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_gong_reversed_01.mp3"),
+    "impact_heartbeat_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_heartbeat_01.mp3"),
+    "impact_metal_thud_01":    ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_metal_thud_01.mp3"),
+    "impact_shatter_muted_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_shatter_muted_01.mp3"),
+    "impact_tape_stop_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_tape_stop_01.mp3"),
+    "pop_blip_organic_01":     ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_blip_organic_01.mp3"),
+    "pop_bubble_muted_01":     ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_bubble_muted_01.mp3"),
+    "pop_camera_shutter_01":   ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_camera_shutter_01.mp3"),
+    "pop_click_mech_01":       ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_click_mech_01.mp3"),
+    "pop_glass_tap_01":        ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_glass_tap_01.mp3"),
+    "pop_snap_finger_01":      ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_snap_finger_01.mp3"),
+    "pop_ui_clean_01":         ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_ui_clean_01.mp3"),
+    "trans_digital_swipe_01":  ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_digital_swipe_01.mp3"),
+    "trans_reverse_suck_01":   ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_reverse_suck_01.mp3"),
+    "trans_swish_fabric_01":   ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_swish_fabric_01.mp3"),
+    "trans_swish_paper_01":    ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_swish_paper_01.mp3"),
+    "trans_whoosh_deep_01":    ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_whoosh_deep_01.mp3"),
+    "trans_whoosh_fast_01":    ("transition", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/transition/trans_whoosh_fast_01.mp3"),
+}
+
+# Backward-compat: old detect-impacts types -> new assets (keeps existing N8N calls working)
+SFX_LEGACY_MAP = {
+    "whoosh":  "trans_whoosh_fast_01",
+    "impact":  "impact_cinematic_hit_01",
+    "benefit": "hook_success_chime_01",
+    "subtle":  "trans_swish_paper_01",
+}
+
+# t=0 intro stinger: ping + thud layered concurrently (deterministic, always added)
+SFX_INTRO_ASSETS = ["hook_000_app_ping", "hook_000_tech_thud"]
+
+
+def sfx_local_path(asset_id: str) -> Path:
+    cat = SFX_LIBRARY[asset_id][0]
+    return SFX_DIR / cat / f"{asset_id}.mp3"
 
 
 # ── Font bootstrap ─────────────────────────────────────────────────────────────
@@ -139,18 +197,21 @@ def _inject_gsap_inline(html: str) -> str:
 
 def _bootstrap_sfx():
     SFX_DIR.mkdir(parents=True, exist_ok=True)
-    for name, url in SFX_URLS.items():
-        path = SFX_DIR / f"{name}.mp3"
+    ok = 0
+    for asset_id, (cat, url) in SFX_LIBRARY.items():
+        path = sfx_local_path(asset_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
+            ok += 1
             continue
-        log.info("Downloading SFX %s", name)
         try:
             r = requests.get(url, timeout=30)
             r.raise_for_status()
             path.write_bytes(r.content)
-            log.info("SFX saved: %s", path)
+            ok += 1
         except Exception as exc:
-            log.warning("SFX download failed [%s]: %s", name, exc)
+            log.warning("SFX download failed [%s]: %s", asset_id, exc)
+    log.info("SFX library ready: %d/%d assets cached", ok, len(SFX_LIBRARY))
 
 _bootstrap_sfx()
 
@@ -429,29 +490,57 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
 
 
 # ── SFX mixer ────────────────────────────────────────────────────────────────
+def _resolve_sfx_asset(ev: dict) -> Optional[str]:
+    """Map an event to a known asset_id. Accepts {asset}, {category,asset} or legacy {type}."""
+    a = ev.get("asset")
+    if a in SFX_LIBRARY:
+        return a
+    return SFX_LEGACY_MAP.get(ev.get("type"))
+
+
+def _normalize_sfx_events(impacts: list, duration: float) -> list:
+    """Build the full layered event list: deterministic t=0 intro + resolved triggers."""
+    events = [{"asset": a, "time": 0.0} for a in SFX_INTRO_ASSETS if a in SFX_LIBRARY]
+    for ev in (impacts or []):
+        if ev.get("time") is None:
+            continue
+        asset = _resolve_sfx_asset(ev)
+        t = float(ev["time"])
+        if asset and 0.0 <= t < duration:
+            events.append({"asset": asset, "time": t})
+    # keep only assets whose file is present
+    return [e for e in events if sfx_local_path(e["asset"]).exists()]
+
+
 def mix_sfx_into_video(video: Path, impacts: list, job_dir: Path, duration: float):
-    """Overlay impact sounds at their timestamps. Returns new Path or None on failure."""
-    valid = [
-        i for i in impacts
-        if i.get("type") in SFX_URLS
-        and i.get("time") is not None
-        and (SFX_DIR / f"{i['type']}.mp3").exists()
-    ]
-    if not valid:
+    """Layer the SFX library into the video per category rules. Returns Path or None."""
+    events = _normalize_sfx_events(impacts, duration)
+    if not events:
         return None
 
     inputs       = ["-i", str(video)]
     filter_parts = []
 
-    for idx, impact in enumerate(valid):
-        delay_ms = int(float(impact["time"]) * 1000)
-        sfx_path = SFX_DIR / f"{impact['type']}.mp3"
-        inputs  += ["-i", str(sfx_path)]
-        filter_parts.append(
-            f"[{idx+1}:a]adelay={delay_ms}|{delay_ms},volume=0.8[sfx{idx}]"
-        )
+    for idx, ev in enumerate(events):
+        asset    = ev["asset"]
+        cat      = SFX_LIBRARY[asset][0]
+        rule     = SFX_CATEGORY_RULES.get(cat, {"volume": 0.8, "trim": None, "fadeout": 0.0})
+        delay_ms = max(int(ev["time"] * 1000), 0)
+        inputs  += ["-i", str(sfx_local_path(asset))]
 
-    n          = len(valid)
+        chain = [f"[{idx+1}:a]"]
+        trim    = rule.get("trim")
+        fadeout = rule.get("fadeout") or 0.0
+        if trim:
+            chain.append(f"atrim=0:{trim:.3f},asetpts=PTS-STARTPTS")
+            if fadeout > 0:
+                st = max(trim - fadeout, 0.0)
+                chain.append(f"afade=t=out:st={st:.3f}:d={fadeout:.3f}")
+        chain.append(f"volume={rule['volume']:.3f}")
+        chain.append(f"adelay={delay_ms}|{delay_ms}")
+        filter_parts.append("".join([chain[0], ",".join(chain[1:])]) + f"[sfx{idx}]")
+
+    n          = len(events)
     sfx_labels = "".join(f"[sfx{i}]" for i in range(n))
     filter_parts.append(
         f"[0:a]{sfx_labels}amix=inputs={n+1}:duration=first:normalize=0[aout]"
@@ -474,7 +563,8 @@ def mix_sfx_into_video(video: Path, impacts: list, job_dir: Path, duration: floa
         log.error("[SFX] Mix failed: %s", result.stderr[-1000:])
         return None
 
-    log.info("[SFX] Mixed %d impact sounds into video", n)
+    cats = ", ".join(sorted({SFX_LIBRARY[e['asset']][0] for e in events}))
+    log.info("[SFX] Mixed %d sounds (%s)", n, cats)
     return out
 
 
@@ -2137,13 +2227,43 @@ async def detect_impacts(req: DetectImpactsRequest):
         transcript = " ".join(w["word"] for w in words)
 
         system_prompt = (
-            "You are a video editor. Find moments for impact sound effects.\n"
-            "Max 6 moments, only the strongest. Types:\n"
-            "'impact'=hook/revelation/CTA punch, "
-            "'whoosh'=number/stat mentioned, "
-            "'benefit'=user benefit statement (you get/save/can now, advantage, profit), "
-            "'subtle'=scene transition.\n"
-            'Return ONLY JSON: {"impacts":[{"time":2.34,"type":"benefit","word":"x","reason":"y"}]}'
+            "You are a sound designer for short-form video. Read the word-level transcript and place\n"
+            "sound effects from the library below at the strongest moments. Pick the asset whose MEANING\n"
+            "best fits what is being said — match SEMANTICALLY (synonyms, related concepts, the emotional\n"
+            "vibe), not only the literal example words. Use 4-8 cues total. Do NOT place anything at t=0\n"
+            "(the intro stinger is added automatically). At most ONE 'hook' background bed per video.\n"
+            "\n"
+            "LIBRARY (category | asset | when to trigger):\n"
+            "hook (3.5s background bed, sparingly):\n"
+            "  distant_police_siren_bg | crisis, law, police, crime, scandal, lawsuit, danger, high stakes\n"
+            "  hook_cash_register_01   | revenue, sales, money won, scaling, profit, deals, funding, valuation\n"
+            "  hook_clock_tick_01      | deadlines, time pressure, history, urgency, countdown, 'too late'\n"
+            "  hook_coin_drop_01       | micro-savings, small amounts, cents, budgeting, finance tips\n"
+            "  hook_error_buzz_01      | failure, mistakes, penalties, losses, crashes, negative numbers\n"
+            "  hook_notification_01    | DMs, inbound pings, messages, notifications, digital comms\n"
+            "  hook_success_chime_01   | achievements, milestones, wins, unlocked value, breakthroughs\n"
+            "  hook_warning_sonar_01   | upcoming threats, critical alerts, macro risk, caution\n"
+            "impact (one-shot punch on a strong beat):\n"
+            "  impact_bass_drop_01     | focus shift, gravity, dramatic conceptual reveal\n"
+            "  impact_cinematic_hit_01 | bold cinematic statement / headline punctuation\n"
+            "  impact_digital_boom_01  | heavy tech realization, AI/software breakthrough\n"
+            "  impact_gong_reversed_01 | swell into a plot shift / reverse reveal / twist\n"
+            "  impact_heartbeat_01     | tension, fear, suspense, life-or-death stakes\n"
+            "  impact_metal_thud_01    | finality, hard proof, definitive structural fact\n"
+            "  impact_shatter_muted_01 | shock, breaking a pattern, a concept failing, busting a myth\n"
+            "  impact_tape_stop_01     | hard pattern interrupt, 'wait/actually', correction\n"
+            "pop (micro <0.4s, fast UI / keyword pop-ins):\n"
+            "  pop_blip_organic_01 | fluid minimalist pop      pop_bubble_muted_01 | light casual reveal\n"
+            "  pop_camera_shutter_01 | freeze-frame/snapshot    pop_click_mech_01 | code/data/typing\n"
+            "  pop_glass_tap_01 | premium UI tap                pop_snap_finger_01 | instant realization/choice\n"
+            "  pop_ui_clean_01 | minimal tech notification\n"
+            "transition (on a B-roll / full-frame swap):\n"
+            "  trans_digital_swipe_01 | data slide/panel wipe   trans_reverse_suck_01 | vacuum pull into next\n"
+            "  trans_swish_fabric_01 | organic whip-pan         trans_swish_paper_01 | flat/doc layout swipe\n"
+            "  trans_whoosh_deep_01 | deep cinematic sweep      trans_whoosh_fast_01 | fast modern whip\n"
+            "\n"
+            "time = the word's start time (seconds) from the transcript.\n"
+            'Return ONLY JSON: {"impacts":[{"time":2.34,"category":"impact","asset":"impact_bass_drop_01","word":"x","reason":"y"}]}'
         )
 
         raw = call_openrouter(
@@ -2383,11 +2503,10 @@ async def render(req: RenderRequest):
         run(cmd, "final_compose")
         log.info("Output: %s (%.1f MB)", output_mp4, output_mp4.stat().st_size / 1e6)
 
-        # ── 11. SFX mixing (optional) ─────────────────────────────────────────
-        if req.impacts:
-            mixed = mix_sfx_into_video(output_mp4, req.impacts, job_dir, duration)
-            if mixed:
-                output_mp4 = mixed
+        # ── 11. SFX mixing — always runs (t=0 intro stinger is mandatory) ─────
+        mixed = mix_sfx_into_video(output_mp4, req.impacts or [], job_dir, duration)
+        if mixed:
+            output_mp4 = mixed
 
         # ── 12. Prepend thumbnail freeze-frame (optional) ─────────────────────
         if thumb_clip and thumb_clip.exists():

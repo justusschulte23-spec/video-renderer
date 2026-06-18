@@ -295,6 +295,9 @@ class RenderRequest(BaseModel):
     hook_text:        str
     impacts:          Optional[list] = None
     thumbnail_url:    Optional[str] = None
+    image_cuts:       bool = True                  # full-frame AI image cutaways at keyword moments
+    image_cut_events: Optional[list] = None        # N8N may pass explicit [{time, keyword}] (skips LLM detection)
+    brand_color_primary: str = "#8B5CF6"
 
 
 class ThumbnailRequest(BaseModel):
@@ -1030,6 +1033,80 @@ def _call_fal_flux(prompt: str, negative: str = "") -> str:
         if status in ("FAILED", "ERROR"):
             raise RuntimeError(f"fal.ai flux failed: {result}")
     raise RuntimeError("fal.ai flux polling timed out after 60s")
+
+
+# ── Full-frame image cutaways ─────────────────────────────────────────────────
+IMAGE_CUT_DUR  = 2.0    # seconds on screen
+IMAGE_CUT_FADE = 0.5    # crossfade in/out
+IMAGE_CUT_MAX  = 5      # max cutaways per video
+
+
+def _detect_image_cuts(words: list, duration: float) -> list:
+    """Pick up to IMAGE_CUT_MAX strong visual keywords + timestamps for full-frame cutaways."""
+    if not words or duration < 6:
+        return []
+    sys_p = (
+        "You are a short-form video editor choosing full-frame B-roll image cutaways. From the "
+        "word-level transcript pick the strongest VISUAL moments to illustrate with one AI image each.\n"
+        f"Max {IMAGE_CUT_MAX} cuts. Rules: concrete visual subject (object/brand/place/scene), NOT abstract "
+        "words; space cuts >= 3s apart; none before 1.0s or after duration-2.0s; keyword = 1-3 words, an "
+        "English noun phrase that generates well as an image; time = that word's start time (seconds).\n"
+        'Return ONLY JSON: {"cuts":[{"time":4.2,"keyword":"Tesla Cybertruck"}]}'
+    )
+    try:
+        raw = call_openrouter(sys_p, json.dumps(words),
+                              model="anthropic/claude-haiku-4.5", max_tokens=400)
+        m    = re.search(r'\{.*\}', raw, re.DOTALL)
+        cuts = json.loads(m.group()).get("cuts", []) if m else []
+    except Exception as exc:
+        log.warning("[IMG] cut detection failed: %s", exc)
+        return []
+    clean, last = [], -999.0
+    for c in sorted(cuts, key=lambda x: x.get("time", 0)):
+        try:
+            t = float(c.get("time", -1))
+        except (TypeError, ValueError):
+            continue
+        kw = (c.get("keyword") or "").strip()
+        if not kw or t < 1.0 or t > duration - 2.0 or (t - last) < 3.0:
+            continue
+        clean.append({"time": round(t, 3), "keyword": kw})
+        last = t
+        if len(clean) >= IMAGE_CUT_MAX:
+            break
+    return clean
+
+
+def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float) -> list:
+    """Enrich -> Flux -> download each cut (parallel). Returns [{start,end,path,keyword}] sorted."""
+    if not cuts:
+        return []
+
+    def _gen(idx_cut):
+        idx, c = idx_cut
+        try:
+            enr = _enrich_image_prompt(c["keyword"], accent)
+            url = _call_fal_flux(enr["prompt"], enr["negative"])
+            p   = job_dir / f"cut_{idx}.jpg"
+            if not download_file(url, p):
+                return None
+            start = float(c["time"])
+            end   = min(start + IMAGE_CUT_DUR, duration)
+            if end - start < 0.8:
+                return None
+            return {"start": start, "end": end, "path": p, "keyword": c["keyword"]}
+        except Exception as exc:
+            log.warning("[IMG] cut %s (%s) failed: %s", idx, c.get("keyword"), exc)
+            return None
+
+    prepared = []
+    with ThreadPoolExecutor(max_workers=min(len(cuts), 5)) as pool:
+        for r in pool.map(_gen, list(enumerate(cuts))):
+            if r:
+                prepared.append(r)
+    prepared.sort(key=lambda x: x["start"])
+    log.info("[IMG] %d/%d cutaways generated", len(prepared), len(cuts))
+    return prepared
 
 
 # ── Broll prompt builder ──────────────────────────────────────────────────────
@@ -2552,33 +2629,66 @@ async def render(req: RenderRequest):
         hud_png       = HUD_PATH
         scanlines_png = SCANLINES_PATH
 
+        # ── 9b. Full-frame AI image cutaways (optional) ───────────────────────
+        image_cuts = []
+        if req.image_cuts:
+            loop_ic    = asyncio.get_event_loop()
+            cut_events = req.image_cut_events or _detect_image_cuts(words, duration)
+            if cut_events:
+                image_cuts = await loop_ic.run_in_executor(
+                    None, _prepare_image_cuts, cut_events, job_dir,
+                    req.brand_color_primary, duration)
+
         # ── 10. Final ffmpeg compose ──────────────────────────────────────────
-        log.info("[RENDER] Compositing: broll + divider + facecam + captions")
+        log.info("[RENDER] Compositing: broll + divider + facecam + %d cutaways + captions",
+                 len(image_cuts))
         output_mp4 = job_dir / "output.mp4"
 
         cap_pattern  = str(cap_dir  / "frame_%06d.png")
         prog_pattern = str(prog_dir / "frame_%06d.png")
+        fadeout_start = max(0.0, duration - 1.0)
 
-        fadeout_start  = max(0.0, duration - 1.0)
-        filter_complex = (
-            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];"
-            "[1:v]setsar=1[div];"
-            f"[2:v]zoompan="
-                f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
-                f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
-                f"d=1:s={W}x{FACECAM_H}:fps={FPS},"
-            "setsar=1[face];"
-            "[broll][div][face]vstack=inputs=3[stacked];"
-            "[stacked][5:v]overlay=x=0:y=0[with_scan];"
-            f"[with_scan][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];"
-            "[with_cap][6:v]overlay=x=0:y=0[with_hud];"
-            f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];"
-            f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]"
-        )
+        parts = [
+            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];",
+            "[1:v]setsar=1[div];",
+            (f"[2:v]zoompan="
+             f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
+             f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
+             f"d=1:s={W}x{FACECAM_H}:fps={FPS},setsar=1[face];"),
+            "[broll][div][face]vstack=inputs=3[stacked];",
+            "[stacked][5:v]overlay=x=0:y=0[with_scan];",
+        ]
+
+        # Full-frame image cutaways: alpha crossfade in/out, composited BELOW captions.
+        IMG_BASE     = 7
+        extra_inputs = []
+        prev = "with_scan"
+        for i, cut in enumerate(image_cuts):
+            extra_inputs += ["-loop", "1", "-framerate", str(FPS),
+                             "-t", f"{duration:.3f}", "-i", str(cut["path"])]
+            fout = max(cut["end"] - IMAGE_CUT_FADE, cut["start"])
+            parts.append(
+                f"[{IMG_BASE+i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H},setsar=1,format=rgba,"
+                f"fade=t=in:st={cut['start']:.3f}:d={IMAGE_CUT_FADE}:alpha=1,"
+                f"fade=t=out:st={fout:.3f}:d={IMAGE_CUT_FADE}:alpha=1[cut{i}];"
+            )
+            parts.append(
+                f"[{prev}][cut{i}]overlay=x=0:y=0:"
+                f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[ic{i}];"
+            )
+            prev = f"ic{i}"
+
+        # captions ON TOP of the images, then hud, progress, fade-out
+        parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
+        parts.append("[with_cap][6:v]overlay=x=0:y=0[with_hud];")
+        parts.append(f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];")
+        parts.append(f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
+        filter_complex = "".join(parts)
 
         cmd = [
             "ffmpeg", "-y",
-            "-i", str(broll_final),        # [0]
+            "-i", str(broll_final),         # [0]
             "-i", str(divider_png),         # [1]
             "-i", str(facecam_scaled),      # [2]
             "-framerate", str(FPS),
@@ -2587,6 +2697,7 @@ async def render(req: RenderRequest):
             "-i", prog_pattern,             # [4]
             "-i", str(scanlines_png),       # [5]
             "-i", str(hud_png),             # [6]
+            *extra_inputs,                  # [7..] full-frame image cutaways
             "-filter_complex", filter_complex,
             "-map", "[final]",
             "-map", "2:a",

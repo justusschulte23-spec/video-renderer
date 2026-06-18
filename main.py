@@ -333,6 +333,12 @@ class EnrichImageRequest(BaseModel):
     generate:            bool = False   # also run Flux.1 [schnell] and return image_url
 
 
+class TrimSilenceRequest(BaseModel):
+    facecam: str
+    max_gap: float = 0.30   # gaps <= this stay (natural cadence)
+    pad:     float = 0.05   # silence kept on each side of a trimmed gap
+
+
 class KeyFact(BaseModel):
     value: str
     label: str
@@ -523,6 +529,24 @@ def _resolve_sfx_asset(ev: dict) -> Optional[str]:
     return SFX_LEGACY_MAP.get(ev.get("type"))
 
 
+def _ensure_sfx(asset_id: str) -> bool:
+    """Guarantee the asset file is local — just-in-time download if a boot fetch was
+    missed. Prevents a transient download miss from silently dropping a layer."""
+    p = sfx_local_path(asset_id)
+    if p.exists() and p.stat().st_size > 0:
+        return True
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        r = requests.get(SFX_LIBRARY[asset_id][1], timeout=30)
+        r.raise_for_status()
+        p.write_bytes(r.content)
+        log.info("[SFX] JIT-fetched %s", asset_id)
+        return True
+    except Exception as exc:
+        log.warning("[SFX] JIT fetch failed [%s]: %s", asset_id, exc)
+        return False
+
+
 def _normalize_sfx_events(impacts: list, duration: float) -> list:
     """Build the full layered event list: deterministic t=0 intro + resolved triggers."""
     events = [{"asset": a, "time": 0.0} for a in SFX_INTRO_ASSETS if a in SFX_LIBRARY]
@@ -533,8 +557,11 @@ def _normalize_sfx_events(impacts: list, duration: float) -> list:
         t = float(ev["time"])
         if asset and 0.0 <= t < duration:
             events.append({"asset": asset, "time": t})
-    # keep only assets whose file is present
-    return [e for e in events if sfx_local_path(e["asset"]).exists()]
+    # guarantee each asset is present (JIT download); drop only on hard failure
+    events = [e for e in events if _ensure_sfx(e["asset"])]
+    intro = [e["asset"] for e in events if e["time"] == 0.0]
+    log.info("[SFX] intro layer @ t=0: %s", "+".join(intro) or "NONE")
+    return events
 
 
 def mix_sfx_into_video(video: Path, impacts: list, job_dir: Path, duration: float):
@@ -760,6 +787,73 @@ def transcribe_audio(video_path: Path) -> list:
     except Exception as exc:
         log.error("Whisper transcription failed: %s", exc)
         return []
+
+
+# ── Deterministic max-gap silence trimmer ─────────────────────────────────────
+def _compute_keep_segments(words: list, duration: float,
+                           max_gap: float = 0.30, pad: float = 0.05) -> list:
+    """Max-Gap rule on Whisper word timestamps. Gaps <= max_gap stay (natural cadence);
+    gaps > max_gap keep only `pad` after the previous word and `pad` before the next,
+    the dead-air between is discarded. Leading/trailing dead-air trimmed the same way.
+    Returns the list of (start, end) intervals to KEEP."""
+    if not words:
+        return [(0.0, duration)]
+    removes = []
+    first = float(words[0]["start"])
+    if first > max_gap:
+        removes.append((0.0, max(0.0, first - pad)))
+    for i in range(len(words) - 1):
+        e  = float(words[i]["end"])
+        s2 = float(words[i + 1]["start"])
+        if s2 - e > max_gap:
+            a, b = e + pad, s2 - pad
+            if b > a:
+                removes.append((a, b))
+    last = float(words[-1]["end"])
+    if duration - last > max_gap:
+        removes.append((min(last + pad, duration), duration))
+
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    return [(s, e) for s, e in keeps if e - s > 0.02]
+
+
+def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.015) -> bool:
+    """Cut to the keep-segments. Video = frame-accurate hard jump-cuts; audio = hard
+    concat with a short edge fade-in/out per segment (declick, ~15ms) so there is zero
+    popping AND zero A/V drift (true overlap-crossfade would desync over many cuts)."""
+    if not keeps:
+        return False
+    parts, concat_in = [], []
+    for i, (s, e) in enumerate(keeps):
+        seg = e - s
+        parts.append(f"[0:v]trim={s:.3f}:{e:.3f},setpts=PTS-STARTPTS,fps={FPS},setsar=1[v{i}];")
+        af = f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS"
+        if seg > 2 * edge_fade + 0.01:
+            af += (f",afade=t=in:st=0:d={edge_fade:.3f}"
+                   f",afade=t=out:st={seg - edge_fade:.3f}:d={edge_fade:.3f}")
+        parts.append(af + f"[a{i}];")
+        concat_in.append(f"[v{i}][a{i}]")
+    n = len(keeps)
+    parts.append(f"{''.join(concat_in)}concat=n={n}:v=1:a=1[vout][aout]")
+    cmd = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-filter_complex", "".join(parts),
+        "-map", "[vout]", "-map", "[aout]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("[TRIM] ffmpeg failed: %s", result.stderr[-1200:])
+        return False
+    return True
 
 
 def get_adaptive_font(word: str, max_width: int = W,
@@ -1037,7 +1131,7 @@ def _call_fal_flux(prompt: str, negative: str = "") -> str:
 
 # ── Full-frame image cutaways ─────────────────────────────────────────────────
 IMAGE_CUT_DUR  = 2.0    # seconds on screen
-IMAGE_CUT_FADE = 0.5    # crossfade in/out
+IMAGE_CUT_FADE = 0.15   # crossfade in/out — snappy short-form, minimal UI bleed-through
 IMAGE_CUT_MAX  = 5      # max cutaways per video
 
 
@@ -2656,13 +2750,16 @@ async def render(req: RenderRequest):
              f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
              f"d=1:s={W}x{FACECAM_H}:fps={FPS},setsar=1[face];"),
             "[broll][div][face]vstack=inputs=3[stacked];",
+            # ── Layer 0 (bottom): UI — scanlines + HUD + progress ─────────────
             "[stacked][5:v]overlay=x=0:y=0[with_scan];",
+            "[with_scan][6:v]overlay=x=0:y=0[with_hud];",
+            f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_ui];",
         ]
 
-        # Full-frame image cutaways: alpha crossfade in/out, composited BELOW captions.
+        # ── Layer 1 (middle): full-frame image cutaways MASK the UI in their window ──
         IMG_BASE     = 7
         extra_inputs = []
-        prev = "with_scan"
+        prev = "with_ui"
         for i, cut in enumerate(image_cuts):
             extra_inputs += ["-loop", "1", "-framerate", str(FPS),
                              "-t", f"{duration:.3f}", "-i", str(cut["path"])]
@@ -2679,11 +2776,9 @@ async def render(req: RenderRequest):
             )
             prev = f"ic{i}"
 
-        # captions ON TOP of the images, then hud, progress, fade-out
+        # ── Layer 2 (top): captions — absolute highest, nothing renders above ──
         parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
-        parts.append("[with_cap][6:v]overlay=x=0:y=0[with_hud];")
-        parts.append(f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_prog];")
-        parts.append(f"[with_prog]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
+        parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
         filter_complex = "".join(parts)
 
         cmd = [
@@ -3088,6 +3183,57 @@ async def enrich_image_prompt(req: EnrichImageRequest):
         except Exception as exc:
             result["error"] = str(exc)
     return result
+
+@app.post("/trim-silence")
+async def trim_silence(req: TrimSilenceRequest):
+    """Front-of-pipeline dead-air trimmer. Cuts gaps > max_gap down to `pad` on each
+    side (Max-Gap rule) and returns a NEW tightened facecam URL. Run this FIRST in N8N;
+    everything downstream then works on the already-tight timeline."""
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/trim_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        src = job_dir / "facecam.mp4"
+        if not download_file(req.facecam, src):
+            raise HTTPException(status_code=500, detail="facecam download failed")
+
+        duration = probe_duration(src)
+        words    = transcribe_audio(src)
+        if not words:
+            log.warning("[TRIM] no words — returning original")
+            return {"url": req.facecam, "trimmed": False,
+                    "original_duration": duration, "trimmed_duration": duration}
+
+        keeps   = _compute_keep_segments(words, duration, req.max_gap, req.pad)
+        kept    = round(sum(e - s for s, e in keeps), 3)
+        removed = round(duration - kept, 3)
+        log.info("[TRIM] %d keep-segments, %.2fs -> %.2fs (removed %.2fs)",
+                 len(keeps), duration, kept, removed)
+
+        # not worth re-encoding for <0.2s of dead air
+        if removed < 0.2 or len(keeps) <= 1:
+            return {"url": req.facecam, "trimmed": False,
+                    "original_duration": duration, "trimmed_duration": duration,
+                    "removed": removed}
+
+        out = job_dir / "facecam_trimmed.mp4"
+        if not _trim_dead_air(src, keeps, out):
+            log.warning("[TRIM] trim failed — returning original")
+            return {"url": req.facecam, "trimmed": False,
+                    "original_duration": duration, "trimmed_duration": duration}
+
+        url = upload_cloudinary(out, f"trimmed_{job_id}")
+        log.info("[TRIM] uploaded tightened facecam: %s", url)
+        return {"url": url, "trimmed": True,
+                "original_duration": duration, "trimmed_duration": kept,
+                "removed": removed, "segments": len(keeps)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[TRIM] error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"trim-silence failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 @app.get("/debug/last-broll-scripts")
 def debug_last_broll_scripts():

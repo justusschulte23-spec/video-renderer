@@ -39,6 +39,22 @@ OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 FAL_API_KEY           = os.environ.get("FAL_API_KEY", "")
 FAL_THUMBNAIL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro"
+FAL_FLUX_ENDPOINT      = "https://fal.run/fal-ai/flux/schnell"
+
+# ── Global brand-aesthetic wrapper for dynamic image generation ───────────────
+# Layer 2 (brand environment) + Layer 3 (technical render targets) of the prompt.
+BRAND_IMAGE_AESTHETIC = (
+    "premium cinematic tech aesthetic, deep dark charcoal background (#09090B), "
+    "dramatic amethyst purple (#8B5CF6) and cyan (#06B6D4) rim lighting, subtle silver (#C0C0C0) accents, "
+    "studio color grading, volumetric soft light, faint film grain, high-end 3D product-render look, "
+    "sophisticated minimal composition with generous negative space, "
+    "vertical 9:16 framing, dramatic low-angle hero shot, shallow depth of field, ultra sharp focus, crisp detail"
+)
+BRAND_IMAGE_NEGATIVE = (
+    "text, letters, words, captions, watermark, logo, people, faces, hands, "
+    "distorted, cluttered, busy, oversaturated, rainbow colors, cartoon, anime, "
+    "low quality, blurry, generic stock photo, ugly, amateur, deformed"
+)
 
 # ── Brand colours ─────────────────────────────────────────────────────────────
 AMETHYST      = (139, 92, 246)
@@ -306,6 +322,12 @@ class BrollSyncedRequest(BaseModel):
 
 class DetectImpactsRequest(BaseModel):
     facecam: str
+
+
+class EnrichImageRequest(BaseModel):
+    keyword:             str
+    brand_color_primary: str = "#8B5CF6"
+    generate:            bool = False   # also run Flux.1 [schnell] and return image_url
 
 
 class KeyFact(BaseModel):
@@ -933,6 +955,81 @@ def _call_fal_thumbnail(concept: str, accent: str) -> str:
             raise RuntimeError(f"fal.ai generation failed: {result}")
 
     raise RuntimeError("fal.ai polling timed out after 60s")
+
+
+# ── Image prompt enrichment (3-layer brand pipeline) ──────────────────────────
+def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
+    """Upscale a raw keyword into a full brand-aesthetic generation prompt.
+
+    Layer 1: LLM expands the keyword into a vivid single-hero-object description.
+    Layer 2+3: Python wraps it with the global brand environment + technical targets.
+    Returns {prompt, negative, keyword, subject}.
+    """
+    subject = keyword.strip()
+    try:
+        sys_p = (
+            "You turn a single topic keyword into ONE vivid, concrete visual of a SINGLE hero object "
+            "for an AI image generator. 1-2 sentences, purely physical/visual description of the object "
+            "and its material/form. No people, no text, no background scenery, no camera/lighting terms "
+            "(those are added later). Output ONLY the description."
+        )
+        subject = _strip_fences(str(call_openrouter(
+            sys_p, f"Keyword: {keyword}", model="anthropic/claude-haiku-4.5", max_tokens=120))).strip()
+        if not subject:
+            subject = keyword.strip()
+    except Exception as exc:
+        log.warning("[IMG] enrich LLM failed, using raw keyword: %s", exc)
+        subject = keyword.strip()
+
+    accent_clause = f"key rim light in {accent}" if accent and accent != "#8B5CF6" else ""
+    prompt = (
+        f"{subject}. {BRAND_IMAGE_AESTHETIC}"
+        + (f", {accent_clause}" if accent_clause else "")
+        + ". Single hero subject, centered, isolated, expensive Apple-keynote reveal look."
+    )
+    return {"keyword": keyword, "subject": subject,
+            "prompt": prompt, "negative": BRAND_IMAGE_NEGATIVE}
+
+
+def _call_fal_flux(prompt: str, negative: str = "") -> str:
+    """Generate a 9:16 image via fal.ai Flux.1 [schnell]. Returns image URL."""
+    if not FAL_API_KEY:
+        raise RuntimeError("FAL_API_KEY not set")
+    headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "prompt": prompt,
+        "image_size": "portrait_16_9",
+        "num_images": 1,
+        "num_inference_steps": 4,
+        "enable_safety_checker": False,
+    }
+    resp = requests.post(FAL_FLUX_ENDPOINT, headers=headers, json=payload, timeout=90)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("images"):
+        return data["images"][0]["url"]
+
+    request_id = data.get("request_id")
+    status_url = data.get("status_url") or data.get("response_url")
+    if not status_url and request_id:
+        status_url = f"https://queue.fal.run/fal-ai/flux/requests/{request_id}"
+    if not status_url:
+        raise RuntimeError(f"fal.ai flux unexpected response: {data}")
+    poll_headers = {"Authorization": f"Key {FAL_API_KEY}"}
+    for _ in range(60):
+        time.sleep(1)
+        poll = requests.get(status_url, headers=poll_headers, timeout=30)
+        poll.raise_for_status()
+        result = poll.json()
+        status = result.get("status", "")
+        if status == "COMPLETED":
+            images = (result.get("output") or result).get("images", [])
+            if images:
+                return images[0]["url"]
+            raise RuntimeError("fal.ai flux completed but no images")
+        if status in ("FAILED", "ERROR"):
+            raise RuntimeError(f"fal.ai flux failed: {result}")
+    raise RuntimeError("fal.ai flux polling timed out after 60s")
 
 
 # ── Broll prompt builder ──────────────────────────────────────────────────────
@@ -2864,6 +2961,22 @@ async def generate_infosheet(req: InfosheetRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.post("/enrich-image-prompt")
+async def enrich_image_prompt(req: EnrichImageRequest):
+    """Upscale a raw keyword into a brand-aesthetic image prompt (3-layer). Optionally
+    also generate the image via Flux.1 [schnell]. For reuse by any N8N image node."""
+    loop = asyncio.get_event_loop()
+    enriched = await loop.run_in_executor(
+        _html_executor, lambda: _enrich_image_prompt(req.keyword, req.brand_color_primary))
+    result = dict(enriched)
+    if req.generate:
+        try:
+            result["image_url"] = await loop.run_in_executor(
+                _html_executor, lambda: _call_fal_flux(enriched["prompt"], enriched["negative"]))
+        except Exception as exc:
+            result["error"] = str(exc)
+    return result
 
 @app.get("/debug/last-broll-scripts")
 def debug_last_broll_scripts():

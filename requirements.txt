@@ -8,3 +8,4 @@ Pillow
 python-multipart
 playwright
 httpx
+auto-editor

@@ -39,20 +39,20 @@ OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 FAL_API_KEY           = os.environ.get("FAL_API_KEY", "")
 FAL_THUMBNAIL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro"
-FAL_FLUX_ENDPOINT      = "https://fal.run/fal-ai/flux/schnell"
+FAL_FLUX_ENDPOINT      = "https://fal.run/fal-ai/flux-2/flash"   # Flux 2 [fast]
 
-# ── Global brand-aesthetic wrapper for dynamic image generation ───────────────
-# Layer 2 (brand environment) + Layer 3 (technical render targets) of the prompt.
-BRAND_IMAGE_AESTHETIC = (
-    "premium cinematic tech aesthetic, deep dark charcoal background (#09090B), "
-    "dramatic amethyst purple (#8B5CF6) and cyan (#06B6D4) rim lighting, subtle silver (#C0C0C0) accents, "
-    "studio color grading, volumetric soft light, faint film grain, high-end 3D product-render look, "
-    "sophisticated minimal composition with generous negative space, "
-    "vertical 9:16 framing, dramatic low-angle hero shot, shallow depth of field, ultra sharp focus, crisp detail"
+# Camera/brand enforcement tail appended to every image prompt (belt & suspenders
+# on top of the global enricher) — forces photorealism + brand identity.
+BRAND_IMAGE_TAIL = (
+    "Amethyst (#8B5CF6) and cyan (#06B6D4) razor-sharp rim lighting on a dark cinematic "
+    "studio background, shot on 35mm anamorphic lens, Arri Alexa, cinematic volumetric "
+    "lighting, sharp focus on hardware textures, shallow depth of field, corporate thriller "
+    "aesthetic, photorealistic, 8k"
 )
 BRAND_IMAGE_NEGATIVE = (
-    "text, letters, words, captions, watermark, logo, people, faces, hands, "
-    "distorted, cluttered, busy, oversaturated, rainbow colors, cartoon, anime, "
+    "abstract shapes, glowing orb, floating glass sphere, neon cube, hologram network, "
+    "digital particles, 3D render look, text, letters, words, captions, watermark, logo, "
+    "people, faces, hands, distorted, cluttered, oversaturated, rainbow, cartoon, anime, "
     "low quality, blurry, generic stock photo, ugly, amateur, deformed"
 )
 
@@ -760,8 +760,10 @@ def make_gradient_png(path: Path, w: int, h: int,
     img.save(str(path))
 
 
-def transcribe_audio(video_path: Path) -> list:
-    """Returns list of {word, start, end} or [] on failure."""
+def transcribe_audio(video_path: Path, prompt: str = "") -> list:
+    """Returns list of {word, start, end} or [] on failure.
+    `prompt` biases Whisper to KEEP disfluencies (äh/ähm) instead of cleaning them up —
+    used by the filler-word trimmer. Leave empty for normal clean transcription."""
     try:
         log.info("Extracting audio for Whisper …")
         audio_path = video_path.parent / "audio.mp3"
@@ -772,13 +774,15 @@ def transcribe_audio(video_path: Path) -> list:
         ], check=True, capture_output=True)
 
         log.info("Calling Whisper API …")
+        kwargs = {
+            "model": "whisper-1",
+            "response_format": "verbose_json",
+            "timestamp_granularities": ["word"],
+        }
+        if prompt:
+            kwargs["prompt"] = prompt
         with open(audio_path, "rb") as af:
-            resp = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=af,
-                response_format="verbose_json",
-                timestamp_granularities=["word"],
-            )
+            resp = openai_client.audio.transcriptions.create(file=af, **kwargs)
         words = []
         for w in (resp.words or []):
             words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
@@ -852,6 +856,56 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         log.error("[TRIM] ffmpeg failed: %s", result.stderr[-1200:])
+        return False
+    return True
+
+
+# Force Whisper to KEEP fillers so we can cut them deterministically.
+WHISPER_FILLER_PROMPT = "Äh, hallo. Ähm, in diesem Video geht es um Deep-Tech. Öhm, ja genau."
+
+# ONLY pure acoustic fillers — never contextual words (halt, so, ja).
+FILLER_WORDS = {"äh", "ähm", "öhm", "öh", "ähem", "uh", "uhm", "hm", "hmm", "äm", "em"}
+
+
+def _filler_keep_segments(words: list, duration: float, pad: float = 0.02) -> list:
+    """Keep-segments with pure acoustic filler words ('äh'/'ähm'/...) removed.
+    Matching is normalized (lowercase, punctuation/ellipsis stripped)."""
+    removes = []
+    for w in words:
+        tok = re.sub(r"[^\wäöü]", "", str(w.get("word", "")).lower())
+        if tok in FILLER_WORDS:
+            a, b = max(0.0, float(w["start"]) - pad), min(duration, float(w["end"]) + pad)
+            if b > a:
+                removes.append((a, b))
+    if not removes:
+        return [(0.0, duration)], 0
+    removes.sort()
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    return [(s, e) for s, e in keeps if e - s > 0.02], len(removes)
+
+
+def _run_auto_editor(input_path: Path, output_path: Path) -> bool:
+    """Phase 2: waveform dead-air trim. Returns True on success, False to fall back."""
+    cmd = [
+        "auto-editor", str(input_path),
+        "--edit", "audio:-35dB",   # noise-floor threshold
+        "--margin", "0.12s",       # 120ms safety padding so words aren't shaved
+        "--no-open",
+        "--output", str(output_path),
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except Exception as exc:
+        log.warning("[TRIM] auto-editor not runnable: %s", exc)
+        return False
+    if r.returncode != 0 or not output_path.exists():
+        log.warning("[TRIM] auto-editor failed (rc=%s): %s", r.returncode, (r.stderr or "")[-600:])
         return False
     return True
 
@@ -1055,41 +1109,74 @@ def _call_fal_thumbnail(concept: str, accent: str) -> str:
 
 
 # ── Image prompt enrichment (3-layer brand pipeline) ──────────────────────────
-def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
-    """Upscale a raw keyword into a full brand-aesthetic generation prompt.
+# Global, script-aware visual enricher — drives photorealistic hardware cutaways.
+GLOBAL_VISUAL_ENRICHER_PROMPT = """You are the Lead Visual Designer for an elite tech channel. Read the ENTIRE script below, digest its global narrative atmosphere ("Deep-Tech Thriller / Silicon Valley Industrial Espionage / High-End Medical Pivot"), and generate hyper-realistic, concrete image prompts for the requested keyword moments.
 
-    Layer 1: LLM expands the keyword into a vivid single-hero-object description.
-    Layer 2+3: Python wraps it with the global brand environment + technical targets.
-    Returns {prompt, negative, keyword, subject}.
-    """
+CRITICAL VISUAL RULES:
+1. STRICTLY NO ABSTRACT ELEMENTS: never glowing orbs, floating glass spheres, neon cubes, or generic digital hologram networks.
+2. PHOTOREALISM & PREMIUM HARDWARE: every image must look like a physical, tangible photograph — matte industrial design, brushed titanium, anodized aluminium, high-end medical equipment designed like Apple, clean lab environments, or high-tech manufacturing plants.
+3. BRAND COLORS: dark cinematic studio backgrounds with razor-sharp rim-lighting in Amethyst (#8B5CF6) and Cyan (#06B6D4).
+4. CAMERA SPECIFICATIONS: append advanced cinematic camera config to every prompt (e.g. "shot on 35mm anamorphic lens, Arri Alexa, cinematic volumetric lighting, sharp focus on hardware textures, shallow depth of field, corporate thriller aesthetic, 8k").
+
+GLOBAL SCRIPT CONTEXT:
+{INSERT_FULL_VIDEO_SCRIPT_HERE}
+
+OUTPUT FORMAT: a highly descriptive, concrete, hardware-focused prompt for each requested keyword that directly visualizes the script's core concepts."""
+
+
+def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
+    """Single-keyword enrichment (used by the standalone /enrich-image-prompt endpoint).
+    Photorealistic tangible hardware — never abstract shapes. Returns {prompt,negative,...}."""
     subject = keyword.strip()
     try:
         sys_p = (
-            "You turn a single topic keyword into ONE vivid, concrete visual of a SINGLE hero object "
-            "for an AI image generator. 1-2 sentences, purely physical/visual description of the object "
-            "and its material/form. No people, no text, no background scenery, no camera/lighting terms "
-            "(those are added later). Output ONLY the description."
+            "Turn a keyword into ONE concrete, photorealistic description of a SINGLE tangible, "
+            "high-end hardware object (matte industrial design, brushed titanium, anodized aluminium, "
+            "premium medical/lab equipment, clean tech). NO abstract shapes, NO glowing orbs/holograms, "
+            "no people, no text. 1-2 sentences, object + material/form only."
         )
         subject = _strip_fences(str(call_openrouter(
-            sys_p, f"Keyword: {keyword}", model="anthropic/claude-haiku-4.5", max_tokens=120))).strip()
-        if not subject:
-            subject = keyword.strip()
+            sys_p, f"Keyword: {keyword}", model="anthropic/claude-haiku-4.5", max_tokens=120))).strip() \
+            or keyword.strip()
     except Exception as exc:
         log.warning("[IMG] enrich LLM failed, using raw keyword: %s", exc)
         subject = keyword.strip()
-
-    accent_clause = f"key rim light in {accent}" if accent and accent != "#8B5CF6" else ""
-    prompt = (
-        f"{subject}. {BRAND_IMAGE_AESTHETIC}"
-        + (f", {accent_clause}" if accent_clause else "")
-        + ". Single hero subject, centered, isolated, expensive Apple-keynote reveal look."
-    )
+    prompt = f"{subject}. {BRAND_IMAGE_TAIL}."
     return {"keyword": keyword, "subject": subject,
             "prompt": prompt, "negative": BRAND_IMAGE_NEGATIVE}
 
 
+def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6") -> list:
+    """Batch enrichment: ONE LLM call sees the WHOLE script + all keyword moments and
+    returns a concrete hardware-focused prompt per cut. Falls back per-keyword on failure.
+    Returns a list of prompt strings aligned to `cuts`."""
+    if not cuts:
+        return []
+    kw = "\n".join(f'{i+1}. "{c["keyword"]}"' for i, c in enumerate(cuts))
+    sys_p = GLOBAL_VISUAL_ENRICHER_PROMPT.replace("{INSERT_FULL_VIDEO_SCRIPT_HERE}", (script or "")[:6000])
+    user = ('Generate ONE photorealistic, hardware-focused prompt per keyword below.\n'
+            'Return ONLY JSON: {"prompts":[{"i":1,"prompt":"..."}]}\n\nKEYWORDS:\n' + kw)
+    prompts = [None] * len(cuts)
+    try:
+        raw = call_openrouter(sys_p, user, model="anthropic/claude-sonnet-4.6", max_tokens=2500)
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        for item in (json.loads(m.group()).get("prompts", []) if m else []):
+            idx = int(item.get("i", 0)) - 1
+            if 0 <= idx < len(cuts) and item.get("prompt"):
+                prompts[idx] = str(item["prompt"]).strip()
+    except Exception as exc:
+        log.warning("[IMG] global script enrich failed, per-keyword fallback: %s", exc)
+    out = []
+    for i, c in enumerate(cuts):
+        p = prompts[i] or _enrich_image_prompt(c["keyword"], accent)["prompt"]
+        if "anamorphic" not in p.lower():        # ensure camera/brand tail present
+            p = f"{p}. {BRAND_IMAGE_TAIL}."
+        out.append(p)
+    return out
+
+
 def _call_fal_flux(prompt: str, negative: str = "") -> str:
-    """Generate a 9:16 image via fal.ai Flux.1 [schnell]. Returns image URL."""
+    """Generate a 9:16 image via fal.ai Flux 2 [flash]. Returns image URL."""
     if not FAL_API_KEY:
         raise RuntimeError("FAL_API_KEY not set")
     headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
@@ -1097,10 +1184,10 @@ def _call_fal_flux(prompt: str, negative: str = "") -> str:
         "prompt": prompt,
         "image_size": "portrait_16_9",
         "num_images": 1,
-        "num_inference_steps": 4,
-        "enable_safety_checker": False,
+        "guidance_scale": 2.5,
+        "output_format": "jpeg",
     }
-    resp = requests.post(FAL_FLUX_ENDPOINT, headers=headers, json=payload, timeout=90)
+    resp = requests.post(FAL_FLUX_ENDPOINT, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
     data = resp.json()
     if data.get("images"):
@@ -1109,7 +1196,7 @@ def _call_fal_flux(prompt: str, negative: str = "") -> str:
     request_id = data.get("request_id")
     status_url = data.get("status_url") or data.get("response_url")
     if not status_url and request_id:
-        status_url = f"https://queue.fal.run/fal-ai/flux/requests/{request_id}"
+        status_url = f"https://queue.fal.run/fal-ai/flux-2/requests/{request_id}"
     if not status_url:
         raise RuntimeError(f"fal.ai flux unexpected response: {data}")
     poll_headers = {"Authorization": f"Key {FAL_API_KEY}"}
@@ -1171,16 +1258,19 @@ def _detect_image_cuts(words: list, duration: float) -> list:
     return clean
 
 
-def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float) -> list:
-    """Enrich -> Flux -> download each cut (parallel). Returns [{start,end,path,keyword}] sorted."""
+def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float,
+                        script: str = "") -> list:
+    """Global-script enrich -> Flux 2 -> download each cut (parallel).
+    Returns [{start,end,path,keyword}] sorted."""
     if not cuts:
         return []
+
+    prompts = _enrich_image_prompts(script, cuts, accent)   # one LLM call, whole-script aware
 
     def _gen(idx_cut):
         idx, c = idx_cut
         try:
-            enr = _enrich_image_prompt(c["keyword"], accent)
-            url = _call_fal_flux(enr["prompt"], enr["negative"])
+            url = _call_fal_flux(prompts[idx], BRAND_IMAGE_NEGATIVE)
             p   = job_dir / f"cut_{idx}.jpg"
             if not download_file(url, p):
                 return None
@@ -2729,9 +2819,10 @@ async def render(req: RenderRequest):
             loop_ic    = asyncio.get_event_loop()
             cut_events = req.image_cut_events or _detect_image_cuts(words, duration)
             if cut_events:
+                script_ctx = " ".join(w.get("word", "") for w in words)   # whole-script context for the enricher
                 image_cuts = await loop_ic.run_in_executor(
                     None, _prepare_image_cuts, cut_events, job_dir,
-                    req.brand_color_primary, duration)
+                    req.brand_color_primary, duration, script_ctx)
 
         # ── 10. Final ffmpeg compose ──────────────────────────────────────────
         log.info("[RENDER] Compositing: broll + divider + facecam + %d cutaways + captions",
@@ -3186,9 +3277,10 @@ async def enrich_image_prompt(req: EnrichImageRequest):
 
 @app.post("/trim-silence")
 async def trim_silence(req: TrimSilenceRequest):
-    """Front-of-pipeline dead-air trimmer. Cuts gaps > max_gap down to `pad` on each
-    side (Max-Gap rule) and returns a NEW tightened facecam URL. Run this FIRST in N8N;
-    everything downstream then works on the already-tight timeline."""
+    """Front-of-pipeline 2-phase auto-cut. Phase 1 kills acoustic filler words
+    (äh/ähm) via Whisper forced-alignment; Phase 2 trims remaining dead air with
+    auto-editor (waveform). Returns a NEW tightened facecam URL. Run this FIRST in
+    N8N — everything downstream then works on the finalized clean timeline."""
     job_id  = str(uuid.uuid4())
     job_dir = Path(f"/tmp/trim_{job_id}")
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -3196,37 +3288,48 @@ async def trim_silence(req: TrimSilenceRequest):
         src = job_dir / "facecam.mp4"
         if not download_file(req.facecam, src):
             raise HTTPException(status_code=500, detail="facecam download failed")
+        orig_dur = probe_duration(src)
 
-        duration = probe_duration(src)
-        words    = transcribe_audio(src)
-        if not words:
-            log.warning("[TRIM] no words — returning original")
+        # ── PHASE 1: acoustic filler-word killer ──────────────────────────────
+        current   = src
+        n_fillers = 0
+        words = transcribe_audio(src, prompt=WHISPER_FILLER_PROMPT)
+        if words:
+            keeps, n_fillers = _filler_keep_segments(words, orig_dur)
+            if n_fillers > 0 and len(keeps) >= 1:
+                p1 = job_dir / "phase1.mp4"
+                if _trim_dead_air(src, keeps, p1):   # video hard-cut + 15ms edge declick
+                    current = p1
+                    log.info("[TRIM] phase1: cut %d filler word(s)", n_fillers)
+        else:
+            log.warning("[TRIM] phase1: no transcript — skipping filler cut")
+
+        # ── PHASE 2: waveform dead-air trim (auto-editor) ─────────────────────
+        p2 = job_dir / "phase2.mp4"
+        if _run_auto_editor(current, p2):
+            current = p2
+            log.info("[TRIM] phase2: auto-editor dead-air trim done")
+
+        # ── result ────────────────────────────────────────────────────────────
+        if current == src:
+            log.info("[TRIM] nothing to cut — returning original")
             return {"url": req.facecam, "trimmed": False,
-                    "original_duration": duration, "trimmed_duration": duration}
+                    "original_duration": orig_dur, "trimmed_duration": orig_dur,
+                    "removed": 0.0, "fillers_cut": n_fillers}
 
-        keeps   = _compute_keep_segments(words, duration, req.max_gap, req.pad)
-        kept    = round(sum(e - s for s, e in keeps), 3)
-        removed = round(duration - kept, 3)
-        log.info("[TRIM] %d keep-segments, %.2fs -> %.2fs (removed %.2fs)",
-                 len(keeps), duration, kept, removed)
-
-        # not worth re-encoding for <0.2s of dead air
-        if removed < 0.2 or len(keeps) <= 1:
+        final_dur = probe_duration(current)
+        removed   = round(orig_dur - final_dur, 3)
+        if removed < 0.2:
             return {"url": req.facecam, "trimmed": False,
-                    "original_duration": duration, "trimmed_duration": duration,
-                    "removed": removed}
+                    "original_duration": orig_dur, "trimmed_duration": orig_dur,
+                    "removed": removed, "fillers_cut": n_fillers}
 
-        out = job_dir / "facecam_trimmed.mp4"
-        if not _trim_dead_air(src, keeps, out):
-            log.warning("[TRIM] trim failed — returning original")
-            return {"url": req.facecam, "trimmed": False,
-                    "original_duration": duration, "trimmed_duration": duration}
-
-        url = upload_cloudinary(out, f"trimmed_{job_id}")
-        log.info("[TRIM] uploaded tightened facecam: %s", url)
+        url = upload_cloudinary(current, f"trimmed_{job_id}")
+        log.info("[TRIM] %.2fs -> %.2fs (removed %.2fs, %d fillers) -> %s",
+                 orig_dur, final_dur, removed, n_fillers, url)
         return {"url": url, "trimmed": True,
-                "original_duration": duration, "trimmed_duration": kept,
-                "removed": removed, "segments": len(keeps)}
+                "original_duration": orig_dur, "trimmed_duration": final_dur,
+                "removed": removed, "fillers_cut": n_fillers}
     except HTTPException:
         raise
     except Exception as exc:

@@ -56,12 +56,57 @@ BRAND_IMAGE_NEGATIVE = (
     "low quality, blurry, generic stock photo, ugly, amateur, deformed"
 )
 
-# ── Brand colours ─────────────────────────────────────────────────────────────
+# ── Brand colours (Justus defaults — used when no client template) ────────────
 AMETHYST      = (139, 92, 246)
 AMETHYST_DARK = (124, 58, 237)
 SILVER        = (192, 192, 192)
 BG            = (8, 8, 8)
 WHITE         = (255, 255, 255)
+
+# ── Multi-tenant template loader ──────────────────────────────────────────────
+SUPABASE_URL         = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+_TEMPLATE_CACHE: dict = {}
+
+
+def _hex_rgb(h, default=(139, 92, 246)):
+    """'#8B5CF6' -> (139,92,246). Falls back to default on bad input."""
+    try:
+        h = str(h).lstrip("#")
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except Exception:
+        return default
+
+
+def _load_template(client_id: Optional[str], inline: Optional[dict]) -> dict:
+    """Resolve a client's visual template. inline dict wins; else fetch from Supabase
+    by client_id -> template_id -> client_templates. Returns {} when nothing found
+    (every downstream reader then falls back to the Justus default = no behaviour change)."""
+    if inline:
+        return inline
+    if not client_id or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {}
+    if client_id in _TEMPLATE_CACHE:
+        return _TEMPLATE_CACHE[client_id]
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    try:
+        c = requests.get(f"{SUPABASE_URL}/rest/v1/clients",
+                         params={"client_id": f"eq.{client_id}", "select": "template_id"},
+                         headers=hdr, timeout=15).json()
+        tid = (c[0]["template_id"] if c else None) or "default"
+        t = requests.get(f"{SUPABASE_URL}/rest/v1/client_templates",
+                         params={"template_id": f"eq.{tid}", "select": "*"},
+                         headers=hdr, timeout=15).json()
+        tpl = t[0] if t else {}
+    except Exception as exc:
+        log.warning("[TPL] load failed for %s: %s — using Justus defaults", client_id, exc)
+        tpl = {}
+    _TEMPLATE_CACHE[client_id] = tpl
+    return tpl
+
+
+def _tpl_colors(tpl: dict) -> dict:
+    return (tpl or {}).get("colors") or {}
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 W, H, FPS         = 1080, 1920, 30
@@ -232,55 +277,62 @@ def _bootstrap_sfx():
 _bootstrap_sfx()
 
 
-def _generate_scanlines():
+def _generate_scanlines(out_path: Path = SCANLINES_PATH, tpl: dict = None):
+    sc      = (tpl or {}).get("scanlines") or {}
+    opacity = float(sc.get("opacity", 0.08))
     img  = Image.new("RGBA", (W, BROLL_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for y in range(0, BROLL_H, 4):
-        draw.rectangle([0, y, W, y + 1], fill=(0, 0, 0, int(255 * 0.08)))
-    img.save(str(SCANLINES_PATH))
-    log.info("Scanlines PNG generated")
+        draw.rectangle([0, y, W, y + 1], fill=(0, 0, 0, int(255 * opacity)))
+    img.save(str(out_path))
 
 
-def _generate_hud():
+def _generate_hud(out_path: Path = HUD_PATH, tpl: dict = None):
+    hud     = (tpl or {}).get("hud") or {}
+    cols    = _tpl_colors(tpl)
+    primary = _hex_rgb(cols.get("primary"), AMETHYST)
+    secondary = _hex_rgb(cols.get("secondary"), SILVER)
+    corner  = _hex_rgb(hud.get("corner_color"), primary)
+    handle  = hud.get("handle", "@JUSTUS.AUTOMATES")
+    tag     = hud.get("tag", "AI · DEEPTECH")
     img     = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw    = ImageDraw.Draw(img)
     font_sm = ImageFont.truetype(str(FONT_SEMIBOLD), 22)
     lw, m, arm = 4, 24, 55
 
-    draw.line([m, m, m, m+arm],           fill=(*AMETHYST, 178), width=lw)
-    draw.line([m, m, m+arm, m],           fill=(*AMETHYST, 178), width=lw)
-    draw.line([W-m, m, W-m, m+arm],       fill=(*SILVER,   128), width=lw)
-    draw.line([W-m, m, W-m-arm, m],       fill=(*SILVER,   128), width=lw)
+    draw.line([m, m, m, m+arm],           fill=(*corner, 178), width=lw)
+    draw.line([m, m, m+arm, m],           fill=(*corner, 178), width=lw)
+    draw.line([W-m, m, W-m, m+arm],       fill=(*secondary, 128), width=lw)
+    draw.line([W-m, m, W-m-arm, m],       fill=(*secondary, 128), width=lw)
     bl_y = H - m
-    draw.line([m, bl_y, m, bl_y-arm],     fill=(*AMETHYST, 102), width=lw)
-    draw.line([m, bl_y, m+arm, bl_y],     fill=(*AMETHYST, 102), width=lw)
+    draw.line([m, bl_y, m, bl_y-arm],     fill=(*corner, 102), width=lw)
+    draw.line([m, bl_y, m+arm, bl_y],     fill=(*corner, 102), width=lw)
 
     dot_x, dot_y = m, m + arm + 28
-    draw.ellipse([dot_x-8, dot_y-8, dot_x+8, dot_y+8], fill=(*AMETHYST, 204))
-    draw.text((dot_x + 20, dot_y - 11), "LIVE", font=font_sm, fill=(*AMETHYST, 178))
+    draw.ellipse([dot_x-8, dot_y-8, dot_x+8, dot_y+8], fill=(*corner, 204))
+    draw.text((dot_x + 20, dot_y - 11), "LIVE", font=font_sm, fill=(*corner, 178))
     draw.text((W - m - 5, m + arm + 16), "AI.DEEP",
-              font=font_sm, fill=(*SILVER, 128), anchor="rs")
+              font=font_sm, fill=(*secondary, 128), anchor="rs")
 
     pill_w, pill_h = 220, 52
     pill_x = W - m - pill_w
     pill_y = H - m - pill_h - 10
     draw.rounded_rectangle(
         [pill_x, pill_y, pill_x+pill_w, pill_y+pill_h],
-        radius=14, fill=(*AMETHYST, 38), outline=(*AMETHYST, 128), width=2
+        radius=14, fill=(*corner, 38), outline=(*corner, 128), width=2
     )
     draw.text((pill_x + pill_w//2, pill_y + pill_h//2),
-              "AI · DEEPTECH", font=font_sm, fill=(*AMETHYST, 230), anchor="mm")
+              tag, font=font_sm, fill=(*corner, 230), anchor="mm")
 
     wm_y = H - m - pill_h - 60
-    draw.text((m + arm + 20, wm_y), "@JUSTUS.AUTOMATES",
-              font=font_sm, fill=(*AMETHYST, 140))
+    draw.text((m + arm + 20, wm_y), handle, font=font_sm, fill=(*corner, 140))
 
-    img.save(str(HUD_PATH))
-    log.info("HUD PNG generated")
+    img.save(str(out_path))
 
 
 _generate_scanlines()
 _generate_hud()
+log.info("Scanlines + HUD PNG generated (Justus default)")
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -298,6 +350,8 @@ class RenderRequest(BaseModel):
     image_cuts:       bool = True                  # full-frame AI image cutaways at keyword moments
     image_cut_events: Optional[list] = None        # N8N may pass explicit [{time, keyword}] (skips LLM detection)
     brand_color_primary: str = "#8B5CF6"
+    client_id:        Optional[str] = None         # multi-tenant: resolves visual template from Supabase
+    template:         Optional[dict] = None         # OR pass the template JSON inline (wins over client_id)
 
 
 class ThumbnailRequest(BaseModel):
@@ -922,9 +976,35 @@ def get_adaptive_font(word: str, max_width: int = W,
     return ImageFont.truetype(str(FONT_BLACK), min_size), min_size
 
 
-def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
+# Justus default caption style; a client template can override fill/strokes/size.
+_CAP_DEFAULT = {
+    "fill": (255, 255, 255, 255),
+    "strokes": [(109, 40, 217, 100), (139, 92, 246, 160), (124, 58, 237, 230)],
+    "size": CAPTION_FONT_SIZE,
+    "font_path": str(FONT_BLACK),
+}
+
+
+def _caption_style(tpl: dict) -> dict:
+    """Resolve caption style from template, falling back to Justus defaults."""
+    cap  = (tpl or {}).get("captions") or {}
+    cols = _tpl_colors(tpl)
+    st   = dict(_CAP_DEFAULT)
+    if cols.get("caption_fill"):
+        st["fill"] = (*_hex_rgb(cols["caption_fill"], (255, 255, 255)), 255)
+    strokes = cols.get("caption_strokes")
+    if isinstance(strokes, list) and len(strokes) == 3:
+        alphas = [100, 160, 230]
+        st["strokes"] = [(*_hex_rgb(strokes[i]), alphas[i]) for i in range(3)]
+    if cap.get("size"):
+        st["size"] = int(cap["size"])
+    return st
+
+
+def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0, style: dict = None):
+    style           = style or _CAP_DEFAULT
     draw            = ImageDraw.Draw(img)
-    font, actual_size = get_adaptive_font(word, max_size=int(CAPTION_FONT_SIZE * scale))
+    font, actual_size = get_adaptive_font(word, max_size=int(style["size"] * scale))
 
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
     tw   = bbox[2] - bbox[0]
@@ -935,23 +1015,18 @@ def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0):
     outer_stroke = max(8, int(actual_size * 0.17))
     mid_stroke   = max(5, int(actual_size * 0.09))
     inner_stroke = max(3, int(actual_size * 0.04))
+    s0, s1, s2 = style["strokes"]
 
-    draw.text((x, y), word, font=font,
-              fill=(0, 0, 0, 0),
-              stroke_fill=(109, 40, 217, 100),
-              stroke_width=outer_stroke)
-    draw.text((x, y), word, font=font,
-              fill=(0, 0, 0, 0),
-              stroke_fill=(139, 92, 246, 160),
-              stroke_width=mid_stroke)
-    draw.text((x, y), word, font=font,
-              fill=(255, 255, 255, 255),
-              stroke_fill=(124, 58, 237, 230),
-              stroke_width=inner_stroke)
+    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0),
+              stroke_fill=s0, stroke_width=outer_stroke)
+    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0),
+              stroke_fill=s1, stroke_width=mid_stroke)
+    draw.text((x, y), word, font=font, fill=style["fill"],
+              stroke_fill=s2, stroke_width=inner_stroke)
 
 
 def build_caption_frames(words: list, total_frames: int,
-                         cap_dir: Path, gradient_base: Path):
+                         cap_dir: Path, gradient_base: Path, style: dict = None):
     cap_dir.mkdir(parents=True, exist_ok=True)
     log.info("Rendering %d caption frames …", total_frames)
 
@@ -986,7 +1061,7 @@ def build_caption_frames(words: list, total_frames: int,
                 scale = pulse_map.get(offset % 3, 1.0)
             else:
                 scale = 1.0
-            _draw_caption_frame(img, word, scale)
+            _draw_caption_frame(img, word, scale, style)
 
         out = cap_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))
@@ -994,7 +1069,8 @@ def build_caption_frames(words: list, total_frames: int,
     log.info("Caption frames done")
 
 
-def build_progress_frames(total_frames: int, prog_dir: Path):
+def build_progress_frames(total_frames: int, prog_dir: Path, colors: tuple = None):
+    left, right = colors or (AMETHYST, SILVER)
     prog_dir.mkdir(parents=True, exist_ok=True)
     log.info("Rendering %d progress frames …", total_frames)
     for frame_n in range(total_frames):
@@ -1004,9 +1080,9 @@ def build_progress_frames(total_frames: int, prog_dir: Path):
         if fw > 0:
             for x in range(fw):
                 t = x / (W - 1)
-                r = int(AMETHYST[0] + t * (SILVER[0] - AMETHYST[0]))
-                g = int(AMETHYST[1] + t * (SILVER[1] - AMETHYST[1]))
-                b = int(AMETHYST[2] + t * (SILVER[2] - AMETHYST[2]))
+                r = int(left[0] + t * (right[0] - left[0]))
+                g = int(left[1] + t * (right[1] - left[1]))
+                b = int(left[2] + t * (right[2] - left[2]))
                 draw.line([(x, 0), (x, PROGRESS_H - 1)], fill=(r, g, b, 255))
         out = prog_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))
@@ -1146,15 +1222,19 @@ def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
             "prompt": prompt, "negative": BRAND_IMAGE_NEGATIVE}
 
 
-def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6") -> list:
+def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6",
+                          img_cfg: dict = None) -> list:
     """Batch enrichment: ONE LLM call sees the WHOLE script + all keyword moments and
-    returns a concrete hardware-focused prompt per cut. Falls back per-keyword on failure.
-    Returns a list of prompt strings aligned to `cuts`."""
+    returns a concrete prompt per cut. img_cfg (client template) can override the global
+    enricher prompt + the brand/camera tail; defaults to Justus constants."""
     if not cuts:
         return []
+    img_cfg  = img_cfg or {}
+    enricher = img_cfg.get("enricher_prompt") or GLOBAL_VISUAL_ENRICHER_PROMPT
+    tail     = img_cfg.get("tail") or BRAND_IMAGE_TAIL
     kw = "\n".join(f'{i+1}. "{c["keyword"]}"' for i, c in enumerate(cuts))
-    sys_p = GLOBAL_VISUAL_ENRICHER_PROMPT.replace("{INSERT_FULL_VIDEO_SCRIPT_HERE}", (script or "")[:6000])
-    user = ('Generate ONE photorealistic, hardware-focused prompt per keyword below.\n'
+    sys_p = enricher.replace("{INSERT_FULL_VIDEO_SCRIPT_HERE}", (script or "")[:6000])
+    user = ('Generate ONE concrete image prompt per keyword below.\n'
             'Return ONLY JSON: {"prompts":[{"i":1,"prompt":"..."}]}\n\nKEYWORDS:\n' + kw)
     prompts = [None] * len(cuts)
     try:
@@ -1168,17 +1248,19 @@ def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6") -> l
         log.warning("[IMG] global script enrich failed, per-keyword fallback: %s", exc)
     out = []
     for i, c in enumerate(cuts):
-        p = prompts[i] or _enrich_image_prompt(c["keyword"], accent)["prompt"]
-        if "anamorphic" not in p.lower():        # ensure camera/brand tail present
-            p = f"{p}. {BRAND_IMAGE_TAIL}."
+        p = prompts[i] or (_enrich_image_prompt(c["keyword"], accent)["subject"] + f". {tail}.")
+        tail_marker = (tail.split()[0] if tail else "anamorphic").lower()
+        if tail_marker not in p.lower():
+            p = f"{p}. {tail}."
         out.append(p)
     return out
 
 
-def _call_fal_flux(prompt: str, negative: str = "") -> str:
-    """Generate a 9:16 image via fal.ai Flux 2 [flash]. Returns image URL."""
+def _call_fal_flux(prompt: str, negative: str = "", endpoint: str = None) -> str:
+    """Generate a 9:16 image via fal.ai Flux 2 [flash] (or a per-template endpoint)."""
     if not FAL_API_KEY:
         raise RuntimeError("FAL_API_KEY not set")
+    endpoint = endpoint or FAL_FLUX_ENDPOINT
     headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "prompt": prompt,
@@ -1187,7 +1269,7 @@ def _call_fal_flux(prompt: str, negative: str = "") -> str:
         "guidance_scale": 2.5,
         "output_format": "jpeg",
     }
-    resp = requests.post(FAL_FLUX_ENDPOINT, headers=headers, json=payload, timeout=120)
+    resp = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
     data = resp.json()
     if data.get("images"):
@@ -1259,18 +1341,20 @@ def _detect_image_cuts(words: list, duration: float) -> list:
 
 
 def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float,
-                        script: str = "") -> list:
+                        script: str = "", img_cfg: dict = None) -> list:
     """Global-script enrich -> Flux 2 -> download each cut (parallel).
-    Returns [{start,end,path,keyword}] sorted."""
+    img_cfg (client template) overrides enricher/tail/negative/model. Default = Justus."""
     if not cuts:
         return []
-
-    prompts = _enrich_image_prompts(script, cuts, accent)   # one LLM call, whole-script aware
+    img_cfg  = img_cfg or {}
+    negative = img_cfg.get("negative") or BRAND_IMAGE_NEGATIVE
+    endpoint = (f"https://fal.run/{img_cfg['model']}" if img_cfg.get("model") else None)
+    prompts = _enrich_image_prompts(script, cuts, accent, img_cfg)   # one LLM call, whole-script aware
 
     def _gen(idx_cut):
         idx, c = idx_cut
         try:
-            url = _call_fal_flux(prompts[idx], BRAND_IMAGE_NEGATIVE)
+            url = _call_fal_flux(prompts[idx], negative, endpoint)
             p   = job_dir / f"cut_{idx}.jpg"
             if not download_file(url, p):
                 return None
@@ -2752,6 +2836,22 @@ async def render(req: RenderRequest):
                     log.warning("[RENDER] thumbnail clip creation failed: %s", exc)
                     thumb_clip = None
 
+        # ── 0. Resolve client visual template (empty = Justus defaults) ───────
+        tpl       = _load_template(req.client_id, req.template)
+        tcols     = _tpl_colors(tpl)
+        cap_style = _caption_style(tpl)
+        img_cfg   = (tpl.get("images") or {}) if tpl else {}
+        cut_fade  = float(img_cfg.get("fade", IMAGE_CUT_FADE))
+        div_l = _hex_rgb((tcols.get("divider_gradient") or [None])[0], AMETHYST)
+        div_r = _hex_rgb((tcols.get("divider_gradient") or [None, None])[1], SILVER) \
+                if tcols.get("divider_gradient") else SILVER
+        prog_l = _hex_rgb((tcols.get("progress_gradient") or [None])[0], AMETHYST)
+        prog_r = _hex_rgb((tcols.get("progress_gradient") or [None, None])[1], SILVER) \
+                 if tcols.get("progress_gradient") else SILVER
+        if tpl:
+            log.info("[RENDER] client_id=%s template loaded (keys=%s)",
+                     req.client_id, ",".join(k for k in tpl if tpl.get(k)))
+
         # ── 1. Download facecam ──────────────────────────────────────────────
         facecam_raw = job_dir / "facecam_raw.mp4"
         if not download_file(req.facecam, facecam_raw):
@@ -2795,7 +2895,7 @@ async def render(req: RenderRequest):
 
         # ── 5. Divider gradient PNG ──────────────────────────────────────────
         divider_png = job_dir / "divider.png"
-        make_gradient_png(divider_png, W, DIVIDER_H, AMETHYST, SILVER)
+        make_gradient_png(divider_png, W, DIVIDER_H, div_l, div_r)
 
         # ── 6. Whisper captions ──────────────────────────────────────────────
         log.info("[RENDER] Transcribing facecam for captions")
@@ -2803,26 +2903,31 @@ async def render(req: RenderRequest):
 
         # ── 7. Caption frames ─────────────────────────────────────────────────
         cap_dir = job_dir / "captions"
-        build_caption_frames(words, total_frames, cap_dir, divider_png)
+        build_caption_frames(words, total_frames, cap_dir, divider_png, cap_style)
 
         # ── 8. Progress frames ───────────────────────────────────────────────
         prog_dir = job_dir / "progress"
-        build_progress_frames(total_frames, prog_dir)
+        build_progress_frames(total_frames, prog_dir, (prog_l, prog_r))
 
-        # ── 9. Static overlays ───────────────────────────────────────────────
+        # ── 9. Static overlays (per-template when a client template is loaded) ─
         hud_png       = HUD_PATH
         scanlines_png = SCANLINES_PATH
+        if tpl:
+            hud_png       = job_dir / "hud.png"
+            scanlines_png = job_dir / "scanlines.png"
+            _generate_hud(hud_png, tpl)
+            _generate_scanlines(scanlines_png, tpl)
 
         # ── 9b. Full-frame AI image cutaways (optional) ───────────────────────
         image_cuts = []
-        if req.image_cuts:
+        if req.image_cuts and img_cfg.get("enabled", True):
             loop_ic    = asyncio.get_event_loop()
             cut_events = req.image_cut_events or _detect_image_cuts(words, duration)
             if cut_events:
                 script_ctx = " ".join(w.get("word", "") for w in words)   # whole-script context for the enricher
                 image_cuts = await loop_ic.run_in_executor(
                     None, _prepare_image_cuts, cut_events, job_dir,
-                    req.brand_color_primary, duration, script_ctx)
+                    req.brand_color_primary, duration, script_ctx, img_cfg)
 
         # ── 10. Final ffmpeg compose ──────────────────────────────────────────
         log.info("[RENDER] Compositing: broll + divider + facecam + %d cutaways + captions",
@@ -2854,12 +2959,12 @@ async def render(req: RenderRequest):
         for i, cut in enumerate(image_cuts):
             extra_inputs += ["-loop", "1", "-framerate", str(FPS),
                              "-t", f"{duration:.3f}", "-i", str(cut["path"])]
-            fout = max(cut["end"] - IMAGE_CUT_FADE, cut["start"])
+            fout = max(cut["end"] - cut_fade, cut["start"])
             parts.append(
                 f"[{IMG_BASE+i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
                 f"crop={W}:{H},setsar=1,format=rgba,"
-                f"fade=t=in:st={cut['start']:.3f}:d={IMAGE_CUT_FADE}:alpha=1,"
-                f"fade=t=out:st={fout:.3f}:d={IMAGE_CUT_FADE}:alpha=1[cut{i}];"
+                f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
+                f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[cut{i}];"
             )
             parts.append(
                 f"[{prev}][cut{i}]overlay=x=0:y=0:"
@@ -2897,10 +3002,11 @@ async def render(req: RenderRequest):
         run(cmd, "final_compose")
         log.info("Output: %s (%.1f MB)", output_mp4, output_mp4.stat().st_size / 1e6)
 
-        # ── 11. SFX mixing — always runs (t=0 intro stinger is mandatory) ─────
-        mixed = mix_sfx_into_video(output_mp4, req.impacts or [], job_dir, duration)
-        if mixed:
-            output_mp4 = mixed
+        # ── 11. SFX mixing (per-template toggle; default on for Justus) ───────
+        if (tpl.get("sfx") or {}).get("enabled", True) if tpl else True:
+            mixed = mix_sfx_into_video(output_mp4, req.impacts or [], job_dir, duration)
+            if mixed:
+                output_mp4 = mixed
 
         # ── 12. Prepend thumbnail freeze-frame (optional) ─────────────────────
         if thumb_clip and thumb_clip.exists():
@@ -3258,6 +3364,22 @@ async def generate_infosheet(req: InfosheetRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/debug/template")
+def debug_template(client_id: str = "justus"):
+    """Verify Supabase template resolution works from Railway (env + fetch + parse)."""
+    _TEMPLATE_CACHE.pop(client_id, None)
+    tpl = _load_template(client_id, None)
+    return {
+        "client_id": client_id,
+        "supabase_env_set": bool(SUPABASE_URL and SUPABASE_SERVICE_KEY),
+        "template_loaded": bool(tpl),
+        "keys": [k for k in tpl] if tpl else [],
+        "colors": _tpl_colors(tpl),
+        "hud": (tpl or {}).get("hud"),
+        "sfx": (tpl or {}).get("sfx"),
+        "images_model": ((tpl or {}).get("images") or {}).get("model"),
+    }
 
 @app.post("/enrich-image-prompt")
 async def enrich_image_prompt(req: EnrichImageRequest):

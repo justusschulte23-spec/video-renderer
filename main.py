@@ -1377,6 +1377,92 @@ def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float,
     return prepared
 
 
+# ── Generic layout compositor (Stage 2b) ─────────────────────────────────────
+def _ff_color(hexstr: str) -> str:
+    return "0x" + str(hexstr or "#09090B").lstrip("#")
+
+
+def _build_compositor(layout: dict, srcs: dict, duration: float,
+                      image_cuts: list, cut_fade: float):
+    """Data-driven ffmpeg compose from layout.layers[] (z-index bottom->top).
+    Returns (input_args, filter_complex, final_label, audio_map). Used ONLY when a
+    template sets layout.engine='compositor' — the fixed Justus graph is untouched.
+
+    Layer types: video(facecam/broll) · image(divider/hud/scanlines/logo) ·
+    captions · progress · image_cuts. Each: x,y,w,h (default = full canvas / its asset).
+    A layer whose source is missing/disabled is simply skipped (e.g. no broll)."""
+    canvas = layout.get("canvas") or {}
+    cw  = int(canvas.get("w", W)); ch = int(canvas.get("h", H))
+    fps = int(canvas.get("fps", FPS)); bg = _ff_color(canvas.get("bg", "#09090B"))
+    fadeout_start = max(0.0, duration - 1.0)
+
+    inputs, filt = [], []
+    # base canvas (lavfi color) = input 0
+    inputs += ["-f", "lavfi", "-i", f"color=c={bg}:s={cw}x{ch}:r={fps}:d={duration:.3f}"]
+    filt.append("[0:v]setsar=1[base];")
+    idx = 1
+    prev = "base"
+    audio_map = None
+
+    def box(layer):
+        return (int(layer.get("x", 0)), int(layer.get("y", 0)),
+                int(layer.get("w", cw)), int(layer.get("h", ch)))
+
+    for li, layer in enumerate(layout.get("layers") or []):
+        typ = layer.get("type"); src = layer.get("src")
+        if layer.get("enabled") is False:
+            continue
+
+        if typ == "image_cuts":
+            for ci, cut in enumerate(image_cuts):
+                inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{duration:.3f}", "-i", str(cut["path"])]
+                fout = max(cut["end"] - cut_fade, cut["start"])
+                lbl = f"ic{ci}"
+                filt.append(
+                    f"[{idx}:v]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+                    f"crop={cw}:{ch},setsar=1,format=rgba,"
+                    f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[{lbl}];")
+                filt.append(f"[{prev}][{lbl}]overlay=x=0:y=0:"
+                            f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[stp{li}_{ci}];")
+                prev = f"stp{li}_{ci}"; idx += 1
+            continue
+
+        path = srcs.get(src)
+        if not path:        # source missing/disabled -> skip layer (e.g. broll off)
+            continue
+        x, y, w, h = box(layer)
+        lbl = f"L{li}"
+
+        if typ == "video":
+            inputs += ["-i", str(path)]
+            if src == "facecam":
+                audio_map = f"{idx}:a"
+            if layer.get("zoom") == "pulse" and src == "facecam":
+                pre = (f"[{idx}:v]zoompan="
+                       f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
+                       f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps},setsar=1[{lbl}];")
+            else:
+                pre = (f"[{idx}:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,"
+                       f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1[{lbl}];")
+            filt.append(pre)
+        elif typ in ("image", "overlay"):
+            inputs += ["-i", str(path)]
+            filt.append(f"[{idx}:v]setsar=1[{lbl}];")
+        elif typ in ("captions", "progress"):
+            inputs += ["-framerate", str(fps), "-i", str(path)]
+            filt.append(f"[{idx}:v]setsar=1[{lbl}];")
+        else:
+            idx += 1
+            continue
+
+        filt.append(f"[{prev}][{lbl}]overlay=x={x}:y={y}[stp{li}];")
+        prev = f"stp{li}"; idx += 1
+
+    filt.append(f"[{prev}]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
+    return inputs, "".join(filt), "[final]", (audio_map or "1:a")
+
+
 # ── Broll prompt builder ──────────────────────────────────────────────────────
 def _broll_system_prompt(topic: str, accent: str, dur: float) -> str:
     n_primary  = max(int(dur / 2.5), 6)   # primary beat every 2.5s
@@ -2938,68 +3024,88 @@ async def render(req: RenderRequest):
         prog_pattern = str(prog_dir / "frame_%06d.png")
         fadeout_start = max(0.0, duration - 1.0)
 
-        parts = [
-            f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];",
-            "[1:v]setsar=1[div];",
-            (f"[2:v]zoompan="
-             f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
-             f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
-             f"d=1:s={W}x{FACECAM_H}:fps={FPS},setsar=1[face];"),
-            "[broll][div][face]vstack=inputs=3[stacked];",
-            # ── Layer 0 (bottom): UI — scanlines + HUD + progress ─────────────
-            "[stacked][5:v]overlay=x=0:y=0[with_scan];",
-            "[with_scan][6:v]overlay=x=0:y=0[with_hud];",
-            f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_ui];",
-        ]
+        _lay = (tpl.get("layout") or {}) if tpl else {}
+        use_comp = _lay.get("engine") == "compositor" and bool(_lay.get("layers"))
 
-        # ── Layer 1 (middle): full-frame image cutaways MASK the UI in their window ──
-        IMG_BASE     = 7
-        extra_inputs = []
-        prev = "with_ui"
-        for i, cut in enumerate(image_cuts):
-            extra_inputs += ["-loop", "1", "-framerate", str(FPS),
-                             "-t", f"{duration:.3f}", "-i", str(cut["path"])]
-            fout = max(cut["end"] - cut_fade, cut["start"])
-            parts.append(
-                f"[{IMG_BASE+i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
-                f"crop={W}:{H},setsar=1,format=rgba,"
-                f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
-                f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[cut{i}];"
-            )
-            parts.append(
-                f"[{prev}][cut{i}]overlay=x=0:y=0:"
-                f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[ic{i}];"
-            )
-            prev = f"ic{i}"
-
-        # ── Layer 2 (top): captions — absolute highest, nothing renders above ──
-        parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
-        parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
-        filter_complex = "".join(parts)
-
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(broll_final),         # [0]
-            "-i", str(divider_png),         # [1]
-            "-i", str(facecam_scaled),      # [2]
-            "-framerate", str(FPS),
-            "-i", cap_pattern,              # [3]
-            "-framerate", str(FPS),
-            "-i", prog_pattern,             # [4]
-            "-i", str(scanlines_png),       # [5]
-            "-i", str(hud_png),             # [6]
-            *extra_inputs,                  # [7..] full-frame image cutaways
-            "-filter_complex", filter_complex,
-            "-map", "[final]",
-            "-map", "2:a",
-            "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
-            "-c:v", "libx264", "-crf", "16", "-preset", "medium",
-            "-c:a", "aac", "-b:a", "192k",
-            "-t", str(duration),
-            "-pix_fmt", "yuv420p",
-            str(output_mp4),
-        ]
-        run(cmd, "final_compose")
+        if use_comp:
+            # ── Stage 2b: generic data-driven compositor (custom client layout) ──
+            log.info("[RENDER] custom compositor layout (%d layers, %d cutaways)",
+                     len(_lay.get("layers", [])), len(image_cuts))
+            srcs = {
+                "facecam": facecam_scaled, "broll": broll_final,
+                "divider": divider_png, "hud": hud_png, "scanlines": scanlines_png,
+                "captions": cap_pattern, "progress": prog_pattern,
+            }
+            inp, fc, final_label, amap = _build_compositor(_lay, srcs, duration, image_cuts, cut_fade)
+            cmd = [
+                "ffmpeg", "-y", *inp,
+                "-filter_complex", fc,
+                "-map", final_label, "-map", amap,
+                "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", str(duration), "-pix_fmt", "yuv420p",
+                str(output_mp4),
+            ]
+            run(cmd, "final_compose_custom")
+        else:
+            # ── Fixed Justus split-graph (UNCHANGED — default / no client_id) ────
+            parts = [
+                f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];",
+                "[1:v]setsar=1[div];",
+                (f"[2:v]zoompan="
+                 f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
+                 f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
+                 f"d=1:s={W}x{FACECAM_H}:fps={FPS},setsar=1[face];"),
+                "[broll][div][face]vstack=inputs=3[stacked];",
+                "[stacked][5:v]overlay=x=0:y=0[with_scan];",
+                "[with_scan][6:v]overlay=x=0:y=0[with_hud];",
+                f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_ui];",
+            ]
+            IMG_BASE     = 7
+            extra_inputs = []
+            prev = "with_ui"
+            for i, cut in enumerate(image_cuts):
+                extra_inputs += ["-loop", "1", "-framerate", str(FPS),
+                                 "-t", f"{duration:.3f}", "-i", str(cut["path"])]
+                fout = max(cut["end"] - cut_fade, cut["start"])
+                parts.append(
+                    f"[{IMG_BASE+i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},setsar=1,format=rgba,"
+                    f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[cut{i}];"
+                )
+                parts.append(
+                    f"[{prev}][cut{i}]overlay=x=0:y=0:"
+                    f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[ic{i}];"
+                )
+                prev = f"ic{i}"
+            parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
+            parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
+            filter_complex = "".join(parts)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(broll_final),         # [0]
+                "-i", str(divider_png),         # [1]
+                "-i", str(facecam_scaled),      # [2]
+                "-framerate", str(FPS),
+                "-i", cap_pattern,              # [3]
+                "-framerate", str(FPS),
+                "-i", prog_pattern,             # [4]
+                "-i", str(scanlines_png),       # [5]
+                "-i", str(hud_png),             # [6]
+                *extra_inputs,                  # [7..] full-frame image cutaways
+                "-filter_complex", filter_complex,
+                "-map", "[final]",
+                "-map", "2:a",
+                "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", str(duration),
+                "-pix_fmt", "yuv420p",
+                str(output_mp4),
+            ]
+            run(cmd, "final_compose")
         log.info("Output: %s (%.1f MB)", output_mp4, output_mp4.stat().st_size / 1e6)
 
         # ── 11. SFX mixing (per-template toggle; default on for Justus) ───────

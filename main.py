@@ -3691,9 +3691,12 @@ async def generate_infosheet(req: InfosheetRequest):
 
         result = cloudinary.uploader.upload(
             str(pdf_path),
-            resource_type="raw",
+            resource_type="image",          # PDFs as image deliver publicly (raw delivery is blocked → 401)
+            type="upload",
+            access_mode="public",
             folder="infosheets",
             public_id=f"infosheet_{job_id}",
+            format="pdf",
             overwrite=True,
         )
         url = result["secure_url"]

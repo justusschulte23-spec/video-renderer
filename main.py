@@ -3326,6 +3326,68 @@ async def _render_impl(req: RenderRequest):
                 str(output_mp4),
             ]
             run(cmd, "final_compose_custom")
+        elif _lay.get("mode") == "fullcam":
+            # ── Fullcam (Tim): facecam full-frame + overlays + captions, no broll/UI ──
+            log.info("[RENDER] fullcam layout (%d img, %d video, %d logo)",
+                     len(image_cuts), len(video_cuts), len(logos))
+            parts = [
+                f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[base];",
+            ]
+            extra_inputs = []
+            idx = 1   # facecam is [0]; extra inputs start at [1]
+            ov = 0
+            prev = "base"
+            kb = bool(img_cfg.get("ken_burns"))
+            for cut in image_cuts:
+                extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(cut["path"])]
+                fout = max(cut["end"] - cut_fade, cut["start"])
+                if kb:    # slow ken-burns zoom (calm motion, never static)
+                    base_scale = (f"[{idx}:v]scale={int(W*1.12)}:{int(H*1.12)}:force_original_aspect_ratio=increase,"
+                                  f"zoompan=z='min(zoom+0.0006,1.10)':d=1:x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
+                                  f"s={W}x{H}:fps={FPS},crop={W}:{H},setsar=1,format=rgba,")
+                else:
+                    base_scale = f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,format=rgba,"
+                parts.append(base_scale +
+                    f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=0:y=0:enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
+            for v in video_cuts:
+                extra_inputs += ["-i", str(v["path"])]
+                fout = max(v["end"] - cut_fade, v["start"])
+                parts.append(
+                    f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,format=rgba,"
+                    f"setpts=PTS-STARTPTS+{v['start']:.3f}/TB,"
+                    f"fade=t=in:st={v['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=0:y=0:enable='between(t,{v['start']:.3f},{v['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
+            for lg in logos:
+                extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(lg["path"])]
+                fout = max(lg["end"] - cut_fade, lg["start"])
+                parts.append(f"[{idx}:v]scale=360:-1,setsar=1,format=rgba,"
+                    f"fade=t=in:st={lg['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=(W-w)/2:y=360:enable='between(t,{lg['start']:.3f},{lg['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
+            # captions: full-frame perword frames, overlaid on top
+            extra_inputs += ["-framerate", str(FPS), "-i", cap_pattern]
+            parts.append(f"[{prev}][{idx}:v]overlay=x=0:y=0[with_cap];")
+            parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
+            filter_complex = "".join(parts)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(facecam_raw),         # [0] facecam (full-frame base + audio)
+                *extra_inputs,                  # [2..] cuts/logos then [last]=captions
+                "-filter_complex", filter_complex,
+                "-map", "[final]", "-map", "0:a",
+                "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
+                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", str(duration), "-pix_fmt", "yuv420p",
+                str(output_mp4),
+            ]
+            run(cmd, "final_compose_fullcam")
         else:
             # ── Fixed Justus split-graph (UNCHANGED — default / no client_id) ────
             parts = [

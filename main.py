@@ -2887,8 +2887,7 @@ async def generate_thumbnail(req: ThumbnailRequest):
 
 
 # ── POST /render ──────────────────────────────────────────────────────────────
-@app.post("/render")
-async def render(req: RenderRequest):
+async def _render_impl(req: RenderRequest):
     job_id  = str(uuid.uuid4())
     job_dir = Path(f"/tmp/render_{job_id}")
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -3145,6 +3144,41 @@ async def render(req: RenderRequest):
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
         log.info("Cleaned up %s", job_dir)
+
+
+@app.post("/render")
+async def render(req: RenderRequest):
+    """Streaming wrapper — keepalive bytes every 20s so Railway's proxy doesn't 502
+    on long renders (captions + Flux image cuts + compose can exceed ~100s)."""
+    result_holder: dict = {}
+    done_event = asyncio.Event()
+
+    async def _worker():
+        try:
+            result_holder["ok"] = await _render_impl(req)
+        except HTTPException as exc:
+            result_holder["err"] = exc.detail
+        except Exception as exc:
+            result_holder["err"] = str(exc)
+        finally:
+            done_event.set()
+
+    asyncio.create_task(_worker())
+
+    async def _stream():
+        while not done_event.is_set():
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                yield b" "  # keepalive
+        payload = result_holder.get("ok") or {"error": result_holder.get("err", "unknown")}
+        yield json.dumps(payload).encode()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/json",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ── Infosheet: HTML template ──────────────────────────────────────────────────

@@ -1377,6 +1377,168 @@ def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float,
     return prepared
 
 
+# ── Stock-video inserts (Pexels) at emotional peaks ───────────────────────────
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+VIDEO_CUT_MAX     = 3      # max stock-video inserts per video
+VIDEO_CUT_MIN_DUR = 1.2    # below this, skip (too short to register)
+VIDEO_CUT_MAX_DUR = 6.0    # cap insert length
+LOGO_MAX          = 3
+LOGO_DUR          = 2.0
+
+
+def _detect_video_cuts(words: list, duration: float) -> list:
+    """Haiku: pick 2-3 EMOTIONAL PEAKS where a real cinematic clip hits hardest.
+    Returns [{time, end, query}] — query = EN cinematic stock search phrase."""
+    if not words or duration < 8 or not PEXELS_API_KEY:
+        return []
+    sys_p = (
+        "You are a short-form editor. From the word-level transcript pick the 2-3 moments with the "
+        "HIGHEST EMOTIONAL IMPACT where a real cinematic stock VIDEO clip would maximize watchtime "
+        "(turning points, shocking stats, stakes, the hook). For each: time = start word's start time; "
+        "end = end of that spoken phrase (a few words later); query = 3-5 word ENGLISH cinematic stock "
+        "search (concrete, filmable, e.g. 'data center servers glowing', 'person stressed laptop night').\n"
+        "Space peaks >= 5s apart; none after duration-2s.\n"
+        'Return ONLY JSON: {"cuts":[{"time":1.0,"end":3.4,"query":"..."}]}'
+    )
+    try:
+        raw = call_openrouter(sys_p, json.dumps(words),
+                              model="anthropic/claude-haiku-4.5", max_tokens=400)
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        cuts = json.loads(m.group()).get("cuts", []) if m else []
+    except Exception as exc:
+        log.warning("[VID] peak detection failed: %s", exc)
+        return []
+    clean, last = [], -999.0
+    for c in sorted(cuts, key=lambda x: x.get("time", 0)):
+        try:
+            t = float(c.get("time", -1)); e = float(c.get("end", t + 2.5))
+        except (TypeError, ValueError):
+            continue
+        q = (c.get("query") or "").strip()
+        dur = min(max(e - t, 0), VIDEO_CUT_MAX_DUR)
+        if not q or t < 0.5 or t > duration - 1.0 or dur < VIDEO_CUT_MIN_DUR or (t - last) < 5.0:
+            continue
+        clean.append({"time": round(t, 3), "end": round(t + dur, 3), "query": q})
+        last = t
+        if len(clean) >= VIDEO_CUT_MAX:
+            break
+    return clean
+
+
+def _fetch_pexels_clip(query: str, dur: float, job_dir: Path, idx: int) -> Optional[Path]:
+    """Search Pexels portrait video, download, mid-trim to `dur` (most dynamic part)."""
+    try:
+        r = requests.get("https://api.pexels.com/videos/search",
+                         headers={"Authorization": PEXELS_API_KEY},
+                         params={"query": query, "per_page": 3, "orientation": "portrait", "size": "medium"},
+                         timeout=30)
+        r.raise_for_status()
+        vids = r.json().get("videos", [])
+        if not vids:
+            return None
+        # prefer a portrait HD-ish file
+        files = sorted(vids[0]["video_files"],
+                       key=lambda f: abs((f.get("height") or 0) - 1920))
+        link = files[0]["link"]
+        src = job_dir / f"vstock_src_{idx}.mp4"
+        if not download_file(link, src):
+            return None
+        srcdur = probe_duration(src)
+        start = max(0.0, (srcdur - dur) / 2.0) if srcdur > dur else 0.0
+        out = job_dir / f"vcut_{idx}.mp4"
+        run(["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{dur:.2f}",
+             "-an", "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+             str(out)], f"vcut_trim_{idx}")
+        return out if out.exists() else None
+    except Exception as exc:
+        log.warning("[VID] pexels fetch failed (%s): %s", query, exc)
+        return None
+
+
+def _prepare_video_cuts(cuts: list, job_dir: Path, duration: float) -> list:
+    """Fetch+trim each peak clip (parallel). Returns [{start,end,path,query}]."""
+    if not cuts:
+        return []
+    def _gen(idx_cut):
+        idx, c = idx_cut
+        dur = min(c["end"] - c["time"], duration - c["time"])
+        if dur < VIDEO_CUT_MIN_DUR:
+            return None
+        p = _fetch_pexels_clip(c["query"], dur, job_dir, idx)
+        if not p:
+            return None
+        return {"start": c["time"], "end": round(c["time"] + dur, 3), "path": p, "query": c["query"]}
+    out = []
+    with ThreadPoolExecutor(max_workers=min(len(cuts), 3)) as pool:
+        for r in pool.map(_gen, list(enumerate(cuts))):
+            if r:
+                out.append(r)
+    out.sort(key=lambda x: x["start"])
+    log.info("[VID] %d/%d stock-video inserts ready", len(out), len(cuts))
+    return out
+
+
+def _detect_logos(words: list, duration: float) -> list:
+    """Haiku: find brand/product mentions with a known web domain (for Clearbit logo)."""
+    if not words or duration < 6:
+        return []
+    sys_p = (
+        "From the transcript find up to 3 mentions of a well-known COMPANY/PRODUCT/AI-MODEL that has a "
+        "real website. For each: time = the mention's start time; brand = name; domain = its main web "
+        "domain (e.g. openai.com, tesla.com, anthropic.com). Only entities you are CONFIDENT have that domain.\n"
+        'Return ONLY JSON: {"logos":[{"time":2.1,"brand":"OpenAI","domain":"openai.com"}]}'
+    )
+    try:
+        raw = call_openrouter(sys_p, json.dumps(words),
+                              model="anthropic/claude-haiku-4.5", max_tokens=300)
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        logos = json.loads(m.group()).get("logos", []) if m else []
+    except Exception as exc:
+        log.warning("[LOGO] detection failed: %s", exc)
+        return []
+    clean, last = [], -999.0
+    for l in sorted(logos, key=lambda x: x.get("time", 0)):
+        try:
+            t = float(l.get("time", -1))
+        except (TypeError, ValueError):
+            continue
+        dom = (l.get("domain") or "").strip()
+        if not dom or "." not in dom or t < 0.5 or t > duration - 1.0 or (t - last) < 4.0:
+            continue
+        clean.append({"time": round(t, 3), "brand": l.get("brand", ""), "domain": dom})
+        last = t
+        if len(clean) >= LOGO_MAX:
+            break
+    return clean
+
+
+def _prepare_logos(logos: list, job_dir: Path, duration: float) -> list:
+    """Download each brand logo via Clearbit. Returns [{start,end,path,brand}]."""
+    out = []
+    for idx, l in enumerate(logos):
+        url = f"https://logo.clearbit.com/{l['domain']}?size=512&format=png"
+        p = job_dir / f"logo_{idx}.png"
+        if download_file(url, p):
+            out.append({"start": l["time"], "end": round(min(l["time"] + LOGO_DUR, duration), 3),
+                        "path": p, "brand": l.get("brand", "")})
+    log.info("[LOGO] %d/%d logos fetched", len(out), len(logos))
+    return out
+
+
+def _dedupe_overlays(video_cuts: list, logos: list, image_cuts: list, gap: float = 2.5):
+    """Priority video > logo > image. Drop lower-priority overlays whose start is within
+    `gap` of an already-claimed time, so layers never stack at the same moment."""
+    claimed = []
+    def keep(items):
+        kept = []
+        for it in sorted(items, key=lambda x: x["start"]):
+            if all(abs(it["start"] - c) >= gap for c in claimed):
+                kept.append(it); claimed.append(it["start"])
+        return kept
+    v = keep(video_cuts); lg = keep(logos); im = keep(image_cuts)
+    return v, lg, im
+
+
 # ── Generic layout compositor (Stage 2b) ─────────────────────────────────────
 def _ff_color(hexstr: str) -> str:
     return "0x" + str(hexstr or "#09090B").lstrip("#")
@@ -3014,9 +3176,31 @@ async def _render_impl(req: RenderRequest):
                     None, _prepare_image_cuts, cut_events, job_dir,
                     req.brand_color_primary, duration, script_ctx, img_cfg)
 
+        # ── 9c. Stock-video inserts at emotional peaks (default on, per-template) ─
+        video_cuts = []
+        vid_cfg = (tpl.get("video_cuts") or {}) if tpl else {}
+        if vid_cfg.get("enabled", True):
+            vpeaks = await asyncio.get_event_loop().run_in_executor(
+                None, _detect_video_cuts, words, duration)
+            if vpeaks:
+                video_cuts = await asyncio.get_event_loop().run_in_executor(
+                    None, _prepare_video_cuts, vpeaks, job_dir, duration)
+
+        # ── 9d. Brand-logo inserts on entity mentions (default on, per-template) ─
+        logos = []
+        logo_cfg = (tpl.get("logos") or {}) if tpl else {}
+        if logo_cfg.get("enabled", True):
+            lmentions = await asyncio.get_event_loop().run_in_executor(None, _detect_logos, words, duration)
+            if lmentions:
+                logos = await asyncio.get_event_loop().run_in_executor(
+                    None, _prepare_logos, lmentions, job_dir, duration)
+
+        # priority video > logo > image; never stack at same moment
+        video_cuts, logos, image_cuts = _dedupe_overlays(video_cuts, logos, image_cuts)
+
         # ── 10. Final ffmpeg compose ──────────────────────────────────────────
-        log.info("[RENDER] Compositing: broll + divider + facecam + %d cutaways + captions",
-                 len(image_cuts))
+        log.info("[RENDER] Compositing: broll+divider+facecam | %d img, %d video, %d logo | captions",
+                 len(image_cuts), len(video_cuts), len(logos))
         output_mp4 = job_dir / "output.mp4"
 
         cap_pattern  = str(cap_dir  / "frame_%06d.png")
@@ -3061,24 +3245,48 @@ async def _render_impl(req: RenderRequest):
                 "[with_scan][6:v]overlay=x=0:y=0[with_hud];",
                 f"[with_hud][4:v]overlay=x=0:y={PROGRESS_Y}[with_ui];",
             ]
-            IMG_BASE     = 7
             extra_inputs = []
+            idx = 7
+            ov = 0
             prev = "with_ui"
-            for i, cut in enumerate(image_cuts):
+            # full-frame AI image cutaways (looped still)
+            for cut in image_cuts:
                 extra_inputs += ["-loop", "1", "-framerate", str(FPS),
                                  "-t", f"{duration:.3f}", "-i", str(cut["path"])]
                 fout = max(cut["end"] - cut_fade, cut["start"])
                 parts.append(
-                    f"[{IMG_BASE+i}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
                     f"crop={W}:{H},setsar=1,format=rgba,"
                     f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
-                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[cut{i}];"
-                )
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=0:y=0:"
+                             f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
+            # full-frame stock-video inserts at peaks (real clip, shifted to its timeline slot)
+            for v in video_cuts:
+                extra_inputs += ["-i", str(v["path"])]
+                fout = max(v["end"] - cut_fade, v["start"])
                 parts.append(
-                    f"[{prev}][cut{i}]overlay=x=0:y=0:"
-                    f"enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[ic{i}];"
-                )
-                prev = f"ic{i}"
+                    f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                    f"crop={W}:{H},setsar=1,format=rgba,"
+                    f"setpts=PTS-STARTPTS+{v['start']:.3f}/TB,"
+                    f"fade=t=in:st={v['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=0:y=0:"
+                             f"enable='between(t,{v['start']:.3f},{v['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
+            # brand-logo badges (small, centered-upper)
+            for lg in logos:
+                extra_inputs += ["-loop", "1", "-framerate", str(FPS),
+                                 "-t", f"{duration:.3f}", "-i", str(lg["path"])]
+                fout = max(lg["end"] - cut_fade, lg["start"])
+                parts.append(
+                    f"[{idx}:v]scale=360:-1,setsar=1,format=rgba,"
+                    f"fade=t=in:st={lg['start']:.3f}:d={cut_fade}:alpha=1,"
+                    f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x=(W-w)/2:y=360:"
+                             f"enable='between(t,{lg['start']:.3f},{lg['end']:.3f})'[s{ov}];")
+                prev = f"s{ov}"; idx += 1; ov += 1
             parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
             parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
             filter_complex = "".join(parts)
@@ -3093,7 +3301,7 @@ async def _render_impl(req: RenderRequest):
                 "-i", prog_pattern,             # [4]
                 "-i", str(scanlines_png),       # [5]
                 "-i", str(hud_png),             # [6]
-                *extra_inputs,                  # [7..] full-frame image cutaways
+                *extra_inputs,                  # [7..] image cuts, video cuts, logos
                 "-filter_complex", filter_complex,
                 "-map", "[final]",
                 "-map", "2:a",

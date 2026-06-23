@@ -127,9 +127,16 @@ HUD_PATH       = FONT_DIR / "hud.png"
 GSAP_LOCAL     = FONT_DIR / "gsap.min.js"
 GSAP_CDN       = "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"
 
+FONT_OSWALD   = FONT_DIR / "Oswald.ttf"     # heading/punch (uppercase, high-impact)
+FONT_INTER    = FONT_DIR / "Inter.ttf"      # body/base (clean, premium)
+FONT_CAVEAT   = FONT_DIR / "Caveat.ttf"     # cursive (personal, handwritten)
+
 FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
     FONT_SEMIBOLD: "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
+    FONT_OSWALD:   "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald%5Bwght%5D.ttf",
+    FONT_INTER:    "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz,wght%5D.ttf",
+    FONT_CAVEAT:   "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
 }
 
 # ── SFX library ───────────────────────────────────────────────────────────────
@@ -200,17 +207,23 @@ def sfx_local_path(asset_id: str) -> Path:
 
 
 # ── Font bootstrap ─────────────────────────────────────────────────────────────
+_CRITICAL_FONTS = {FONT_BLACK, FONT_SEMIBOLD}  # Justus captions depend on these
+
+
 def _bootstrap_fonts():
     FONT_DIR.mkdir(parents=True, exist_ok=True)
     for path, url in FONT_URLS.items():
         if path.exists():
             continue
-        log.info("Downloading font %s", path.name)
-        r = requests.get(url, timeout=30)
-        if r.status_code != 200:
-            raise RuntimeError(f"Font download failed ({r.status_code}): {url}")
-        path.write_bytes(r.content)
-        log.info("Font saved: %s", path)
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            path.write_bytes(r.content)
+            log.info("Font saved: %s", path.name)
+        except Exception as exc:
+            if path in _CRITICAL_FONTS:
+                raise RuntimeError(f"Critical font download failed: {url} — {exc}")
+            log.warning("Optional font download failed (%s): %s", path.name, exc)
 
 _bootstrap_fonts()
 
@@ -978,15 +991,19 @@ def get_adaptive_font(word: str, max_width: int = W,
 
 # Justus default caption style; a client template can override fill/strokes/size.
 _CAP_DEFAULT = {
+    "mode": "stroke",     # "stroke" = Justus 3-layer; "perword" = per-word color/font (Tim)
     "fill": (255, 255, 255, 255),
     "strokes": [(109, 40, 217, 100), (139, 92, 246, 160), (124, 58, 237, 230)],
     "size": CAPTION_FONT_SIZE,
     "font_path": str(FONT_BLACK),
 }
 
+_FONT_MAP = {"montserrat": FONT_BLACK, "oswald": FONT_OSWALD, "inter": FONT_INTER, "caveat": FONT_CAVEAT}
+
 
 def _caption_style(tpl: dict) -> dict:
-    """Resolve caption style from template, falling back to Justus defaults."""
+    """Resolve caption style. Default = Justus 3-stroke. mode='perword' enables
+    per-word color+font classes (base/punch/data/anecdote) for premium clients (Tim)."""
     cap  = (tpl or {}).get("captions") or {}
     cols = _tpl_colors(tpl)
     st   = dict(_CAP_DEFAULT)
@@ -998,31 +1015,97 @@ def _caption_style(tpl: dict) -> dict:
         st["strokes"] = [(*_hex_rgb(strokes[i]), alphas[i]) for i in range(3)]
     if cap.get("size"):
         st["size"] = int(cap["size"])
+    if cap.get("mode") == "perword":
+        st["mode"] = "perword"
+        wc = cap.get("colors") or {}
+        st["colors"] = {k: (*_hex_rgb(wc.get(k), (245, 242, 236)), 255)
+                        for k in ("base", "punch", "data", "anecdote")}
+        wf = cap.get("fonts") or {}
+        st["fonts"] = {k: _FONT_MAP.get(wf.get(k), FONT_INTER) for k in ("base", "punch", "cursive")}
+        st["shadow"] = (*_hex_rgb(cap.get("shadow"), (6, 18, 15)), 200)
+        st["position"] = cap.get("position", "lowerthird")
     return st
 
 
-def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0, style: dict = None):
-    style           = style or _CAP_DEFAULT
-    draw            = ImageDraw.Draw(img)
-    font, actual_size = get_adaptive_font(word, max_size=int(style["size"] * scale))
+def _classify_caption_words(words: list) -> list:
+    """Tag each word base/punch/data/anecdote. Numbers->data (regex). punch/anecdote via Haiku."""
+    classes = {}
+    for i, w in enumerate(words):
+        if re.search(r"\d", str(w.get("word", ""))):
+            classes[i] = "data"
+    try:
+        wl = [{"i": i, "w": w["word"]} for i, w in enumerate(words)]
+        sys_p = (
+            "Classify caption words for a warm, authentic finance/life creator. Return word indices "
+            "that are 'punch' (the FEW hardest-hitting emotional-trigger / key-claim words — keep sparse) "
+            "or 'anecdote' (words inside a personal-story phrase, e.g. a memory or 'aus meinem Bollerwagen'). "
+            "Everything else is base (don't return). Return ONLY JSON {\"punch\":[i],\"anecdote\":[i]}"
+        )
+        raw = call_openrouter(sys_p, json.dumps(wl), model="anthropic/claude-haiku-4.5", max_tokens=500)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        d = json.loads(m.group()) if m else {}
+        for i in d.get("anecdote", []):
+            classes.setdefault(int(i), "anecdote")
+        for i in d.get("punch", []):
+            classes.setdefault(int(i), "punch")
+    except Exception as exc:
+        log.warning("[CAP] word classify failed: %s", exc)
+    out = []
+    for i, w in enumerate(words):
+        w2 = dict(w); w2["cls"] = classes.get(i, "base"); out.append(w2)
+    return out
 
+
+def _draw_caption_frame(img: Image.Image, word: str, scale: float = 1.0,
+                        style: dict = None, cls: str = "base", cx: int = None, cy: int = None):
+    style = style or _CAP_DEFAULT
+    draw  = ImageDraw.Draw(img)
+
+    if style.get("mode") == "perword":
+        size = int(style["size"] * scale)
+        if cls == "punch":
+            font_path = style["fonts"]["punch"]; color = style["colors"]["punch"]; txt = word.upper()
+        elif cls == "data":
+            font_path = style["fonts"]["base"];  color = style["colors"]["data"];  txt = word
+        elif cls == "anecdote":
+            font_path = style["fonts"]["cursive"]; color = style["colors"]["anecdote"]; txt = word
+        else:
+            font_path = style["fonts"]["base"];  color = style["colors"]["base"];  txt = word
+        font, asz = _fit_font(txt, font_path, size)
+        bbox = draw.textbbox((0, 0), txt, font=font, stroke_width=0)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (cx if cx is not None else W // 2) - tw // 2 - bbox[0]
+        y = (cy if cy is not None else 1350) - th // 2 - bbox[1]
+        sh = style["shadow"]
+        for dx, dy in ((3, 3), (2, 2), (-2, 2), (2, -2)):   # diffuse drop shadow
+            draw.text((x + dx, y + dy), txt, font=font, fill=sh)
+        draw.text((x, y), txt, font=font, fill=color)
+        return
+
+    # default Justus 3-stroke
+    font, actual_size = get_adaptive_font(word, max_size=int(style["size"] * scale))
     bbox = draw.textbbox((0, 0), word, font=font, stroke_width=0)
-    tw   = bbox[2] - bbox[0]
-    th   = bbox[3] - bbox[1]
+    tw   = bbox[2] - bbox[0]; th = bbox[3] - bbox[1]
     x    = (W - tw) // 2 - bbox[0]
     y    = (DIVIDER_H - th) // 2 - bbox[1]
-
     outer_stroke = max(8, int(actual_size * 0.17))
     mid_stroke   = max(5, int(actual_size * 0.09))
     inner_stroke = max(3, int(actual_size * 0.04))
     s0, s1, s2 = style["strokes"]
+    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0), stroke_fill=s0, stroke_width=outer_stroke)
+    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0), stroke_fill=s1, stroke_width=mid_stroke)
+    draw.text((x, y), word, font=font, fill=style["fill"], stroke_fill=s2, stroke_width=inner_stroke)
 
-    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0),
-              stroke_fill=s0, stroke_width=outer_stroke)
-    draw.text((x, y), word, font=font, fill=(0, 0, 0, 0),
-              stroke_fill=s1, stroke_width=mid_stroke)
-    draw.text((x, y), word, font=font, fill=style["fill"],
-              stroke_fill=s2, stroke_width=inner_stroke)
+
+def _fit_font(word: str, font_path, max_size: int, min_size: int = 44, max_width: int = W - 120):
+    size = max_size
+    while size >= min_size:
+        f = ImageFont.truetype(str(font_path), size)
+        b = f.getbbox(word)
+        if (b[2] - b[0]) <= max_width:
+            return f, size
+        size -= 4
+    return ImageFont.truetype(str(font_path), min_size), min_size
 
 
 def build_caption_frames(words: list, total_frames: int,
@@ -1045,10 +1128,15 @@ def build_caption_frames(words: list, total_frames: int,
             transition_frames.update([f, f + 1, f + 2])
             prev = cur
 
-    base_img = Image.open(str(gradient_base)).convert("RGBA")
+    perword = (style or {}).get("mode") == "perword"
+    if perword:
+        cy = 1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2
+        blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))   # full-frame transparent (Tim fullcam)
+    else:
+        blank = Image.open(str(gradient_base)).convert("RGBA")
 
     for frame_n in range(total_frames):
-        img = base_img.copy()
+        img = blank.copy()
         wi  = word_at_frame.get(frame_n, -1)
         if wi >= 0:
             word = words[wi]["word"]
@@ -1061,7 +1149,10 @@ def build_caption_frames(words: list, total_frames: int,
                 scale = pulse_map.get(offset % 3, 1.0)
             else:
                 scale = 1.0
-            _draw_caption_frame(img, word, scale, style)
+            if perword:
+                _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
+            else:
+                _draw_caption_frame(img, word, scale, style)
 
         out = cap_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))
@@ -3148,9 +3239,13 @@ async def _render_impl(req: RenderRequest):
         log.info("[RENDER] Transcribing facecam for captions")
         words = transcribe_audio(facecam_raw)
 
-        # ── 7. Caption frames ─────────────────────────────────────────────────
+        # ── 7. Caption frames (per-word classify for premium clients) ─────────
         cap_dir = job_dir / "captions"
-        build_caption_frames(words, total_frames, cap_dir, divider_png, cap_style)
+        cap_words = words
+        if cap_style.get("mode") == "perword":
+            cap_words = await asyncio.get_event_loop().run_in_executor(
+                None, _classify_caption_words, words)
+        build_caption_frames(cap_words, total_frames, cap_dir, divider_png, cap_style)
 
         # ── 8. Progress frames ───────────────────────────────────────────────
         prog_dir = job_dir / "progress"

@@ -933,14 +933,19 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
 # ── Smart coherence cut: remove duplicate takes / false starts via LLM ────────
 COHERENCE_SYS = (
     "Du bekommst ein Wort-fuer-Wort-Transkript (je Zeile: INDEX<TAB>WORT) einer Facecam-Aufnahme. "
-    "Der Sprecher nimmt oft EINEN Gedanken in MEHREREN Anlaeufen auf: verhaspelt sich, bricht ab, "
-    "setzt neu an, wiederholt denselben Satz oder Satzanfang. "
-    "Finde alle FEHLSTARTS, ABBRUECHE, WIEDERHOLTEN ANLAEUFE und Verhaspler und gib die "
-    "Wort-Index-Bereiche zurueck, die ENTFERNT werden sollen, sodass nur der saubere finale Take "
-    "jedes Gedankens bleibt und ein fluessiger Redefluss entsteht. Schneide aggressiv: lieber einen "
-    "holprigen Doppel-Anlauf ganz weg. ABER entferne NIE den finalen sauberen Take eines Inhalts - "
-    "die Aussage und jede einzigartige Information muss vollstaendig erhalten bleiben. Entferne nur "
-    "Redundanz und Fehler, nie Inhalt der nur einmal vorkommt. "
+    "Der Sprecher nimmt EINEN Gedanken oft in MEHREREN Anlaeufen auf: verhaspelt sich, bricht ab, "
+    "setzt neu an, wiederholt denselben Satz/Satzanfang, formuliert denselben Inhalt nochmal um. "
+    "Deine Aufgabe: gib die Wort-Index-Bereiche zurueck, die ENTFERNT werden, sodass am Ende ein "
+    "MAKELLOSER Redefluss bleibt - als waere alles perfekt in EINEM Take gesprochen.\n"
+    "SEI GRUENDLICH UND SEHR AGGRESSIV - lieber zu viel schneiden als zu wenig:\n"
+    "- JEDEN Fehlstart, Abbruch, abgebrochenen Satz entfernen.\n"
+    "- JEDE Wiederholung: kommt derselbe Gedanke/Satz/Satzanfang mehrfach (auch nur teilweise oder "
+    "sinngemaess umformuliert), behalte NUR den besten/fluessigsten Take (meist den letzten) und "
+    "entferne ALLE anderen Anlaeufe KOMPLETT.\n"
+    "- Stocken, Selbstkorrekturen ('also', '...nein', '...ich meine'), Wortwiederholungen, Versprecher raus.\n"
+    "- Im Zweifel: RAUS.\n"
+    "EINZIGE Grenze: entferne nie den EINEN sauberen finalen Take eines Inhalts - jede einzigartige "
+    "Aussage/Information muss genau einmal erhalten bleiben. Nur Redundanz und Fehler weg.\n"
     'OUTPUT NUR JSON: {"remove": [[startIdx, endIdx], ...]} - Indizes inklusive, auf die Wort-Indizes '
     'bezogen, aufsteigend, ohne Ueberlappung. Nichts zu entfernen -> {"remove": []}.'
 )
@@ -1192,7 +1197,7 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
     gold   = style["colors"].get("punch", "#D4AF37")
     shadow = style.get("shadow", "#1A1410")
     max_w  = W - 140
-    space  = int(base_size * 0.32)
+    space  = int(base_size * 0.16)   # tight block look (words almost touching, Danilo ref)
 
     def is_punch(w):
         if w.get("cls") == "punch":

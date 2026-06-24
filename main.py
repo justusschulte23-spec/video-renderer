@@ -1226,7 +1226,13 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
         sz = big_size if is_punch(w) else small_size
         f  = ImageFont.truetype(str(font_path), sz)
         tr = -int(sz * 0.05)              # -0.05em kerning
-        toks.append({"txt": txt, "f": f, "tr": tr, "w": kwidth(txt, f, tr), "size": sz})
+        wpx = kwidth(txt, f, tr)
+        while wpx > max_w and sz > 34:    # auto-shrink so a long word never clips out of 9:16
+            sz -= 6
+            f  = ImageFont.truetype(str(font_path), sz)
+            tr = -int(sz * 0.05)
+            wpx = kwidth(txt, f, tr)
+        toks.append({"txt": txt, "f": f, "tr": tr, "w": wpx, "size": sz})
     if not toks:
         return
 

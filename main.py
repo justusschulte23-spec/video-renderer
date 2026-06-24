@@ -405,6 +405,7 @@ class TrimSilenceRequest(BaseModel):
     facecam: str
     max_gap: float = 0.30   # gaps <= this stay (natural cadence)
     pad:     float = 0.05   # silence kept on each side of a trimmed gap
+    smart_cut: bool = True  # phase 0: LLM coherence cut (duplicate takes / false starts)
 
 
 class KeyFact(BaseModel):
@@ -927,6 +928,64 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
         log.error("[TRIM] ffmpeg failed: %s", result.stderr[-1200:])
         return False
     return True
+
+
+# ── Smart coherence cut: remove duplicate takes / false starts via LLM ────────
+COHERENCE_SYS = (
+    "Du bekommst ein Wort-fuer-Wort-Transkript (je Zeile: INDEX<TAB>WORT) einer Facecam-Aufnahme. "
+    "Der Sprecher nimmt oft EINEN Gedanken in MEHREREN Anlaeufen auf: verhaspelt sich, bricht ab, "
+    "setzt neu an, wiederholt denselben Satz oder Satzanfang. "
+    "Finde alle FEHLSTARTS, ABBRUECHE, WIEDERHOLTEN ANLAEUFE und Verhaspler und gib die "
+    "Wort-Index-Bereiche zurueck, die ENTFERNT werden sollen, sodass nur der saubere finale Take "
+    "jedes Gedankens bleibt und ein fluessiger Redefluss entsteht. Schneide aggressiv: lieber einen "
+    "holprigen Doppel-Anlauf ganz weg. ABER entferne NIE den finalen sauberen Take eines Inhalts - "
+    "die Aussage und jede einzigartige Information muss vollstaendig erhalten bleiben. Entferne nur "
+    "Redundanz und Fehler, nie Inhalt der nur einmal vorkommt. "
+    'OUTPUT NUR JSON: {"remove": [[startIdx, endIdx], ...]} - Indizes inklusive, auf die Wort-Indizes '
+    'bezogen, aufsteigend, ohne Ueberlappung. Nichts zu entfernen -> {"remove": []}.'
+)
+
+
+def _coherence_keep_segments(words: list, duration: float, pad: float = 0.04):
+    """LLM analysiert das Wort-Transkript und entfernt doppelte Takes / Fehlstarts.
+    Returns (keeps, n_removed_words). Faellt sicher auf 'alles behalten' zurueck."""
+    if not words or len(words) < 8:
+        return [(0.0, duration)], 0
+    transcript = "\n".join(f"{i}\t{w.get('word','')}" for i, w in enumerate(words))
+    try:
+        raw = call_openrouter(COHERENCE_SYS, transcript,
+                              model="anthropic/claude-sonnet-4.5", max_tokens=1500)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        remove = json.loads(m.group(0)).get("remove", []) if m else []
+    except Exception as exc:
+        log.warning("[SMART] coherence analysis failed: %s", exc)
+        return [(0.0, duration)], 0
+    n = len(words)
+    removes, removed_words = [], 0
+    for pair in remove:
+        try:
+            a, b = int(pair[0]), int(pair[1])
+        except Exception:
+            continue
+        a, b = max(0, a), min(n - 1, b)
+        if b < a:
+            continue
+        s = max(0.0, float(words[a]["start"]) - pad)
+        e = min(duration, float(words[b]["end"]) + pad)
+        if e > s:
+            removes.append((s, e)); removed_words += (b - a + 1)
+    if not removes:
+        return [(0.0, duration)], 0
+    removes.sort()
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    keeps = [(s, e) for s, e in keeps if e - s > 0.05]
+    return (keeps or [(0.0, duration)]), removed_words
 
 
 # Force Whisper to KEEP fillers so we can cut them deterministically.
@@ -4004,15 +4063,28 @@ async def trim_silence(req: TrimSilenceRequest):
             raise HTTPException(status_code=500, detail="facecam download failed")
         orig_dur = probe_duration(src)
 
+        current = src
+
+        # ── PHASE 0: smart coherence cut (doppelte Takes / Fehlstarts via LLM) ─
+        n_coherence = 0
+        if getattr(req, "smart_cut", True):
+            cwords = transcribe_audio(current)
+            if cwords:
+                ckeeps, n_coherence = _coherence_keep_segments(cwords, probe_duration(current))
+                if n_coherence > 0 and len(ckeeps) >= 1:
+                    p0 = job_dir / "phase0.mp4"
+                    if _trim_dead_air(current, ckeeps, p0):
+                        current = p0
+                        log.info("[TRIM] phase0: smart cut removed %d words (takes/false-starts)", n_coherence)
+
         # ── PHASE 1: acoustic filler-word killer ──────────────────────────────
-        current   = src
         n_fillers = 0
-        words = transcribe_audio(src, prompt=WHISPER_FILLER_PROMPT)
+        words = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
         if words:
-            keeps, n_fillers = _filler_keep_segments(words, orig_dur)
+            keeps, n_fillers = _filler_keep_segments(words, probe_duration(current))
             if n_fillers > 0 and len(keeps) >= 1:
                 p1 = job_dir / "phase1.mp4"
-                if _trim_dead_air(src, keeps, p1):   # video hard-cut + 15ms edge declick
+                if _trim_dead_air(current, keeps, p1):   # video hard-cut + 15ms edge declick
                     current = p1
                     log.info("[TRIM] phase1: cut %d filler word(s)", n_fillers)
         else:

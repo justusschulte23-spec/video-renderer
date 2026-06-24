@@ -1169,6 +1169,78 @@ def _fit_font(word: str, font_path, max_size: int, min_size: int = 44, max_width
     return ImageFont.truetype(str(font_path), min_size), min_size
 
 
+def _danilo_chunk_ids(words: list, max_words: int = 5) -> list:
+    """Group words into half-sentence chunks: break on sentence punctuation or max_words."""
+    ids, cid, count = [], 0, 0
+    for w in words:
+        ids.append(cid)
+        count += 1
+        tok = str(w.get("word", "")).strip()
+        if re.search(r"[.,!?;:]$", tok) or count >= max_words:
+            cid += 1; count = 0
+    return ids
+
+
+def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
+    """Danilo-style: half-sentence builds word-by-word, punch words bigger + subtle gold
+    outline, warm cream base, double drop shadow, German capitalization kept (no all-caps)."""
+    draw = ImageDraw.Draw(img)
+    base_size  = int(style.get("size", 90) * 0.95)
+    punch_size = int(style.get("size", 90) * 1.5)
+    font_path  = style["fonts"]["base"]
+    cream  = style["colors"].get("base", "#F5F0E6")
+    gold   = style["colors"].get("punch", "#D4AF37")
+    shadow = style.get("shadow", "#1A1410")
+    max_w  = W - 140
+    space  = int(base_size * 0.32)
+
+    def is_punch(w):
+        if w.get("cls") == "punch":
+            return True
+        t = re.sub(r"[^\wäöüÄÖÜß]", "", str(w.get("word", "")))
+        return bool(t) and t[0].isupper() and len(t) > 5
+
+    toks = []
+    for w in reveal:
+        txt = str(w.get("word", "")).strip()
+        if not txt:
+            continue
+        p = is_punch(w)
+        size = punch_size if p else base_size
+        f = ImageFont.truetype(str(font_path), size)
+        toks.append({"txt": txt, "f": f, "w": draw.textlength(txt, font=f), "size": size, "punch": p})
+    if not toks:
+        return
+
+    lines, cur, curw = [], [], 0.0
+    for t in toks:
+        add = t["w"] + (space if cur else 0)
+        if cur and curw + add > max_w:
+            lines.append(cur); cur = [t]; curw = t["w"]
+        else:
+            cur.append(t); curw += add
+    if cur:
+        lines.append(cur)
+
+    line_hs = [max(t["size"] for t in ln) * 1.18 for ln in lines]
+    y = cy - sum(line_hs) / 2
+    for ln, lh in zip(lines, line_hs):
+        lw  = sum(t["w"] for t in ln) + space * (len(ln) - 1)
+        x   = (W - lw) / 2
+        cyl = y + lh / 2
+        for t in ln:
+            for dx, dy in ((3, 4), (2, 2)):
+                draw.text((x + dx, cyl + dy), t["txt"], font=t["f"], fill=shadow, anchor="lm")
+            if t["punch"]:
+                sw = max(2, int(t["size"] * 0.045))
+                draw.text((x, cyl), t["txt"], font=t["f"], fill=cream, anchor="lm",
+                          stroke_width=sw, stroke_fill=gold)
+            else:
+                draw.text((x, cyl), t["txt"], font=t["f"], fill=cream, anchor="lm")
+            x += t["w"] + space
+        y += lh
+
+
 def build_caption_frames(words: list, total_frames: int,
                          cap_dir: Path, gradient_base: Path, style: dict = None):
     cap_dir.mkdir(parents=True, exist_ok=True)
@@ -1189,31 +1261,45 @@ def build_caption_frames(words: list, total_frames: int,
             transition_frames.update([f, f + 1, f + 2])
             prev = cur
 
-    perword = (style or {}).get("mode") == "perword"
-    if perword:
+    mode    = (style or {}).get("mode")
+    danilo  = (mode == "danilo")
+    perword = (mode == "perword")
+    if perword or danilo:
         cy = 1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2
         blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))   # full-frame transparent (Tim fullcam)
     else:
         blank = Image.open(str(gradient_base)).convert("RGBA")
 
+    chunk_id = chunks = None
+    if danilo:
+        chunk_id = _danilo_chunk_ids(words)
+        chunks = {}
+        for j, c in enumerate(chunk_id):
+            chunks.setdefault(c, []).append(j)
+
     for frame_n in range(total_frames):
         img = blank.copy()
         wi  = word_at_frame.get(frame_n, -1)
         if wi >= 0:
-            word = words[wi]["word"]
-            if frame_n in transition_frames:
-                pulse_map = {0: 1.0, 1: 1.04, 2: 1.0}
-                offset = frame_n - min(f for f in transition_frames
-                                       if f >= frame_n - 2 and
-                                       word_at_frame.get(f - 2, -1) != wi
-                                       and word_at_frame.get(f, -1) == wi)
-                scale = pulse_map.get(offset % 3, 1.0)
+            if danilo:
+                members = chunks.get(chunk_id[wi], [wi])
+                reveal  = [words[j] for j in members if j <= wi]
+                _draw_danilo_frame(img, reveal, style, cy)
             else:
-                scale = 1.0
-            if perword:
-                _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
-            else:
-                _draw_caption_frame(img, word, scale, style)
+                word = words[wi]["word"]
+                if frame_n in transition_frames:
+                    pulse_map = {0: 1.0, 1: 1.04, 2: 1.0}
+                    offset = frame_n - min(f for f in transition_frames
+                                           if f >= frame_n - 2 and
+                                           word_at_frame.get(f - 2, -1) != wi
+                                           and word_at_frame.get(f, -1) == wi)
+                    scale = pulse_map.get(offset % 3, 1.0)
+                else:
+                    scale = 1.0
+                if perword:
+                    _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
+                else:
+                    _draw_caption_frame(img, word, scale, style)
 
         out = cap_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))

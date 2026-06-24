@@ -1187,17 +1187,20 @@ def _danilo_chunk_ids(words: list, max_words: int = 5) -> list:
 
 
 def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
-    """Danilo-style: half-sentence builds word-by-word, punch words bigger + subtle gold
-    outline, warm cream base, double drop shadow, German capitalization kept (no all-caps)."""
+    """Danilo-style (exact): half-sentence builds word-by-word, key words much bigger
+    INLINE, pure white, tight -0.05em kerning, tight line-height, soft diffuse drop
+    shadow (no hard outline), German capitalization kept (no all-caps)."""
     draw = ImageDraw.Draw(img)
-    base_size  = int(style.get("size", 90) * 0.95)
-    punch_size = int(style.get("size", 90) * 1.5)
-    font_path  = style["fonts"]["base"]
-    cream  = style["colors"].get("base", "#F5F0E6")
-    gold   = style["colors"].get("punch", "#D4AF37")
-    shadow = style.get("shadow", "#1A1410")
-    max_w  = W - 140
-    space  = int(base_size * 0.16)   # tight block look (words almost touching, Danilo ref)
+    S          = int(style.get("size", 90))
+    small_size = int(S * 0.60)            # ~5vw filler words
+    big_size   = int(S * 1.32)            # ~11vw key words
+    font_path  = style["fonts"]["base"]   # Inter Black recommended
+    white      = style["colors"].get("base", "#FFFFFF")
+    sc         = style.get("shadow", (0, 0, 0, 200))
+    shadow     = (sc[0], sc[1], sc[2], 70) if isinstance(sc, (list, tuple)) and len(sc) >= 3 else (0, 0, 0, 70)
+    max_w      = W - 120
+    word_gap   = int(small_size * 0.18)
+    sh_offsets = [(0, 6), (0, 4), (4, 5), (-4, 5), (3, 3), (-3, 3)]   # fake soft/diffuse shadow
 
     def is_punch(w):
         if w.get("cls") == "punch":
@@ -1205,21 +1208,29 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
         t = re.sub(r"[^\wäöüÄÖÜß]", "", str(w.get("word", "")))
         return bool(t) and t[0].isupper() and len(t) > 5
 
+    def kwidth(txt, font, tr):
+        return (sum(draw.textlength(c, font=font) + tr for c in txt) - tr) if txt else 0
+
+    def kdraw(txt, font, x, ymid, fill, tr):
+        for c in txt:
+            draw.text((x, ymid), c, font=font, fill=fill, anchor="lm")
+            x += draw.textlength(c, font=font) + tr
+
     toks = []
     for w in reveal:
         txt = str(w.get("word", "")).strip()
         if not txt:
             continue
-        p = is_punch(w)
-        size = punch_size if p else base_size
-        f = ImageFont.truetype(str(font_path), size)
-        toks.append({"txt": txt, "f": f, "w": draw.textlength(txt, font=f), "size": size, "punch": p})
+        sz = big_size if is_punch(w) else small_size
+        f  = ImageFont.truetype(str(font_path), sz)
+        tr = -int(sz * 0.05)              # -0.05em kerning
+        toks.append({"txt": txt, "f": f, "tr": tr, "w": kwidth(txt, f, tr), "size": sz})
     if not toks:
         return
 
     lines, cur, curw = [], [], 0.0
     for t in toks:
-        add = t["w"] + (space if cur else 0)
+        add = t["w"] + (word_gap if cur else 0)
         if cur and curw + add > max_w:
             lines.append(cur); cur = [t]; curw = t["w"]
         else:
@@ -1227,22 +1238,21 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
     if cur:
         lines.append(cur)
 
-    line_hs = [max(t["size"] for t in ln) * 1.18 for ln in lines]
+    line_hs = [max(t["size"] for t in ln) * 1.0 for ln in lines]   # tight line-height
     y = cy - sum(line_hs) / 2
     for ln, lh in zip(lines, line_hs):
-        lw  = sum(t["w"] for t in ln) + space * (len(ln) - 1)
-        x   = (W - lw) / 2
+        lw  = sum(t["w"] for t in ln) + word_gap * (len(ln) - 1)
+        x0  = (W - lw) / 2
         cyl = y + lh / 2
+        x = x0                                  # soft shadow pass
         for t in ln:
-            for dx, dy in ((3, 4), (2, 2)):
-                draw.text((x + dx, cyl + dy), t["txt"], font=t["f"], fill=shadow, anchor="lm")
-            if t["punch"]:
-                sw = max(2, int(t["size"] * 0.045))
-                draw.text((x, cyl), t["txt"], font=t["f"], fill=cream, anchor="lm",
-                          stroke_width=sw, stroke_fill=gold)
-            else:
-                draw.text((x, cyl), t["txt"], font=t["f"], fill=cream, anchor="lm")
-            x += t["w"] + space
+            for dx, dy in sh_offsets:
+                kdraw(t["txt"], t["f"], x + dx, cyl + dy, shadow, t["tr"])
+            x += t["w"] + word_gap
+        x = x0                                  # crisp white pass
+        for t in ln:
+            kdraw(t["txt"], t["f"], x, cyl, white, t["tr"])
+            x += t["w"] + word_gap
         y += lh
 
 
@@ -4159,7 +4169,8 @@ async def trim_silence(req: TrimSilenceRequest):
         # ── PHASE 0: smart coherence cut (doppelte Takes / Fehlstarts via LLM) ─
         n_coherence = 0
         if getattr(req, "smart_cut", True):
-            cwords = transcribe_audio(current)
+            # filler-prompt transcript keeps disfluencies (äh/Doppler) visible so the LLM can cut them
+            cwords = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
             if cwords:
                 ckeeps, n_coherence = _coherence_keep_segments(cwords, probe_duration(current))
                 if n_coherence > 0 and len(ckeeps) >= 1:

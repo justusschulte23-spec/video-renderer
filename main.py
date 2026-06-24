@@ -1076,8 +1076,8 @@ def _caption_style(tpl: dict) -> dict:
         st["strokes"] = [(*_hex_rgb(strokes[i]), alphas[i]) for i in range(3)]
     if cap.get("size"):
         st["size"] = int(cap["size"])
-    if cap.get("mode") == "perword":
-        st["mode"] = "perword"
+    if cap.get("mode") in ("perword", "danilo"):
+        st["mode"] = cap["mode"]
         wc = cap.get("colors") or {}
         st["colors"] = {k: (*_hex_rgb(wc.get(k), (245, 242, 236)), 255)
                         for k in ("base", "punch", "data", "anecdote")}
@@ -3443,7 +3443,7 @@ async def _render_impl(req: RenderRequest):
         # ── 7. Caption frames (per-word classify for premium clients) ─────────
         cap_dir = job_dir / "captions"
         cap_words = words
-        if cap_style.get("mode") == "perword":
+        if cap_style.get("mode") in ("perword", "danilo"):
             cap_words = await asyncio.get_event_loop().run_in_executor(
                 None, _classify_caption_words, words)
         build_caption_frames(cap_words, total_frames, cap_dir, divider_png, cap_style)

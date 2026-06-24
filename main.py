@@ -130,6 +130,7 @@ GSAP_CDN       = "https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js
 FONT_OSWALD   = FONT_DIR / "Oswald.ttf"     # heading/punch (uppercase, high-impact)
 FONT_INTER    = FONT_DIR / "Inter.ttf"      # body/base (clean, premium)
 FONT_CAVEAT   = FONT_DIR / "Caveat.ttf"     # cursive (personal, handwritten)
+FONT_ANTON    = FONT_DIR / "Anton.ttf"      # ultra-black display (premium caption block)
 
 FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
@@ -137,6 +138,7 @@ FONT_URLS = {
     FONT_OSWALD:   "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald%5Bwght%5D.ttf",
     FONT_INTER:    "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz,wght%5D.ttf",
     FONT_CAVEAT:   "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
+    FONT_ANTON:    "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
 }
 
 # ── SFX library ───────────────────────────────────────────────────────────────
@@ -1064,7 +1066,7 @@ _CAP_DEFAULT = {
     "font_path": str(FONT_BLACK),
 }
 
-_FONT_MAP = {"montserrat": FONT_BLACK, "oswald": FONT_OSWALD, "inter": FONT_INTER, "caveat": FONT_CAVEAT}
+_FONT_MAP = {"montserrat": FONT_BLACK, "oswald": FONT_OSWALD, "inter": FONT_INTER, "caveat": FONT_CAVEAT, "anton": FONT_ANTON}
 
 
 def _caption_style(tpl: dict) -> dict:
@@ -1192,8 +1194,8 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
     shadow (no hard outline), German capitalization kept (no all-caps)."""
     draw = ImageDraw.Draw(img)
     S          = int(style.get("size", 90))
-    small_size = int(S * 0.60)            # ~5vw filler words
-    big_size   = int(S * 1.32)            # ~11vw key words
+    small_size = int(S * 0.82)            # ~7vw filler words
+    big_size   = int(S * 1.55)            # ~13vw key words
     font_path  = style["fonts"]["base"]   # Inter Black recommended
     white      = style["colors"].get("base", "#FFFFFF")
     sc         = style.get("shadow", (0, 0, 0, 200))
@@ -3556,7 +3558,7 @@ async def _render_impl(req: RenderRequest):
             # Tim layout: Flux images = lower-third card (rounded + gold trim); videos stay full-frame.
             gold_rgb = _hex_to_rgb(((tpl.get("colors") or {}).get("primary")) if tpl else None)
             lt_box_w, lt_box_h = int(W * 0.84), int(H * 0.32)
-            lt_x, lt_y = (W - lt_box_w) // 2, int(H * 0.60)
+            lt_x, lt_y = (W - lt_box_w) // 2, int(H * 0.15)   # upper third (captions own the lower third)
             for cut in image_cuts:
                 styled = cut["path"].with_name(f"lt_{cut['path'].stem}.png")
                 ok = _style_lowerthird_image(cut["path"], styled, lt_box_w, lt_box_h, gold=gold_rgb)

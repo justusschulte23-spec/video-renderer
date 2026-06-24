@@ -3857,6 +3857,15 @@ html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-
 
 </body>
 </html>"""
+    # ── brand-swap: replace hardcoded Justus tokens with client template values ──
+    bgc = (((tpl or {}).get("colors") or {}).get("bg")) or "#0a0910"
+    _html_doc = (_html_doc
+        .replace("#8B5CF6", primary)
+        .replace("#06B6D4", accent)
+        .replace("#C0C0C0", secondary)
+        .replace("#0a0910", bgc)
+        .replace("@justus.automates", b["p2_handle"])
+        .replace("justus.automates", b["p2_url"]))
     return _html_doc
 
 

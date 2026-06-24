@@ -372,6 +372,7 @@ class ThumbnailRequest(BaseModel):
     thumbnail_concept:   Optional[str] = None
     thumbnail_prompt:    Optional[str] = None  # alias used by N8N workflow
     brand_color_primary: str = "#8B5CF6"
+    client_id:           str = "justus"   # resolves thumbnail brand from template
 
 
 class GenerateBrollRequest(BaseModel):
@@ -1207,11 +1208,19 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
 
 
 # ── fal.ai thumbnail generator ───────────────────────────────────────────────
-def _call_fal_thumbnail(concept: str, accent: str) -> str:
-    """Generate a thumbnail via fal.ai nano-banana-pro. Returns image URL."""
+def _call_fal_thumbnail(concept: str, accent: str, bg: str = "#12101a",
+                        glow_word: str = "amethyst purple", vibe: str = None) -> str:
+    """Generate a thumbnail via fal.ai nano-banana-pro. Returns image URL.
+    bg/glow_word/vibe are per-client (template); defaults = Justus tech look."""
     if not FAL_API_KEY:
         raise RuntimeError("FAL_API_KEY not set")
 
+    vibe = vibe or (
+        "Premium minimal tech thumbnail for a social media video. "
+        "Cinematic studio lighting, premium 3D render aesthetic, ultra clean, sharp focus, "
+        "high-end product photography style like an Apple keynote reveal. "
+        "Sophisticated, minimalist, expensive-looking."
+    )
     negative = (
         "cluttered, busy, multiple objects, text, letters, words, watermark, "
         "logo, oversaturated, neon overload, rainbow colors, cartoonish, anime, "
@@ -1219,14 +1228,12 @@ def _call_fal_thumbnail(concept: str, accent: str) -> str:
         "people, faces, hands, distorted, ugly, amateur"
     )
     prompt = (
-        f"Premium minimal tech thumbnail for a social media video. "
+        f"{vibe} "
         f"Hero subject: {concept}. "
         "Single hero object, centered composition, lots of empty negative space around it. "
-        "Deep dark charcoal background (#12101a). "
-        f"The ONLY light source is a soft amethyst purple glow ({accent}) rimming the object. "
-        "Cinematic studio lighting, premium 3D render aesthetic, ultra clean, sharp focus, "
-        "high-end product photography style like an Apple keynote reveal. "
-        f"Sophisticated, minimalist, expensive-looking. Subtle, not oversaturated. "
+        f"Deep dark background ({bg}). "
+        f"The ONLY light source is a soft {glow_word} glow ({accent}) rimming the object. "
+        f"Subtle, not oversaturated. "
         f"Avoid: {negative}"
     )
 
@@ -3131,11 +3138,19 @@ async def generate_thumbnail(req: ThumbnailRequest):
     try:
         # ── fal.ai generation ─────────────────────────────────────────────────
         concept = req.thumbnail_concept or req.thumbnail_prompt or req.topic
+        # per-client thumbnail brand from template (defaults = Justus tech look)
+        _tpl  = _load_template(req.client_id, None)
+        _cols = _tpl_colors(_tpl)
+        _timg = ((_tpl or {}).get("images") or {})
+        thumb_accent = _cols.get("primary") or req.brand_color_primary
+        thumb_bg     = _cols.get("bg") or "#12101a"
+        thumb_glow   = _timg.get("glow_word") or "amethyst purple"
+        thumb_vibe   = _timg.get("thumbnail_vibe")
         ok = False
         try:
             loop    = asyncio.get_event_loop()
             img_url = await loop.run_in_executor(
-                None, _call_fal_thumbnail, concept, req.brand_color_primary
+                None, _call_fal_thumbnail, concept, thumb_accent, thumb_bg, thumb_glow, thumb_vibe
             )
             log.info("[THUMB] fal.ai returned: %s", img_url)
             ok = download_file(img_url, tmp_raw)

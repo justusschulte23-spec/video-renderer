@@ -420,6 +420,7 @@ class InfosheetRequest(BaseModel):
     was_bringt_mir:     list[str]
     justus_take:        str
     konkreter_schritt:  str
+    client_id:          str = "justus"   # resolves branding+palette; justus = byte-identical
 
 
 # ── OpenRouter helper ─────────────────────────────────────────────────────────
@@ -1466,6 +1467,46 @@ def _prepare_image_cuts(cuts: list, job_dir: Path, accent: str, duration: float,
     prepared.sort(key=lambda x: x["start"])
     log.info("[IMG] %d/%d cutaways generated", len(prepared), len(cuts))
     return prepared
+
+
+def _style_lowerthird_image(src: Path, out: Path, box_w: int, box_h: int,
+                            radius: int = 38, border: int = 5,
+                            gold: tuple = (212, 175, 55)) -> bool:
+    """Tim fullcam: cover-crop Flux image into a lower-third card with rounded
+    corners + light gold trim ring on a transparent box-sized canvas."""
+    try:
+        im = Image.open(src).convert("RGB")
+        inner_w, inner_h = box_w - 2 * border, box_h - 2 * border
+        sw, sh = im.size
+        scale = max(inner_w / sw, inner_h / sh)
+        im = im.resize((max(1, int(sw * scale)), max(1, int(sh * scale))), Image.LANCZOS)
+        rw, rh = im.size
+        left, top = (rw - inner_w) // 2, (rh - inner_h) // 2
+        im = im.crop((left, top, left + inner_w, top + inner_h)).convert("RGBA")
+        inner_radius = max(radius - border, 2)
+        mask = Image.new("L", (inner_w, inner_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, inner_w - 1, inner_h - 1],
+                                               radius=inner_radius, fill=255)
+        im.putalpha(mask)
+        canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+        # gold rounded-rect shows only as a thin ring around the inner image
+        ImageDraw.Draw(canvas).rounded_rectangle(
+            [0, 0, box_w - 1, box_h - 1], radius=radius,
+            fill=(gold[0], gold[1], gold[2], 235))
+        canvas.alpha_composite(im, (border, border))
+        canvas.save(out)
+        return True
+    except Exception as exc:
+        log.warning("[IMG] lowerthird style failed: %s", exc)
+        return False
+
+
+def _hex_to_rgb(h: str, default: tuple = (212, 175, 55)) -> tuple:
+    try:
+        h = (h or "").lstrip("#")
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except Exception:
+        return default
 
 
 # ── Stock-video inserts (Pexels) at emotional peaks ───────────────────────────
@@ -3337,20 +3378,21 @@ async def _render_impl(req: RenderRequest):
             idx = 1   # facecam is [0]; extra inputs start at [1]
             ov = 0
             prev = "base"
-            kb = bool(img_cfg.get("ken_burns"))
+            # Tim layout: Flux images = lower-third card (rounded + gold trim); videos stay full-frame.
+            gold_rgb = _hex_to_rgb(((tpl.get("colors") or {}).get("primary")) if tpl else None)
+            lt_box_w, lt_box_h = int(W * 0.84), int(H * 0.32)
+            lt_x, lt_y = (W - lt_box_w) // 2, int(H * 0.60)
             for cut in image_cuts:
-                extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(cut["path"])]
+                styled = cut["path"].with_name(f"lt_{cut['path'].stem}.png")
+                ok = _style_lowerthird_image(cut["path"], styled, lt_box_w, lt_box_h, gold=gold_rgb)
+                img_in = styled if ok else cut["path"]
+                extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(img_in)]
                 fout = max(cut["end"] - cut_fade, cut["start"])
-                if kb:    # slow ken-burns zoom (calm motion, never static)
-                    base_scale = (f"[{idx}:v]scale={int(W*1.12)}:{int(H*1.12)}:force_original_aspect_ratio=increase,"
-                                  f"zoompan=z='min(zoom+0.0006,1.10)':d=1:x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
-                                  f"s={W}x{H}:fps={FPS},crop={W}:{H},setsar=1,format=rgba,")
-                else:
-                    base_scale = f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1,format=rgba,"
-                parts.append(base_scale +
+                pre = "format=rgba," if ok else f"scale={lt_box_w}:{lt_box_h}:force_original_aspect_ratio=increase,crop={lt_box_w}:{lt_box_h},setsar=1,format=rgba,"
+                parts.append(f"[{idx}:v]{pre}"
                     f"fade=t=in:st={cut['start']:.3f}:d={cut_fade}:alpha=1,"
                     f"fade=t=out:st={fout:.3f}:d={cut_fade}:alpha=1[o{ov}];")
-                parts.append(f"[{prev}][o{ov}]overlay=x=0:y=0:enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[s{ov}];")
+                parts.append(f"[{prev}][o{ov}]overlay=x={lt_x}:y={lt_y}:enable='between(t,{cut['start']:.3f},{cut['end']:.3f})'[s{ov}];")
                 prev = f"s{ov}"; idx += 1; ov += 1
             for v in video_cuts:
                 extra_inputs += ["-i", str(v["path"])]
@@ -3569,7 +3611,24 @@ def _build_infosheet_html(req: InfosheetRequest) -> str:
         for b in req.was_bringt_mir
     )
 
-    return f"""<!DOCTYPE html>
+    # ── brand + palette (client template; justus defaults => byte-identical) ──
+    tpl  = _load_template(req.client_id, None)
+    cols = _tpl_colors(tpl)
+    info = (tpl.get("infosheet") or {}) if tpl else {}
+    primary   = cols.get("primary")   or "#8B5CF6"
+    accent    = cols.get("accent")    or "#06B6D4"
+    secondary = cols.get("secondary") or "#C0C0C0"
+    b = {
+        "handle_html": info.get("handle_html", "@<em>justus</em>.automates"),
+        "take_label":  info.get("take_label", "Justus&rsquo; Take"),
+        "p2_eyebrow":  info.get("p2_eyebrow", "Justus Schulte &middot; KI-Automatisierung"),
+        "p2_headline": info.get("p2_headline", "Willst du wissen wie ich sowas <em>automatisiere?</em>"),
+        "p2_body":     info.get("p2_body", "Folg mir f&uuml;r t&auml;gliche KI-Insights &mdash; und kommentier wenn du den vollst&auml;ndigen Automation-Blueprint willst."),
+        "p2_handle":   info.get("p2_handle", "@justus.automates"),
+        "p2_url":      info.get("p2_url", "justus.automates"),
+    }
+
+    _html_doc = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -3739,7 +3798,7 @@ html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-
   <div class="content">
 
     <div class="header">
-      <div class="handle">@<em>justus</em>.automates</div>
+      <div class="handle">{b['handle_html']}</div>
       <div class="topic-tag"><div class="tdot"></div>{esc(req.topic_tag)}</div>
     </div>
 
@@ -3764,7 +3823,7 @@ html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-
     </div>
 
     <div class="take-block">
-      <div class="take-label">Justus&rsquo; Take</div>
+      <div class="take-label">{b['take_label']}</div>
       <div class="take-text">{esc(req.justus_take)}</div>
     </div>
 
@@ -3783,10 +3842,10 @@ html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-
 <div class="page">
   <div class="gl1"></div><div class="gl2"></div>
   <div class="p2">
-    <div class="p2-eyebrow">Justus Schulte &middot; KI-Automatisierung</div>
-    <div class="p2-headline">Willst du wissen wie ich sowas <em>automatisiere?</em></div>
+    <div class="p2-eyebrow">{b['p2_eyebrow']}</div>
+    <div class="p2-headline">{b['p2_headline']}</div>
     <div class="p2-body">
-      Folg mir f&uuml;r t&auml;gliche KI-Insights &mdash; und kommentier wenn du den vollst&auml;ndigen Automation-Blueprint willst.
+      {b['p2_body']}
     </div>
     <div class="p2-deco"></div>
     <div class="p2-footer">

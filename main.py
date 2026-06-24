@@ -3857,6 +3857,7 @@ html, body {{ background:#0a0910; -webkit-print-color-adjust:exact; print-color-
 
 </body>
 </html>"""
+    return _html_doc
 
 
 # ── Infosheet: HTML → PDF via Playwright ──────────────────────────────────────

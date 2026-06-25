@@ -131,6 +131,7 @@ FONT_OSWALD   = FONT_DIR / "Oswald.ttf"     # heading/punch (uppercase, high-imp
 FONT_INTER    = FONT_DIR / "Inter.ttf"      # body/base (clean, premium)
 FONT_CAVEAT   = FONT_DIR / "Caveat.ttf"     # cursive (personal, handwritten)
 FONT_ANTON    = FONT_DIR / "Anton.ttf"      # ultra-black display (premium caption block)
+FONT_PLAYFAIR = FONT_DIR / "PlayfairDisplay.ttf"  # high-contrast serif (luxury editorial captions)
 
 FONT_URLS = {
     FONT_BLACK:    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Black.ttf",
@@ -139,6 +140,7 @@ FONT_URLS = {
     FONT_INTER:    "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz,wght%5D.ttf",
     FONT_CAVEAT:   "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat%5Bwght%5D.ttf",
     FONT_ANTON:    "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
+    FONT_PLAYFAIR: "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf",
 }
 
 # ── SFX library ───────────────────────────────────────────────────────────────
@@ -1066,7 +1068,7 @@ _CAP_DEFAULT = {
     "font_path": str(FONT_BLACK),
 }
 
-_FONT_MAP = {"montserrat": FONT_BLACK, "oswald": FONT_OSWALD, "inter": FONT_INTER, "caveat": FONT_CAVEAT, "anton": FONT_ANTON}
+_FONT_MAP = {"montserrat": FONT_BLACK, "oswald": FONT_OSWALD, "inter": FONT_INTER, "caveat": FONT_CAVEAT, "anton": FONT_ANTON, "playfair": FONT_PLAYFAIR}
 
 
 def _caption_style(tpl: dict) -> dict:
@@ -1188,6 +1190,31 @@ def _danilo_chunk_ids(words: list, max_words: int = 5) -> list:
     return ids
 
 
+def _premium_chunk_ids(words: list, max_words: int = 3, long_len: int = 7) -> list:
+    """Long-Word-Isolation chunker (karaoke): a word with pure length > long_len gets its
+    OWN box; punctuation closes a box; otherwise max_words per box. Returns chunk-id/word."""
+    def pure(w: str) -> int:
+        return len(re.sub(r"[.,/#!$%^&*;:{}=\-_`~()?]", "", w))
+    ids, cid, count = [], 0, 0
+    for i, w in enumerate(words):
+        tok   = str(w.get("word", "")).strip()
+        plen  = pure(tok)
+        islong = plen > long_len
+        # current word long but box already filling -> close old box first so long word is isolated
+        if islong and count > 0:
+            cid += 1; count = 0
+        ids.append(cid); count += 1
+        split = bool(re.search(r"[.,!?;:]", tok)) or islong
+        if not split and i + 1 < len(words):
+            if pure(str(words[i + 1].get("word", "")).strip()) > long_len:
+                split = True            # next word long -> break now so it starts fresh
+        if count >= max_words:
+            split = True
+        if split:
+            cid += 1; count = 0
+    return ids
+
+
 def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
     """Danilo-style (exact): half-sentence builds word-by-word, key words much bigger
     INLINE, pure white, tight -0.05em kerning, tight line-height, soft diffuse drop
@@ -1264,45 +1291,58 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
         y += lh
 
 
+def _karaoke_font(font_path, size: int):
+    f = ImageFont.truetype(str(font_path), size)
+    try:
+        f.set_variation_by_axes([700])    # Playfair Display variable -> weight 700 (no-op/raises for static)
+    except Exception:
+        pass
+    return f
+
+
 def _draw_karaoke_frame(img: Image.Image, items: list, style: dict, cy: int):
     """Karaoke black-box: pitch-black rounded box (fit-content) around a 1-3 word phrase,
     active (currently spoken) word pure white, inactive words muted gray. Hard cut, no
-    animation. items = [(word_obj, is_active)]. German caps kept."""
+    animation. items = [(word_obj, is_active)]. German caps kept. ABSOLUTE anti-overflow:
+    box can never exceed the 9:16 safe zone (10vw walls each side) — shrinks font if needed."""
     draw = ImageDraw.Draw(img)
-    size      = int(style.get("size", 90) * 0.85)
     font_path = style["fonts"]["base"]
-    f = ImageFont.truetype(str(font_path), size)
     active   = style["colors"].get("base", (255, 255, 255, 255))
     inactive = (255, 255, 255, 90)
-    gap  = int(size * 0.30)
-    padx = int(size * 0.55)
-    pady = int(size * 0.34)
+    max_box  = int(W * 0.80)              # 10vw invisible wall on each side
 
-    toks = []
-    for w, is_a in items:
-        txt = str(w.get("word", "")).strip()
-        if not txt:
-            continue
-        toks.append((txt, draw.textlength(txt, font=f), is_a))
-    if not toks:
+    texts = [str(w.get("word", "")).strip() for w, _ in items if str(w.get("word", "")).strip()]
+    flags = [is_a for w, is_a in items if str(w.get("word", "")).strip()]
+    if not texts:
         return
 
-    inner = sum(t[1] for t in toks) + gap * (len(toks) - 1)
-    box_w = inner + 2 * padx
+    size = int(style.get("size", 90) * 0.85)
+    while size > 28:
+        f    = _karaoke_font(font_path, size)
+        gap  = int(size * 0.30)
+        padx = int(size * 0.55)
+        widths = [draw.textlength(t, font=f) for t in texts]
+        box_w  = sum(widths) + gap * (len(texts) - 1) + 2 * padx
+        if box_w <= max_box:
+            break
+        size -= 4
+
+    pady  = int(size * 0.34)
     box_h = size + 2 * pady
     bx = (W - box_w) // 2
     by = int(cy - box_h / 2)
     draw.rounded_rectangle([bx, by, bx + box_w, by + box_h],
-                           radius=int(size * 0.18), fill=(0, 0, 0, 235))
+                           radius=int(size * 0.14), fill=(0, 0, 0, 235))
     x = bx + padx
     mid = by + box_h / 2
-    for txt, wpx, is_a in toks:
-        draw.text((x, mid), txt, font=f, fill=(active if is_a else inactive), anchor="lm")
+    for t, wpx, is_a in zip(texts, widths, flags):
+        draw.text((x, mid), t, font=f, fill=(active if is_a else inactive), anchor="lm")
         x += wpx + gap
 
 
 def build_caption_frames(words: list, total_frames: int,
-                         cap_dir: Path, gradient_base: Path, style: dict = None):
+                         cap_dir: Path, gradient_base: Path, style: dict = None,
+                         lift_ranges: list = None):
     cap_dir.mkdir(parents=True, exist_ok=True)
     log.info("Rendering %d caption frames …", total_frames)
 
@@ -1325,28 +1365,34 @@ def build_caption_frames(words: list, total_frames: int,
     danilo  = (mode == "danilo")
     perword = (mode == "perword")
     karaoke = (mode == "karaoke")
+    KARA_RED    = int(H * 0.80)   # default: deep lower third
+    KARA_YELLOW = int(H * 0.12)   # lifted to top while an image/video insert is on screen
     if perword or danilo or karaoke:
-        cy = int(H * 0.55) if karaoke else (1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2)
+        cy = KARA_RED if karaoke else (1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2)
         blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))   # full-frame transparent (Tim fullcam)
     else:
         blank = Image.open(str(gradient_base)).convert("RGBA")
 
-    chunk_id = chunks = frame_cid = None
+    chunk_id = chunks = frame_cid = chunk_cy = None
     if danilo:
         chunk_id = _danilo_chunk_ids(words)
         chunks = {}
         for j, c in enumerate(chunk_id):
             chunks.setdefault(c, []).append(j)
     if karaoke:
-        chunk_id = _danilo_chunk_ids(words, max_words=3)
+        chunk_id = _premium_chunk_ids(words, max_words=3, long_len=7)
         chunks = {}
         for j, c in enumerate(chunk_id):
             chunks.setdefault(c, []).append(j)
-        frame_cid = {}
+        ranges = lift_ranges or []
+        frame_cid, chunk_cy = {}, {}
         for cid, members in chunks.items():
-            s = int(words[members[0]]["start"] * FPS)
-            e = int(words[members[-1]]["end"] * FPS)
-            for fr in range(s, min(e + 1, total_frames)):
+            cs = words[members[0]]["start"]
+            ce = words[members[-1]]["end"]
+            # lift this phrase to the top if it overlaps any image/video insert
+            lifted = any(cs < r_end and ce > r_start for (r_start, r_end) in ranges)
+            chunk_cy[cid] = KARA_YELLOW if lifted else KARA_RED
+            for fr in range(int(cs * FPS), min(int(ce * FPS) + 1, total_frames)):
                 frame_cid[fr] = cid
 
     for frame_n in range(total_frames):
@@ -1356,7 +1402,7 @@ def build_caption_frames(words: list, total_frames: int,
             if cid is not None:
                 active = word_at_frame.get(frame_n, -1)
                 items = [(words[j], j == active) for j in chunks[cid]]
-                _draw_karaoke_frame(img, items, style, cy)
+                _draw_karaoke_frame(img, items, style, chunk_cy[cid])
         else:
             wi = word_at_frame.get(frame_n, -1)
             if wi >= 0:
@@ -3523,14 +3569,8 @@ async def _render_impl(req: RenderRequest):
         log.info("[RENDER] Transcribing facecam for captions")
         words = transcribe_audio(facecam_raw)
 
-        # ── 7. Caption frames (per-word classify for premium clients) ─────────
+        # ── 7. Caption dir (frames built later — after cuts, so karaoke can react) ─
         cap_dir = job_dir / "captions"
-        cap_words = words
-        if cap_style.get("mode") in ("perword", "danilo"):
-            cap_words = await asyncio.get_event_loop().run_in_executor(
-                None, _classify_caption_words, words)
-        # karaoke needs no classify (uniform size, active/inactive by timing)
-        build_caption_frames(cap_words, total_frames, cap_dir, divider_png, cap_style)
 
         # ── 8. Progress frames ───────────────────────────────────────────────
         prog_dir = job_dir / "progress"
@@ -3579,6 +3619,14 @@ async def _render_impl(req: RenderRequest):
 
         # priority video > logo > image; never stack at same moment
         video_cuts, logos, image_cuts = _dedupe_overlays(video_cuts, logos, image_cuts)
+
+        # ── 9e. Caption frames (built now so karaoke lifts to the top during inserts) ─
+        lift_ranges = [(c["start"], c["end"]) for c in (image_cuts + video_cuts)]
+        cap_words = words
+        if cap_style.get("mode") in ("perword", "danilo"):
+            cap_words = await asyncio.get_event_loop().run_in_executor(
+                None, _classify_caption_words, words)
+        build_caption_frames(cap_words, total_frames, cap_dir, divider_png, cap_style, lift_ranges)
 
         # ── 10. Final ffmpeg compose ──────────────────────────────────────────
         log.info("[RENDER] Compositing: broll+divider+facecam | %d img, %d video, %d logo | captions",

@@ -1813,6 +1813,9 @@ def _detect_video_cuts(words: list, duration: float,
         "(turning points, shocking stats, stakes, the hook). For each: time = start word's start time; "
         "end = end of that spoken phrase (a few words later); query = 3-5 word ENGLISH cinematic stock "
         "search that is CONCRETE/filmable AND fits the moment." + style_line + "\n"
+        "Every query MUST read as a MODERN, current, premium clip: append cues like 'modern', '4k', "
+        "'cinematic', 'aesthetic' where natural. NEVER produce dated/90s/retro/grainy/stocky/cheesy "
+        "corporate footage.\n"
         f"Space peaks >= {gap}s apart; none after duration-2s.\n"
         'Return ONLY JSON: {"cuts":[{"time":1.0,"end":3.4,"query":"..."}]}'
     )
@@ -1846,14 +1849,22 @@ def _fetch_pexels_clip(query: str, dur: float, job_dir: Path, idx: int) -> Optio
     try:
         r = requests.get("https://api.pexels.com/videos/search",
                          headers={"Authorization": PEXELS_API_KEY},
-                         params={"query": query, "per_page": 3, "orientation": "portrait", "size": "medium"},
+                         params={"query": query, "per_page": 12, "orientation": "portrait", "size": "large"},
                          timeout=30)
         r.raise_for_status()
         vids = r.json().get("videos", [])
         if not vids:
             return None
-        # prefer a portrait HD-ish file
-        files = sorted(vids[0]["video_files"],
+        # pick the most modern/premium candidate: high-res portrait, decent length, prefer recent ids
+        def _score(v):
+            h = v.get("height") or 0
+            w = v.get("width") or 1
+            portrait = 1 if h >= w else 0
+            res = min(h, 2400)                       # reward resolution (cap so 8k junk doesn't dominate)
+            vid_id = v.get("id") or 0                # higher Pexels id ~ newer upload
+            return (portrait, res, vid_id)
+        best = max(vids, key=_score)
+        files = sorted(best["video_files"],
                        key=lambda f: abs((f.get("height") or 0) - 1920))
         link = files[0]["link"]
         src = job_dir / f"vstock_src_{idx}.mp4"

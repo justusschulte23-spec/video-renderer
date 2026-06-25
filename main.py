@@ -1083,7 +1083,7 @@ def _caption_style(tpl: dict) -> dict:
         st["strokes"] = [(*_hex_rgb(strokes[i]), alphas[i]) for i in range(3)]
     if cap.get("size"):
         st["size"] = int(cap["size"])
-    if cap.get("mode") in ("perword", "danilo"):
+    if cap.get("mode") in ("perword", "danilo", "karaoke"):
         st["mode"] = cap["mode"]
         wc = cap.get("colors") or {}
         st["colors"] = {k: (*_hex_rgb(wc.get(k), (245, 242, 236)), 255)
@@ -1264,6 +1264,43 @@ def _draw_danilo_frame(img: Image.Image, reveal: list, style: dict, cy: int):
         y += lh
 
 
+def _draw_karaoke_frame(img: Image.Image, items: list, style: dict, cy: int):
+    """Karaoke black-box: pitch-black rounded box (fit-content) around a 1-3 word phrase,
+    active (currently spoken) word pure white, inactive words muted gray. Hard cut, no
+    animation. items = [(word_obj, is_active)]. German caps kept."""
+    draw = ImageDraw.Draw(img)
+    size      = int(style.get("size", 90) * 0.85)
+    font_path = style["fonts"]["base"]
+    f = ImageFont.truetype(str(font_path), size)
+    active   = style["colors"].get("base", (255, 255, 255, 255))
+    inactive = (255, 255, 255, 90)
+    gap  = int(size * 0.30)
+    padx = int(size * 0.55)
+    pady = int(size * 0.34)
+
+    toks = []
+    for w, is_a in items:
+        txt = str(w.get("word", "")).strip()
+        if not txt:
+            continue
+        toks.append((txt, draw.textlength(txt, font=f), is_a))
+    if not toks:
+        return
+
+    inner = sum(t[1] for t in toks) + gap * (len(toks) - 1)
+    box_w = inner + 2 * padx
+    box_h = size + 2 * pady
+    bx = (W - box_w) // 2
+    by = int(cy - box_h / 2)
+    draw.rounded_rectangle([bx, by, bx + box_w, by + box_h],
+                           radius=int(size * 0.18), fill=(0, 0, 0, 235))
+    x = bx + padx
+    mid = by + box_h / 2
+    for txt, wpx, is_a in toks:
+        draw.text((x, mid), txt, font=f, fill=(active if is_a else inactive), anchor="lm")
+        x += wpx + gap
+
+
 def build_caption_frames(words: list, total_frames: int,
                          cap_dir: Path, gradient_base: Path, style: dict = None):
     cap_dir.mkdir(parents=True, exist_ok=True)
@@ -1287,42 +1324,61 @@ def build_caption_frames(words: list, total_frames: int,
     mode    = (style or {}).get("mode")
     danilo  = (mode == "danilo")
     perword = (mode == "perword")
-    if perword or danilo:
-        cy = 1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2
+    karaoke = (mode == "karaoke")
+    if perword or danilo or karaoke:
+        cy = int(H * 0.55) if karaoke else (1350 if (style or {}).get("position", "lowerthird") == "lowerthird" else H // 2)
         blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))   # full-frame transparent (Tim fullcam)
     else:
         blank = Image.open(str(gradient_base)).convert("RGBA")
 
-    chunk_id = chunks = None
+    chunk_id = chunks = frame_cid = None
     if danilo:
         chunk_id = _danilo_chunk_ids(words)
         chunks = {}
         for j, c in enumerate(chunk_id):
             chunks.setdefault(c, []).append(j)
+    if karaoke:
+        chunk_id = _danilo_chunk_ids(words, max_words=3)
+        chunks = {}
+        for j, c in enumerate(chunk_id):
+            chunks.setdefault(c, []).append(j)
+        frame_cid = {}
+        for cid, members in chunks.items():
+            s = int(words[members[0]]["start"] * FPS)
+            e = int(words[members[-1]]["end"] * FPS)
+            for fr in range(s, min(e + 1, total_frames)):
+                frame_cid[fr] = cid
 
     for frame_n in range(total_frames):
         img = blank.copy()
-        wi  = word_at_frame.get(frame_n, -1)
-        if wi >= 0:
-            if danilo:
-                members = chunks.get(chunk_id[wi], [wi])
-                reveal  = [words[j] for j in members if j <= wi]
-                _draw_danilo_frame(img, reveal, style, cy)
-            else:
-                word = words[wi]["word"]
-                if frame_n in transition_frames:
-                    pulse_map = {0: 1.0, 1: 1.04, 2: 1.0}
-                    offset = frame_n - min(f for f in transition_frames
-                                           if f >= frame_n - 2 and
-                                           word_at_frame.get(f - 2, -1) != wi
-                                           and word_at_frame.get(f, -1) == wi)
-                    scale = pulse_map.get(offset % 3, 1.0)
+        if karaoke:
+            cid = frame_cid.get(frame_n)
+            if cid is not None:
+                active = word_at_frame.get(frame_n, -1)
+                items = [(words[j], j == active) for j in chunks[cid]]
+                _draw_karaoke_frame(img, items, style, cy)
+        else:
+            wi = word_at_frame.get(frame_n, -1)
+            if wi >= 0:
+                if danilo:
+                    members = chunks.get(chunk_id[wi], [wi])
+                    reveal  = [words[j] for j in members if j <= wi]
+                    _draw_danilo_frame(img, reveal, style, cy)
                 else:
-                    scale = 1.0
-                if perword:
-                    _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
-                else:
-                    _draw_caption_frame(img, word, scale, style)
+                    word = words[wi]["word"]
+                    if frame_n in transition_frames:
+                        pulse_map = {0: 1.0, 1: 1.04, 2: 1.0}
+                        offset = frame_n - min(f for f in transition_frames
+                                               if f >= frame_n - 2 and
+                                               word_at_frame.get(f - 2, -1) != wi
+                                               and word_at_frame.get(f, -1) == wi)
+                        scale = pulse_map.get(offset % 3, 1.0)
+                    else:
+                        scale = 1.0
+                    if perword:
+                        _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
+                    else:
+                        _draw_caption_frame(img, word, scale, style)
 
         out = cap_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))
@@ -1693,23 +1749,27 @@ LOGO_MAX          = 3
 LOGO_DUR          = 2.0
 
 
-def _detect_video_cuts(words: list, duration: float) -> list:
-    """Haiku: pick 2-3 EMOTIONAL PEAKS where a real cinematic clip hits hardest.
-    Returns [{time, end, query}] — query = EN cinematic stock search phrase."""
+def _detect_video_cuts(words: list, duration: float,
+                       max_cuts: int = VIDEO_CUT_MAX, style_hint: str = "") -> list:
+    """Haiku: pick EMOTIONAL PEAKS where a real cinematic clip hits hardest.
+    max_cuts + style_hint are per-client (template). query stays RELEVANT to the spoken
+    moment but in the client's visual vibe. Returns [{time, end, query}]."""
     if not words or duration < 8 or not PEXELS_API_KEY:
         return []
+    style_line = (f"\nVIBE of ALL clips (queries MUST fit this look while staying relevant to the moment): {style_hint}" if style_hint else "")
+    gap = 3.5 if max_cuts > 3 else 5.0
     sys_p = (
-        "You are a short-form editor. From the word-level transcript pick the 2-3 moments with the "
+        f"You are a short-form editor. From the word-level transcript pick the {max_cuts} moments with the "
         "HIGHEST EMOTIONAL IMPACT where a real cinematic stock VIDEO clip would maximize watchtime "
         "(turning points, shocking stats, stakes, the hook). For each: time = start word's start time; "
         "end = end of that spoken phrase (a few words later); query = 3-5 word ENGLISH cinematic stock "
-        "search (concrete, filmable, e.g. 'data center servers glowing', 'person stressed laptop night').\n"
-        "Space peaks >= 5s apart; none after duration-2s.\n"
+        "search that is CONCRETE/filmable AND fits the moment." + style_line + "\n"
+        f"Space peaks >= {gap}s apart; none after duration-2s.\n"
         'Return ONLY JSON: {"cuts":[{"time":1.0,"end":3.4,"query":"..."}]}'
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model="anthropic/claude-haiku-4.5", max_tokens=400)
+                              model="anthropic/claude-haiku-4.5", max_tokens=700)
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         cuts = json.loads(m.group()).get("cuts", []) if m else []
     except Exception as exc:
@@ -1723,11 +1783,11 @@ def _detect_video_cuts(words: list, duration: float) -> list:
             continue
         q = (c.get("query") or "").strip()
         dur = min(max(e - t, 0), VIDEO_CUT_MAX_DUR)
-        if not q or t < 0.5 or t > duration - 1.0 or dur < VIDEO_CUT_MIN_DUR or (t - last) < 5.0:
+        if not q or t < 0.5 or t > duration - 1.0 or dur < VIDEO_CUT_MIN_DUR or (t - last) < gap:
             continue
         clean.append({"time": round(t, 3), "end": round(t + dur, 3), "query": q})
         last = t
-        if len(clean) >= VIDEO_CUT_MAX:
+        if len(clean) >= max_cuts:
             break
     return clean
 
@@ -3469,6 +3529,7 @@ async def _render_impl(req: RenderRequest):
         if cap_style.get("mode") in ("perword", "danilo"):
             cap_words = await asyncio.get_event_loop().run_in_executor(
                 None, _classify_caption_words, words)
+        # karaoke needs no classify (uniform size, active/inactive by timing)
         build_caption_frames(cap_words, total_frames, cap_dir, divider_png, cap_style)
 
         # ── 8. Progress frames ───────────────────────────────────────────────
@@ -3499,8 +3560,10 @@ async def _render_impl(req: RenderRequest):
         video_cuts = []
         vid_cfg = (tpl.get("video_cuts") or {}) if tpl else {}
         if vid_cfg.get("enabled", True):
+            vmax = int(vid_cfg.get("max_cuts", VIDEO_CUT_MAX))
+            vstyle = vid_cfg.get("style", "")
             vpeaks = await asyncio.get_event_loop().run_in_executor(
-                None, _detect_video_cuts, words, duration)
+                None, _detect_video_cuts, words, duration, vmax, vstyle)
             if vpeaks:
                 video_cuts = await asyncio.get_event_loop().run_in_executor(
                     None, _prepare_video_cuts, vpeaks, job_dir, duration)
@@ -3563,8 +3626,8 @@ async def _render_impl(req: RenderRequest):
             prev = "base"
             # Tim layout: Flux images = lower-third card (rounded + gold trim); videos stay full-frame.
             gold_rgb = _hex_to_rgb(((tpl.get("colors") or {}).get("primary")) if tpl else None)
-            lt_box_w, lt_box_h = int(W * 0.84), int(H * 0.32)
-            lt_x, lt_y = (W - lt_box_w) // 2, int(H * 0.15)   # upper third (captions own the lower third)
+            lt_box_w, lt_box_h = int(W * 0.84), int(H * 0.30)
+            lt_x, lt_y = (W - lt_box_w) // 2, int(H * 0.64)   # lower third; karaoke captions sit above it (~0.55H)
             for cut in image_cuts:
                 styled = cut["path"].with_name(f"lt_{cut['path'].stem}.png")
                 ok = _style_lowerthird_image(cut["path"], styled, lt_box_w, lt_box_h, gold=gold_rgb)

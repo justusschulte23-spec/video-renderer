@@ -173,10 +173,10 @@ SFX_LIBRARY = {
     "impact_bass_drop_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_bass_drop_01.mp3"),
     "impact_cinematic_hit_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_cinematic_hit_01.mp3"),
     "impact_digital_boom_01":  ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_digital_boom_01.mp3"),
-    "impact_gong_reversed_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_gong_reversed_01.mp3"),
+    "impact_gong_reversed_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/v1782418124/audio/sfx/impact/Impact_Gong.mp3"),
     "impact_heartbeat_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_heartbeat_01.mp3"),
     "impact_metal_thud_01":    ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_metal_thud_01.mp3"),
-    "impact_shatter_muted_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_shatter_muted_01.mp3"),
+    "impact_shatter_muted_01": ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/v1782418124/audio/sfx/impact/Impact_Gong.mp3"),
     "impact_tape_stop_01":     ("impact", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/impact/impact_tape_stop_01.mp3"),
     "pop_blip_organic_01":     ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_blip_organic_01.mp3"),
     "pop_bubble_muted_01":     ("pop",    "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/pop/pop_bubble_muted_01.mp3"),
@@ -1090,6 +1090,7 @@ def _caption_style(tpl: dict) -> dict:
         wc = cap.get("colors") or {}
         st["colors"] = {k: (*_hex_rgb(wc.get(k), (245, 242, 236)), 255)
                         for k in ("base", "punch", "data", "anecdote")}
+        st["colors"]["inactive"] = (*_hex_rgb(wc.get("inactive"), (110, 110, 115)), 255)  # karaoke muted slate #6E6E73
         wf = cap.get("fonts") or {}
         st["fonts"] = {k: _FONT_MAP.get(wf.get(k), FONT_INTER) for k in ("base", "punch", "cursive")}
         st["shadow"] = (*_hex_rgb(cap.get("shadow"), (6, 18, 15)), 200)
@@ -1308,7 +1309,7 @@ def _draw_karaoke_frame(img: Image.Image, items: list, style: dict, cy: int):
     draw = ImageDraw.Draw(img)
     font_path = style["fonts"]["base"]
     active   = style["colors"].get("base", (255, 255, 255, 255))
-    inactive = (255, 255, 255, 90)
+    inactive = style["colors"].get("inactive", (110, 110, 115, 255))   # solid #6E6E73 luxury slate, not transparent
     max_box  = int(W * 0.80)              # 10vw invisible wall on each side
 
     texts = [str(w.get("word", "")).strip() for w, _ in items if str(w.get("word", "")).strip()]
@@ -1386,13 +1387,15 @@ def build_caption_frames(words: list, total_frames: int,
             chunks.setdefault(c, []).append(j)
         ranges = lift_ranges or []
         frame_cid, chunk_cy = {}, {}
+        first_cid = min(chunks) if chunks else 0
         for cid, members in chunks.items():
             cs = words[members[0]]["start"]
             ce = words[members[-1]]["end"]
             # lift this phrase to the top if it overlaps any image/video insert
             lifted = any(cs < r_end and ce > r_start for (r_start, r_end) in ranges)
             chunk_cy[cid] = KARA_YELLOW if lifted else KARA_RED
-            for fr in range(int(cs * FPS), min(int(ce * FPS) + 1, total_frames)):
+            sf = 0 if cid == first_cid else int(cs * FPS)   # first phrase visible from second 0
+            for fr in range(sf, min(int(ce * FPS) + 1, total_frames)):
                 frame_cid[fr] = cid
 
     for frame_n in range(total_frames):

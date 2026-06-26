@@ -431,6 +431,9 @@ class InfosheetRequest(BaseModel):
 
 
 # ── OpenRouter helper ─────────────────────────────────────────────────────────
+CHEAP_MODEL = "z-ai/glm-4.6"   # mechanical/derivative tasks (detectors, repurposing) — ~25x cheaper than sonnet
+
+
 def call_openrouter(system_prompt: str, user_message: str,
                     model: str = "anthropic/claude-haiku-4.5",
                     max_tokens: int = 6000) -> str:
@@ -450,6 +453,8 @@ def call_openrouter(system_prompt: str, user_message: str,
             {"role": "user",   "content": user_message},
         ],
     }
+    if "glm" in model.lower():
+        payload["reasoning"] = {"enabled": False}   # GLM burns tokens on reasoning otherwise
     resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
     resp.raise_for_status()
     try:
@@ -1128,7 +1133,7 @@ def _classify_caption_words(words: list) -> list:
             "or 'anecdote' (words inside a personal-story phrase, e.g. a memory or 'aus meinem Bollerwagen'). "
             "Everything else is base (don't return). Return ONLY JSON {\"punch\":[i],\"anecdote\":[i]}"
         )
-        raw = call_openrouter(sys_p, json.dumps(wl), model="anthropic/claude-haiku-4.5", max_tokens=500)
+        raw = call_openrouter(sys_p, json.dumps(wl), model=CHEAP_MODEL, max_tokens=500)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         d = json.loads(m.group()) if m else {}
         for i in d.get("anecdote", []):
@@ -1600,7 +1605,7 @@ def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
             "no people, no text. 1-2 sentences, object + material/form only."
         )
         subject = _strip_fences(str(call_openrouter(
-            sys_p, f"Keyword: {keyword}", model="anthropic/claude-haiku-4.5", max_tokens=120))).strip() \
+            sys_p, f"Keyword: {keyword}", model=CHEAP_MODEL, max_tokens=120))).strip() \
             or keyword.strip()
     except Exception as exc:
         log.warning("[IMG] enrich LLM failed, using raw keyword: %s", exc)
@@ -1707,7 +1712,7 @@ def _detect_image_cuts(words: list, duration: float) -> list:
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model="anthropic/claude-haiku-4.5", max_tokens=400)
+                              model=CHEAP_MODEL, max_tokens=400)
         m    = re.search(r'\{.*\}', raw, re.DOTALL)
         cuts = json.loads(m.group()).get("cuts", []) if m else []
     except Exception as exc:
@@ -1906,7 +1911,7 @@ def _detect_video_cuts(words: list, duration: float,
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model="anthropic/claude-haiku-4.5", max_tokens=700)
+                              model=CHEAP_MODEL, max_tokens=700)
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         cuts = json.loads(m.group()).get("cuts", []) if m else []
     except Exception as exc:
@@ -2002,7 +2007,7 @@ def _detect_logos(words: list, duration: float) -> list:
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model="anthropic/claude-haiku-4.5", max_tokens=300)
+                              model=CHEAP_MODEL, max_tokens=300)
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         logos = json.loads(m.group()).get("logos", []) if m else []
     except Exception as exc:
@@ -2279,7 +2284,7 @@ def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
         raw = call_openrouter(
             system_prompt,
             f"Topic: {topic}\nFull transcript: {json.dumps(full_words)}",
-            model="anthropic/claude-haiku-4.5",
+            model=CHEAP_MODEL,
             max_tokens=1200,
         )
         m      = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -3471,7 +3476,7 @@ async def detect_impacts(req: DetectImpactsRequest):
         raw = call_openrouter(
             system_prompt,
             json.dumps(words),
-            model="anthropic/claude-haiku-4.5",
+            model=CHEAP_MODEL,
             max_tokens=1000,
         )
 

@@ -161,7 +161,7 @@ SFX_CATEGORY_RULES = {
 # asset_id -> (category, cloudinary url)
 SFX_LIBRARY = {
     "hook_000_app_ping":       ("first0", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/first0/hook_000_app_ping.mp3"),
-    "hook_000_tech_thud":      ("first0", "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/first0/hook_000_tech_thud.mp3"),
+    "hook_000_tech_thud":      ("first0", "https://res.cloudinary.com/poweroflillith/video/upload/v1782482278/audio/sfx/hook/hook_000_tech_thud.mp3"),
     "distant_police_siren_bg": ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/distant_police_siren_bg.mp3"),
     "hook_cash_register_01":   ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_cash_register_01.mp3"),
     "hook_clock_tick_01":      ("hook",   "https://res.cloudinary.com/poweroflillith/video/upload/audio/sfx/hook/hook_clock_tick_01.mp3"),
@@ -202,7 +202,7 @@ SFX_LEGACY_MAP = {
 }
 
 # t=0 intro stinger: ping + thud layered concurrently (deterministic, always added)
-SFX_INTRO_ASSETS = ["hook_000_app_ping", "hook_000_tech_thud"]
+SFX_INTRO_ASSETS = ["hook_000_tech_thud"]   # THE hook sound at t=0 (single clean thud)
 
 
 def sfx_local_path(asset_id: str) -> Path:
@@ -1803,6 +1803,51 @@ def _make_hook_image(hook_text: str, job_dir: Path, img_cfg: dict) -> Optional[P
     except Exception as exc:
         log.warning("[HOOK] hook image failed: %s", exc)
         return None
+
+
+def _make_hook_title_png(text: str, style: dict, out_path: Path) -> bool:
+    """On-screen hook title (frame 0): the hook topic in the client's caption style
+    (3-stroke, NO box), big, centered in the upper third — so the eye reads the topic
+    instantly. Sits above the lower-third hook image."""
+    try:
+        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        fill    = style.get("fill", (255, 255, 255, 255))
+        strokes = style.get("strokes", [(0, 0, 0, 180)])
+        fpath   = style.get("font_path", str(FONT_BLACK))
+        size = int(W * 0.090)
+        f = ImageFont.truetype(fpath, size)
+        words = (text or "").strip().split()
+        max_w, lines, cur = W - 150, [], ""
+        for w in words:
+            t = (cur + " " + w).strip()
+            if d.textlength(t, font=f) <= max_w:
+                cur = t
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        lines = lines[:4]
+        lh = size * 1.12
+        total = lh * len(lines)
+        y = int(H * 0.30) - total / 2
+        sw = max(3, int(size * 0.07))
+        for ln in lines:
+            lw = d.textlength(ln, font=f)
+            x = (W - lw) / 2
+            cyl = y + lh / 2
+            for col in strokes:
+                d.text((x, cyl), ln, font=f, fill=col, anchor="lm",
+                       stroke_width=sw, stroke_fill=col)
+            d.text((x, cyl), ln, font=f, fill=fill, anchor="lm")
+            y += lh
+        img.save(out_path)
+        return True
+    except Exception as exc:
+        log.warning("[HOOK] title render failed: %s", exc)
+        return False
 
 
 def _hex_to_rgb(h: str, default: tuple = (212, 175, 55)) -> tuple:
@@ -3680,6 +3725,9 @@ async def _render_impl(req: RenderRequest):
                 None, _make_hook_image, req.hook_text, job_dir, img_cfg)
             facecam_full = job_dir / "facecam_full.mp4"
             scale_crop(facecam_raw, facecam_full, W, H)
+            hook_title_png = job_dir / "hook_title.png"
+            if not _make_hook_title_png(req.hook_text, cap_style, hook_title_png):
+                hook_title_png = None
 
         # ── 9e. Caption frames (built now so karaoke lifts to the top during inserts) ─
         lift_ranges = [(c["start"], c["end"]) for c in (image_cuts + video_cuts)]
@@ -3845,10 +3893,21 @@ async def _render_impl(req: RenderRequest):
             if hook_zone and facecam_full and facecam_full.exists():
                 extra_inputs += ["-i", str(facecam_full)]
                 parts.append(f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
-                             f"crop={W}:{H},setsar=1,format=rgba[hookface];")
+                             f"crop={W}:{H},"
+                             f"zoompan=z='min(zoom+0.0012,1.10)':d=1:"
+                             f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':s={W}x{H}:fps={FPS},"
+                             f"setsar=1,format=rgba[hookface];")
                 parts.append(f"[{prev}][hookface]overlay=x=0:y=0:"
                              f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hs];")
                 prev = "hs"; idx += 1
+                if hook_title_png:
+                    extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(hook_title_png)]
+                    parts.append(f"[{idx}:v]format=rgba,"
+                                 f"fade=t=in:st=0:d={cut_fade}:alpha=1,"
+                                 f"fade=t=out:st={max(HOOK_SECONDS - cut_fade, 0):.3f}:d={cut_fade}:alpha=1[hooktitle];")
+                    parts.append(f"[{prev}][hooktitle]overlay=x=0:y=0:"
+                                 f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hst];")
+                    prev = "hst"; idx += 1
                 if hook_raw and hook_raw.exists():
                     hk_w, hk_h = int(W * 0.84), int(H * 0.30)
                     hk_x, hk_y = (W - hk_w) // 2, int(H * 0.62)

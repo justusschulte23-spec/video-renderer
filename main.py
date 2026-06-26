@@ -2056,17 +2056,35 @@ def _prepare_logos(logos: list, job_dir: Path, duration: float) -> list:
 
 
 def _dedupe_overlays(video_cuts: list, logos: list, image_cuts: list, gap: float = 2.5):
-    """Priority video > logo > image. Drop lower-priority overlays whose start is within
-    `gap` of an already-claimed time, so layers never stack at the same moment."""
+    """Keep layers from stacking at the same moment, but INTERLEAVE video + image so a
+    short video still gets a MIX of both (videos-first would starve images of all slots).
+    Logos are lowest priority and fill leftover gaps."""
     claimed = []
-    def keep(items):
-        kept = []
-        for it in sorted(items, key=lambda x: x["start"]):
-            if all(abs(it["start"] - c) >= gap for c in claimed):
-                kept.append(it); claimed.append(it["start"])
-        return kept
-    v = keep(video_cuts); lg = keep(logos); im = keep(image_cuts)
-    return v, lg, im
+    def free(t):
+        return all(abs(t - c) >= gap for c in claimed)
+    v_sorted = sorted(video_cuts, key=lambda x: x["start"])
+    i_sorted = sorted(image_cuts, key=lambda x: x["start"])
+    kept_v, kept_i = [], []
+    vi = ii = 0
+    turn = "v"
+    while vi < len(v_sorted) or ii < len(i_sorted):
+        if turn == "v" and vi < len(v_sorted):
+            it = v_sorted[vi]; vi += 1
+            if free(it["start"]):
+                kept_v.append(it); claimed.append(it["start"])
+            turn = "i"
+        elif turn == "i" and ii < len(i_sorted):
+            it = i_sorted[ii]; ii += 1
+            if free(it["start"]):
+                kept_i.append(it); claimed.append(it["start"])
+            turn = "v"
+        else:
+            turn = "i" if turn == "v" else "v"
+    kept_lg = []
+    for it in sorted(logos, key=lambda x: x["start"]):
+        if free(it["start"]):
+            kept_lg.append(it); claimed.append(it["start"])
+    return kept_v, kept_lg, kept_i
 
 
 # ── Generic layout compositor (Stage 2b) ─────────────────────────────────────

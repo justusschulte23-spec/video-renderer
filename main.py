@@ -3915,7 +3915,7 @@ async def _render_impl(req: RenderRequest):
                 extra_inputs += ["-i", str(facecam_full)]
                 parts.append(f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
                              f"crop={W}:{H},"
-                             f"zoompan=z='min(zoom+0.0012,1.10)':d=1:"
+                             f"zoompan=z='min(zoom+0.0035,1.18)':d=1:"
                              f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':s={W}x{H}:fps={FPS},"
                              f"setsar=1,format=rgba[hookface];")
                 parts.append(f"[{prev}][hookface]overlay=x=0:y=0:"
@@ -3930,8 +3930,8 @@ async def _render_impl(req: RenderRequest):
                                  f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hst];")
                     prev = "hst"; idx += 1
                 if hook_raw and hook_raw.exists():
-                    hk_w, hk_h = int(W * 0.84), int(H * 0.30)
-                    hk_x, hk_y = (W - hk_w) // 2, int(H * 0.62)
+                    hk_w, hk_h = int(W * 0.50), int(H * 0.16)   # small rectangle, not a full card
+                    hk_x, hk_y = (W - hk_w) // 2, int(H * 0.70)
                     hk_styled = job_dir / "hook_card.png"
                     hk_gold = _hex_to_rgb(((tpl.get("colors") or {}).get("primary")) if tpl else None)
                     hk_ok = _style_lowerthird_image(hook_raw, hk_styled, hk_w, hk_h, gold=hk_gold)
@@ -3944,7 +3944,8 @@ async def _render_impl(req: RenderRequest):
                     parts.append(f"[{prev}][hookimg]overlay=x={hk_x}:y={hk_y}:"
                                  f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hs2];")
                     prev = "hs2"; idx += 1
-            parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
+            cap_enable = f":enable='gte(t,{HOOK_SECONDS:.3f})'" if hook_zone else ""
+            parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}{cap_enable}[with_cap];")
             parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
             filter_complex = "".join(parts)
             cmd = [
@@ -3974,7 +3975,11 @@ async def _render_impl(req: RenderRequest):
 
         # ── 11. SFX mixing (per-template toggle; default on for Justus) ───────
         if (tpl.get("sfx") or {}).get("enabled", True) if tpl else True:
-            mixed = mix_sfx_into_video(output_mp4, req.impacts or [], job_dir, duration)
+            # whoosh on EVERY image/video insertion (synced to the cut start)
+            cut_whoosh = [{"asset": "trans_whoosh_fast_01", "time": c["start"]}
+                          for c in (image_cuts + video_cuts)]
+            all_impacts = (req.impacts or []) + cut_whoosh
+            mixed = mix_sfx_into_video(output_mp4, all_impacts, job_dir, duration)
             if mixed:
                 output_mp4 = mixed
 

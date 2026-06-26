@@ -1803,23 +1803,36 @@ def _style_lowerthird_image(src: Path, out: Path, box_w: int, box_h: int,
         return False
 
 
-def _make_hook_image(hook_text: str, job_dir: Path, img_cfg: dict) -> Optional[Path]:
-    """Generate ONE hook-zone image (0-2s, lower third) from the hook text in the client's
-    visual style: a bold pattern-recognition scene showing the recognizable real brands/
-    subjects mentioned, so the eye catches the topic instantly. Returns raw image path."""
+def _make_hook_image(hook_text: str, job_dir: Path, img_cfg: dict,
+                     script_ctx: str = "") -> Optional[Path]:
+    """THE hook visual (0-2s): ONE precise editorial image that nails the topic at a glance
+    WITH the real recognizable brand logos/products from the script — in the CLIENT's brand
+    style (img_cfg.hook_style). NOT generic AI slop, NOT abstract. Returns raw image path."""
     try:
-        img_cfg = img_cfg or {}
-        tail = img_cfg.get("tail") or BRAND_IMAGE_TAIL
-        neg  = img_cfg.get("negative") or BRAND_IMAGE_NEGATIVE
-        prompt = ("One bold visual that INSTANTLY represents this short-form video hook at a glance "
-                  "(pattern recognition): show the recognizable real brands/products/subjects mentioned, "
-                  "clean and iconic, no text. Topic: " + (hook_text or "").strip()[:240] + ". " + tail + ".")
+        img_cfg    = img_cfg or {}
+        hook_style = img_cfg.get("hook_style") or "clean modern premium editorial product shot, studio lighting, crisp"
+        topic = (hook_text or "").strip()[:240]
+        ctx   = (script_ctx or "").strip()[:400]
+        prompt = (
+            "Editorial hero image for a short-form video hook — ONE clear, premium shot that "
+            "instantly communicates the topic at a glance (pattern recognition). MUST prominently "
+            "feature the REAL, recognizable brand logos / products / apps named in the topic "
+            "(e.g. Chrome, OpenAI, Claude, the actual brands) so a viewer recognizes it in <1s. "
+            "Photoreal, iconic, intentional composition — NOT abstract, NOT generic AI art, NOT "
+            "random tech clipart. Style: " + hook_style + ".\n"
+            "TOPIC: " + topic + (("\nKONTEXT: " + ctx) if ctx else "")
+        )
+        neg = (img_cfg.get("negative") or BRAND_IMAGE_NEGATIVE) + \
+              ", generic AI slop, abstract blobs, fake gibberish logos, watermark, ugly text"
         url = _call_fal_flux(prompt, neg)
         if not url:
+            log.warning("[HOOK] flux returned no url")
             return None
         raw = job_dir / "hook_src.png"
         if not download_file(url, raw):
+            log.warning("[HOOK] hook image download failed")
             return None
+        log.info("[HOOK] hook image generated")
         return raw
     except Exception as exc:
         log.warning("[HOOK] hook image failed: %s", exc)
@@ -3742,8 +3755,9 @@ async def _render_impl(req: RenderRequest):
                         out.append(c)
                 return out
             image_cuts = _delay(image_cuts); video_cuts = _delay(video_cuts); logos = _delay(logos)
+            hook_script_ctx = " ".join(w.get("word", "") for w in words)[:400]
             hook_raw = await asyncio.get_event_loop().run_in_executor(
-                None, _make_hook_image, req.hook_text, job_dir, img_cfg)
+                None, _make_hook_image, req.hook_text, job_dir, img_cfg, hook_script_ctx)
             facecam_full = job_dir / "facecam_full.mp4"
             scale_crop(facecam_raw, facecam_full, W, H)
             hook_title_png = job_dir / "hook_title.png"

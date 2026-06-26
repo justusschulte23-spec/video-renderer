@@ -1672,6 +1672,7 @@ def _call_fal_flux(prompt: str, negative: str = "", endpoint: str = None) -> str
 
 # ── Full-frame image cutaways ─────────────────────────────────────────────────
 IMAGE_CUT_DUR  = 2.0    # seconds on screen
+HOOK_SECONDS   = 2.0    # hook zone: face fullcam + hook image, no broll/cutaways before this
 IMAGE_CUT_FADE = 0.15   # crossfade in/out — snappy short-form, minimal UI bleed-through
 IMAGE_CUT_MAX  = 5      # max cutaways per video
 
@@ -1779,6 +1780,29 @@ def _style_lowerthird_image(src: Path, out: Path, box_w: int, box_h: int,
     except Exception as exc:
         log.warning("[IMG] lowerthird style failed: %s", exc)
         return False
+
+
+def _make_hook_image(hook_text: str, job_dir: Path, img_cfg: dict) -> Optional[Path]:
+    """Generate ONE hook-zone image (0-2s, lower third) from the hook text in the client's
+    visual style: a bold pattern-recognition scene showing the recognizable real brands/
+    subjects mentioned, so the eye catches the topic instantly. Returns raw image path."""
+    try:
+        img_cfg = img_cfg or {}
+        tail = img_cfg.get("tail") or BRAND_IMAGE_TAIL
+        neg  = img_cfg.get("negative") or BRAND_IMAGE_NEGATIVE
+        prompt = ("One bold visual that INSTANTLY represents this short-form video hook at a glance "
+                  "(pattern recognition): show the recognizable real brands/products/subjects mentioned, "
+                  "clean and iconic, no text. Topic: " + (hook_text or "").strip()[:240] + ". " + tail + ".")
+        url = _call_fal_flux(prompt, neg)
+        if not url:
+            return None
+        raw = job_dir / "hook_src.png"
+        if not download_file(url, raw):
+            return None
+        return raw
+    except Exception as exc:
+        log.warning("[HOOK] hook image failed: %s", exc)
+        return None
 
 
 def _hex_to_rgb(h: str, default: tuple = (212, 175, 55)) -> tuple:
@@ -3634,6 +3658,29 @@ async def _render_impl(req: RenderRequest):
         # priority video > logo > image; never stack at same moment
         video_cuts, logos, image_cuts = _dedupe_overlays(video_cuts, logos, image_cuts)
 
+        # ── 9d2. HOOK ZONE (per-template): first 2s = clean fullcam face + hook image, ──
+        #         no broll/cutaways. Everything else delayed to >= HOOK_SECONDS.
+        hook_zone   = bool((tpl or {}).get("hook_zone")) or bool(img_cfg.get("hook_zone"))
+        hook_raw    = None
+        facecam_full = None
+        if hook_zone:
+            def _delay(cuts):
+                out = []
+                for c in cuts:
+                    if c["start"] < HOOK_SECONDS:
+                        shift = HOOK_SECONDS - c["start"]
+                        ns, ne = c["start"] + shift, c["end"] + shift
+                        if ne <= duration - 0.2:
+                            out.append({**c, "start": round(ns, 3), "end": round(ne, 3)})
+                    else:
+                        out.append(c)
+                return out
+            image_cuts = _delay(image_cuts); video_cuts = _delay(video_cuts); logos = _delay(logos)
+            hook_raw = await asyncio.get_event_loop().run_in_executor(
+                None, _make_hook_image, req.hook_text, job_dir, img_cfg)
+            facecam_full = job_dir / "facecam_full.mp4"
+            scale_crop(facecam_raw, facecam_full, W, H)
+
         # ── 9e. Caption frames (built now so karaoke lifts to the top during inserts) ─
         lift_ranges = [(c["start"], c["end"]) for c in (image_cuts + video_cuts)]
         cap_words = words
@@ -3794,6 +3841,29 @@ async def _render_impl(req: RenderRequest):
                 parts.append(f"[{prev}][o{ov}]overlay=x=(W-w)/2:y=360:"
                              f"enable='between(t,{lg['start']:.3f},{lg['end']:.3f})'[s{ov}];")
                 prev = f"s{ov}"; idx += 1; ov += 1
+            # HOOK ZONE: 0-2s fullcam face covers the split, + hook image lower third
+            if hook_zone and facecam_full and facecam_full.exists():
+                extra_inputs += ["-i", str(facecam_full)]
+                parts.append(f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                             f"crop={W}:{H},setsar=1,format=rgba[hookface];")
+                parts.append(f"[{prev}][hookface]overlay=x=0:y=0:"
+                             f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hs];")
+                prev = "hs"; idx += 1
+                if hook_raw and hook_raw.exists():
+                    hk_w, hk_h = int(W * 0.84), int(H * 0.30)
+                    hk_x, hk_y = (W - hk_w) // 2, int(H * 0.62)
+                    hk_styled = job_dir / "hook_card.png"
+                    hk_gold = _hex_to_rgb(((tpl.get("colors") or {}).get("primary")) if tpl else None)
+                    hk_ok = _style_lowerthird_image(hook_raw, hk_styled, hk_w, hk_h, gold=hk_gold)
+                    hk_in = hk_styled if hk_ok else hook_raw
+                    extra_inputs += ["-loop", "1", "-framerate", str(FPS), "-t", f"{duration:.3f}", "-i", str(hk_in)]
+                    hk_pre = "format=rgba," if hk_ok else f"scale={hk_w}:{hk_h}:force_original_aspect_ratio=increase,crop={hk_w}:{hk_h},setsar=1,format=rgba,"
+                    parts.append(f"[{idx}:v]{hk_pre}"
+                                 f"fade=t=in:st=0:d={cut_fade}:alpha=1,"
+                                 f"fade=t=out:st={max(HOOK_SECONDS - cut_fade, 0):.3f}:d={cut_fade}:alpha=1[hookimg];")
+                    parts.append(f"[{prev}][hookimg]overlay=x={hk_x}:y={hk_y}:"
+                                 f"enable='between(t,0,{HOOK_SECONDS:.3f})'[hs2];")
+                    prev = "hs2"; idx += 1
             parts.append(f"[{prev}][3:v]overlay=x=0:y={DIVIDER_Y}[with_cap];")
             parts.append(f"[with_cap]fade=t=out:st={fadeout_start:.3f}:d=1[final]")
             filter_complex = "".join(parts)

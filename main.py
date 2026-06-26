@@ -1,4 +1,5 @@
 import os
+import hashlib
 import uuid
 import shutil
 import logging
@@ -834,10 +835,14 @@ def make_gradient_png(path: Path, w: int, h: int,
     img.save(str(path))
 
 
+_TRANSCRIPT_CACHE: dict = {}   # md5(audio)+prompt -> words; dedupes Whisper across endpoints (detect-impacts + render hit the same trimmed audio)
+
+
 def transcribe_audio(video_path: Path, prompt: str = "") -> list:
     """Returns list of {word, start, end} or [] on failure.
     `prompt` biases Whisper to KEEP disfluencies (äh/ähm) instead of cleaning them up —
-    used by the filler-word trimmer. Leave empty for normal clean transcription."""
+    used by the filler-word trimmer. Leave empty for normal clean transcription.
+    Result is cached by audio-content hash so the same clip is transcribed only once."""
     try:
         log.info("Extracting audio for Whisper …")
         audio_path = video_path.parent / "audio.mp3"
@@ -846,6 +851,15 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
             "-vn", "-ar", "16000", "-ac", "1", "-b:a", "64k",
             str(audio_path),
         ], check=True, capture_output=True)
+
+        try:
+            with open(audio_path, "rb") as _af:
+                ckey = hashlib.md5(_af.read()).hexdigest() + "|" + (prompt or "")
+        except Exception:
+            ckey = None
+        if ckey and ckey in _TRANSCRIPT_CACHE:
+            log.info("Whisper cache hit — skipping API call")
+            return _TRANSCRIPT_CACHE[ckey]
 
         log.info("Calling Whisper API …")
         kwargs = {
@@ -861,6 +875,8 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
         for w in (resp.words or []):
             words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
         log.info("Whisper returned %d words", len(words))
+        if ckey:
+            _TRANSCRIPT_CACHE[ckey] = words
         return words
     except Exception as exc:
         log.error("Whisper transcription failed: %s", exc)

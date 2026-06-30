@@ -1340,17 +1340,19 @@ def _draw_karaoke_frame(img: Image.Image, items: list, style: dict, cy: int):
 
     size = int(style.get("size", 90) * 0.85)
     while size > 28:
-        f    = _karaoke_font(font_path, size)
+        f_act = _karaoke_font(font_path, int(size * 1.12))   # active word emphasised (+12%)
+        f_in  = _karaoke_font(font_path, size)
         gap  = int(size * 0.30)
         padx = int(size * 0.55)
-        widths = [draw.textlength(t, font=f) for t in texts]
+        widths = [draw.textlength(t, font=(f_act if a else f_in)) for t, a in zip(texts, flags)]
         box_w  = sum(widths) + gap * (len(texts) - 1) + 2 * padx
         if box_w <= max_box:
             break
         size -= 4
 
-    pady  = int(size * 0.34)
-    box_h = size + 2 * pady
+    act_h = int(size * 1.12)
+    pady  = int(size * 0.38)
+    box_h = act_h + 2 * pady
     bx = (W - box_w) // 2
     by = int(cy - box_h / 2)
     draw.rounded_rectangle([bx, by, bx + box_w, by + box_h],
@@ -1358,7 +1360,8 @@ def _draw_karaoke_frame(img: Image.Image, items: list, style: dict, cy: int):
     x = bx + padx
     mid = by + box_h / 2
     for t, wpx, is_a in zip(texts, widths, flags):
-        draw.text((x, mid), t, font=f, fill=(active if is_a else inactive), anchor="lm")
+        draw.text((x, mid), t, font=(f_act if is_a else f_in),
+                  fill=(active if is_a else inactive), anchor="lm")
         x += wpx + gap
 
 
@@ -1436,15 +1439,9 @@ def build_caption_frames(words: list, total_frames: int,
                     _draw_danilo_frame(img, reveal, style, cy)
                 else:
                     word = words[wi]["word"]
-                    if frame_n in transition_frames:
-                        pulse_map = {0: 1.0, 1: 1.04, 2: 1.0}
-                        offset = frame_n - min(f for f in transition_frames
-                                               if f >= frame_n - 2 and
-                                               word_at_frame.get(f - 2, -1) != wi
-                                               and word_at_frame.get(f, -1) == wi)
-                        scale = pulse_map.get(offset % 3, 1.0)
-                    else:
-                        scale = 1.0
+                    # smooth ease-out pop-in: 1.16 -> 1.0 over first ~5 frames of each word
+                    fsw = frame_n - int(words[wi]["start"] * FPS)
+                    scale = 1.0 + 0.16 * max(0.0, 1.0 - (fsw / 5.0))
                     if perword:
                         _draw_caption_frame(img, word, scale, style, cls=words[wi].get("cls", "base"), cy=cy)
                     else:
@@ -4515,11 +4512,18 @@ async def trim_silence(req: TrimSilenceRequest):
         else:
             log.warning("[TRIM] phase1: no transcript — skipping filler cut")
 
-        # ── PHASE 2: waveform dead-air trim (auto-editor) ─────────────────────
-        p2 = job_dir / "phase2.mp4"
-        if _run_auto_editor(current, p2):
-            current = p2
-            log.info("[TRIM] phase2: auto-editor dead-air trim done")
+        # ── PHASE 2: WORD-BASED dead-air trim (replaces energy auto-editor) ───
+        # cuts ONLY in pauses between words (never mid-word) → no half words, smooth
+        w2 = transcribe_audio(current)
+        if w2:
+            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.35, pad=0.06)
+            if len(keeps2) > 1:
+                p2 = job_dir / "phase2.mp4"
+                if _trim_dead_air(current, keeps2, p2):
+                    current = p2
+                    log.info("[TRIM] phase2: word-based dead-air trim, %d keep-segments", len(keeps2))
+        else:
+            log.warning("[TRIM] phase2: no transcript — skipping dead-air trim")
 
         # ── result ────────────────────────────────────────────────────────────
         if current == src:

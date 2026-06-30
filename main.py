@@ -38,6 +38,9 @@ openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
+# WhisperX via Replicate — precise word-level timestamps (wav2vec2 align) for cut+captions
+REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "")   # set in Railway env
+
 FAL_API_KEY           = os.environ.get("FAL_API_KEY", "")
 FAL_THUMBNAIL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro"
 FAL_FLUX_ENDPOINT      = "https://fal.run/fal-ai/flux-2/flash"   # Flux 2 [fast]
@@ -843,6 +846,43 @@ def make_gradient_png(path: Path, w: int, h: int,
 _TRANSCRIPT_CACHE: dict = {}   # md5(audio)+prompt -> words; dedupes Whisper across endpoints (detect-impacts + render hit the same trimmed audio)
 
 
+def _whisperx_words(audio_path: Path) -> Optional[list]:
+    """Precise word-level timestamps via Replicate WhisperX (wav2vec2 align, ~10ms).
+    Returns [{word,start,end}] or None on any failure (caller falls back to whisper-1)."""
+    if not REPLICATE_API_TOKEN:
+        return None
+    try:
+        import base64
+        with open(audio_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        data_uri = "data:audio/mpeg;base64," + b64
+        r = requests.post(
+            "https://api.replicate.com/v1/models/victor-upmeet/whisperx/predictions",
+            headers={"Authorization": "Token " + REPLICATE_API_TOKEN,
+                     "Content-Type": "application/json", "Prefer": "wait"},
+            json={"input": {"audio_file": data_uri, "language": "de",
+                            "align_output": True, "batch_size": 16}},
+            timeout=180)
+        r.raise_for_status()
+        out = (r.json() or {}).get("output") or {}
+        segs = out.get("segments") or []
+        words = []
+        for s in segs:
+            for w in (s.get("words") or []):
+                txt = str(w.get("word", "")).strip()
+                st, en = w.get("start"), w.get("end")
+                if txt and st is not None and en is not None:
+                    words.append({"word": txt, "start": float(st), "end": float(en)})
+        if words:
+            log.info("[WHISPERX] %d words (precise align)", len(words))
+            return words
+        log.warning("[WHISPERX] no words in output — falling back")
+        return None
+    except Exception as exc:
+        log.warning("[WHISPERX] failed (%s) — falling back to whisper-1", exc)
+        return None
+
+
 def transcribe_audio(video_path: Path, prompt: str = "") -> list:
     """Returns list of {word, start, end} or [] on failure.
     `prompt` biases Whisper to KEEP disfluencies (äh/ähm) instead of cleaning them up —
@@ -865,6 +905,15 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
         if ckey and ckey in _TRANSCRIPT_CACHE:
             log.info("Whisper cache hit — skipping API call")
             return _TRANSCRIPT_CACHE[ckey]
+
+        # No filler-prompt = clean pass (captions / cuts / dead-air) -> use precise WhisperX.
+        # Filler-prompt passes stay on whisper-1 (it honours the prompt to KEEP äh/ähm).
+        if not prompt:
+            wx = _whisperx_words(audio_path)
+            if wx:
+                if ckey:
+                    _TRANSCRIPT_CACHE[ckey] = wx
+                return wx
 
         log.info("Calling Whisper API …")
         kwargs = {

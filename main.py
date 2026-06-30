@@ -584,7 +584,7 @@ async def render_html_to_video(html_path: Path, output_path: Path, duration: flo
             "-t", str(duration),
             "-vf", f"fps=30,scale=1080:{BROLL_H}:flags=lanczos,setsar=1",
             "-an",
-            "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+            "-c:v", "libx264", "-crf", "20", "-preset", "medium",
             "-pix_fmt", "yuv420p",
             str(output_path),
         ]
@@ -755,7 +755,7 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
             f"crop={tw}:{th},"
             "unsharp=3:3:0.4:3:3:0"
         ),
-        "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+        "-c:v", "libx264", "-crf", "20", "-preset", "medium",
         "-c:a", "copy",
         str(dest),
     ], "scale_crop")
@@ -781,7 +781,7 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
                 "colorchannelmixer=rr=1.0:rg=0:rb=0.08:gr=0:gg=0.92:gb=0:br=0.06:bg=0:bb=1.0,"
                 "eq=contrast=1.08:brightness=-0.02:saturation=0.9"
             ),
-            "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium", out
+            "-an", "-c:v", "libx264", "-crf", "20", "-preset", "medium", out
         ], check=True)
         actual = probe_duration(Path(out))
         prepared.append(out)
@@ -797,7 +797,7 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
         subprocess.run([
             "ffmpeg", "-y", "-stream_loop", "-1", "-i", prepared[-1],
             "-t", str(gap), "-vf", "setpts=PTS-STARTPTS",
-            "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium", looped
+            "-an", "-c:v", "libx264", "-crf", "20", "-preset", "medium", looped
         ], check=True)
         prepared.append(looped)
 
@@ -825,7 +825,7 @@ def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
         "-filter_complex", filter_str,
         "-map", "[v]",
         "-t", str(target_duration),
-        "-c:v", "libx264", "-crf", "16", "-preset", "medium", concat_out
+        "-c:v", "libx264", "-crf", "20", "-preset", "medium", concat_out
     ], check=True)
     return concat_out
 
@@ -3244,7 +3244,7 @@ async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: floa
             "ffmpeg", "-y", "-f", "lavfi",
             "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
             "-t", str(scene_dur),
-            "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+            "-c:v", "libx264", "-crf", "20", "-preset", "medium",
             "-pix_fmt", "yuv420p", str(video_path)
         ], f"black_scene_{idx}")
     return video_path
@@ -3340,7 +3340,7 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
                     "-ss", str(scene["start"]),
                     "-i", str(full_video_path),
                     "-t", str(scene_dur),
-                    "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                    "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                     "-pix_fmt", "yuv420p", str(clip_path)
                 ], f"clip_scene_{i}")
             else:
@@ -3348,7 +3348,7 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
                     "ffmpeg", "-y", "-f", "lavfi",
                     "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
                     "-t", str(scene_dur),
-                    "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                    "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                     "-pix_fmt", "yuv420p", str(clip_path)
                 ], f"black_fallback_{i}")
             scene_videos.append(str(clip_path))
@@ -3385,7 +3385,7 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
                 "ffmpeg", "-y", *inputs,
                 "-filter_complex", filt,
                 *maps,
-                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                 "-pix_fmt", "yuv420p", str(broll_final)
             ], "concat_scenes")
 
@@ -3677,7 +3677,7 @@ async def _render_impl(req: RenderRequest):
                         "-t", "0.2",
                         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,"
                                f"crop={W}:{H},setsar=1",
-                        "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                        "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                         "-c:a", "aac", "-b:a", "192k",
                         "-pix_fmt", "yuv420p",
                         "-shortest",
@@ -3733,7 +3733,7 @@ async def _render_impl(req: RenderRequest):
                 "-f", "lavfi",
                 "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
                 "-t", str(duration),
-                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                 "-pix_fmt", "yuv420p",
                 str(broll_final),
             ], "black_broll")
@@ -3865,7 +3865,7 @@ async def _render_impl(req: RenderRequest):
                 "-filter_complex", fc,
                 "-map", final_label, "-map", amap,
                 "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
-                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                 "-c:a", "aac", "-b:a", "192k",
                 "-t", str(duration), "-pix_fmt", "yuv420p",
                 str(output_mp4),
@@ -3928,7 +3928,7 @@ async def _render_impl(req: RenderRequest):
                 "-filter_complex", filter_complex,
                 "-map", "[final]", "-map", "0:a",
                 "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
-                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                 "-c:a", "aac", "-b:a", "192k",
                 "-t", str(duration), "-pix_fmt", "yuv420p",
                 str(output_mp4),
@@ -4045,7 +4045,7 @@ async def _render_impl(req: RenderRequest):
                 "-map", "[final]",
                 "-map", "2:a",
                 "-af", "loudnorm=I=-14:LRA=11:TP=-1.5",
-                "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                 "-c:a", "aac", "-b:a", "192k",
                 "-t", str(duration),
                 "-pix_fmt", "yuv420p",
@@ -4076,7 +4076,7 @@ async def _render_impl(req: RenderRequest):
                     "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]",
                     "-map", "[vout]",
                     "-map", "[aout]",
-                    "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                    "-c:v", "libx264", "-crf", "20", "-preset", "medium",
                     "-c:a", "aac", "-b:a", "192k",
                     "-pix_fmt", "yuv420p",
                     str(output_with_thumb),

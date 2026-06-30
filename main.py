@@ -1814,16 +1814,18 @@ def _make_hook_image(hook_text: str, job_dir: Path, img_cfg: dict,
         topic = (hook_text or "").strip()[:240]
         ctx   = (script_ctx or "").strip()[:400]
         prompt = (
-            "Editorial hero image for a short-form video hook — ONE clear, premium shot that "
-            "instantly communicates the topic at a glance (pattern recognition). MUST prominently "
-            "feature the REAL, recognizable brand logos / products / apps named in the topic "
-            "(e.g. Chrome, OpenAI, Claude, the actual brands) so a viewer recognizes it in <1s. "
-            "Photoreal, iconic, intentional composition — NOT abstract, NOT generic AI art, NOT "
-            "random tech clipart. Style: " + hook_style + ".\n"
-            "TOPIC: " + topic + (("\nKONTEXT: " + ctx) if ctx else "")
+            "Editorial hero image for a short-form video hook — ONE cinematic SCENE that visually "
+            "tells the topic's OUTCOME at a glance (what changes for the viewer), so it's clear in "
+            "<1s. Compose a real, specific scene/moment — NOT a logo wall, NOT a grid of icons, NOT "
+            "floating logos. If a brand is central, show its product/app naturally inside the scene "
+            "(a screen, a device) — max ONE brand, never a logo collage. Photoreal, intentional, "
+            "premium, varied composition each time. NOT abstract, NOT generic AI art, NOT clipart. "
+            "Style: " + hook_style + ".\n"
+            "TOPIC: " + topic + (("\nKONTEXT (Skript): " + ctx) if ctx else "")
         )
         neg = (img_cfg.get("negative") or BRAND_IMAGE_NEGATIVE) + \
-              ", generic AI slop, abstract blobs, fake gibberish logos, watermark, ugly text"
+              ", logo wall, grid of logos, floating logos, icon collage, generic AI slop, " \
+              "abstract blobs, fake gibberish logos, watermark, ugly text"
         url = _call_fal_flux(prompt, neg)
         if not url:
             log.warning("[HOOK] flux returned no url")
@@ -3894,7 +3896,8 @@ async def _render_impl(req: RenderRequest):
                 (f"[2:v]zoompan="
                  f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
                  f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
-                 f"d=1:s={W}x{FACECAM_H}:fps={FPS},setsar=1[face];"),
+                 f"d=1:s={W}x{FACECAM_H}:fps={FPS},"
+                 f"eq=contrast=1.06:saturation=1.12:brightness=0.01,unsharp=5:5:0.4,setsar=1[face];"),
                 "[broll][div][face]vstack=inputs=3[stacked];",
                 "[stacked][5:v]overlay=x=0:y=0[with_scan];",
                 "[with_scan][6:v]overlay=x=0:y=0[with_hud];",

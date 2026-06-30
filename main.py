@@ -3995,7 +3995,7 @@ async def _render_impl(req: RenderRequest):
                 f"[0:v]trim=duration={duration:.3f},setpts=PTS-STARTPTS,setsar=1[broll];",
                 "[1:v]setsar=1[div];",
                 (f"[2:v]zoompan="
-                 f"z='if(lte(on,20),1.0+0.08*(on/20),if(lte(on,40),1.08-0.08*((on-20)/20),1.0))':"
+                 f"z='min(zoom+0.00007,1.10)':"
                  f"x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':"
                  f"d=1:s={W}x{FACECAM_H}:fps={FPS},"
                  f"eq=contrast=1.06:saturation=1.12:brightness=0.01,unsharp=5:5:0.4,setsar=1[face];"),

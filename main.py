@@ -973,12 +973,51 @@ def _compute_keep_segments(words: list, duration: float,
     return [(s, e) for s, e in keeps if e - s > 0.02]
 
 
+def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08) -> bool:
+    """Smooth pro joins: each keep-segment cross-faded into the next (video xfade +
+    audio acrossfade, SAME duration each join -> A and V shrink equally -> stays in sync).
+    No abrupt jump-cuts. Returns False if it can't build a valid graph (caller falls back)."""
+    n = len(keeps)
+    if n < 2:
+        return False
+    parts = []
+    lengths = []
+    for i, (s, e) in enumerate(keeps):
+        ln = e - s
+        lengths.append(ln)
+        parts.append(f"[0:v]trim={s:.3f}:{e:.3f},setpts=PTS-STARTPTS,fps={FPS},setsar=1,format=yuv420p[v{i}];")
+        parts.append(f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS[a{i}];")
+    cur_v, cur_a, cum = "v0", "a0", lengths[0]
+    for i in range(1, n):
+        dd = min(d, lengths[i] * 0.45, lengths[i - 1] * 0.45, max(0.02, cum * 0.45))
+        if dd < 0.02:
+            return False
+        off = max(0.0, cum - dd)
+        parts.append(f"[{cur_v}][v{i}]xfade=transition=fade:duration={dd:.3f}:offset={off:.3f}[vx{i}];")
+        parts.append(f"[{cur_a}][a{i}]acrossfade=d={dd:.3f}[ax{i}];")
+        cur_v, cur_a = f"vx{i}", f"ax{i}"
+        cum = cum + lengths[i] - dd
+    cmd = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-filter_complex", "".join(parts),
+        "-map", f"[{cur_v}]", "-map", f"[{cur_a}]",
+        "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not out_path.exists():
+        log.warning("[TRIM] crossfade failed, falling back to hard cut: %s", (r.stderr or "")[-500:])
+        return False
+    return True
+
+
 def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.03) -> bool:
-    """Cut to the keep-segments. Video = frame-accurate hard jump-cuts; audio = hard
-    concat with a short edge fade-in/out per segment (declick, ~15ms) so there is zero
-    popping AND zero A/V drift (true overlap-crossfade would desync over many cuts)."""
+    """Smooth pro cut via crossfades; falls back to hard concat (+declick) if that fails."""
     if not keeps:
         return False
+    if _trim_with_crossfade(src, keeps, out_path):
+        return True
     parts, concat_in = [], []
     for i, (s, e) in enumerate(keeps):
         seg = e - s
@@ -1011,17 +1050,15 @@ COHERENCE_SYS = (
     "Du bekommst ein Wort-fuer-Wort-Transkript (je Zeile: INDEX<TAB>WORT) einer Facecam-Aufnahme. "
     "Der Sprecher nimmt EINEN Gedanken oft in MEHREREN Anlaeufen auf: verhaspelt sich, bricht ab, "
     "setzt neu an, wiederholt denselben Satz/Satzanfang, formuliert denselben Inhalt nochmal um. "
-    "Deine Aufgabe: gib die Wort-Index-Bereiche zurueck, die ENTFERNT werden, sodass am Ende ein "
-    "MAKELLOSER Redefluss bleibt - als waere alles perfekt in EINEM Take gesprochen.\n"
-    "SEI GRUENDLICH UND SEHR AGGRESSIV - lieber zu viel schneiden als zu wenig:\n"
-    "- JEDEN Fehlstart, Abbruch, abgebrochenen Satz entfernen.\n"
-    "- JEDE Wiederholung: kommt derselbe Gedanke/Satz/Satzanfang mehrfach (auch nur teilweise oder "
-    "sinngemaess umformuliert), behalte NUR den besten/fluessigsten Take (meist den letzten) und "
-    "entferne ALLE anderen Anlaeufe KOMPLETT.\n"
-    "- Stocken, Selbstkorrekturen ('also', '...nein', '...ich meine'), Wortwiederholungen, Versprecher raus.\n"
-    "- Im Zweifel: RAUS.\n"
-    "EINZIGE Grenze: entferne nie den EINEN sauberen finalen Take eines Inhalts - jede einzigartige "
-    "Aussage/Information muss genau einmal erhalten bleiben. Nur Redundanz und Fehler weg.\n"
+    "Deine Aufgabe: entferne ALLE Fehlstarts, Abbrueche, doppelten Takes und Wiederholungen, sodass "
+    "ein MAKELLOSER Take bleibt - aber so dass die Schnitte SAUBER und unhoerbar wirken.\n"
+    "GRUENDLICH schneiden:\n"
+    "- JEDE Wiederholung desselben Gedankens/Satzes/Satzanfangs -> behalte NUR den besten (meist letzten) Take, alle anderen Anlaeufe KOMPLETT raus.\n"
+    "- JEDEN Fehlstart/Abbruch/Selbstkorrektur ('also- nein', '...ich mein') als GANZE Einheit raus.\n"
+    "EISERNE SAUBERKEITS-REGEL (sonst klingt's zerhackt):\n"
+    "- Schneide AUSSCHLIESSLICH an SATZ-/PHRASEN-Grenzen. Ein Entfernungs-Bereich MUSS an einer natuerlichen Pause beginnen und enden.\n"
+    "- NIE mitten in einem zusammenhaengenden Satz ein paar Woerter rausschneiden. Entweder der ganze Anlauf weg oder gar nicht.\n"
+    "- Das erste behaltene Wort nach einem Schnitt muss ein SATZANFANG sein, nicht ein Satz-Mittelstueck.\n"
     'OUTPUT NUR JSON: {"remove": [[startIdx, endIdx], ...]} - Indizes inklusive, auf die Wort-Indizes '
     'bezogen, aufsteigend, ohne Ueberlappung. Nichts zu entfernen -> {"remove": []}.'
 )
@@ -1901,33 +1938,47 @@ def _make_hook_title_png(text: str, style: dict, out_path: Path) -> bool:
         fill    = style.get("fill", (255, 255, 255, 255))
         strokes = style.get("strokes", [(0, 0, 0, 180)])
         fpath   = style.get("font_path", str(FONT_BLACK))
-        size = int(W * 0.090)
-        f = ImageFont.truetype(fpath, size)
         words = (text or "").strip().split()
-        max_w, lines, cur = W - 150, [], ""
-        for w in words:
-            t = (cur + " " + w).strip()
-            if d.textlength(t, font=f) <= max_w:
-                cur = t
-            else:
-                if cur:
-                    lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-        lines = lines[:4]
-        lh = size * 1.12
+        if not words:
+            return False
+        max_w = W - 140
+
+        # auto-fit: moderate, premium — biggest size that fits ALL words in <=3 lines
+        size, lines = int(W * 0.078), None
+        while size >= 40:
+            f = ImageFont.truetype(fpath, size)
+            wrapped, cur, overflow = [], "", False
+            for w in words:
+                if d.textlength(w, font=f) > max_w:
+                    overflow = True; break
+                t = (cur + " " + w).strip()
+                if d.textlength(t, font=f) <= max_w:
+                    cur = t
+                else:
+                    wrapped.append(cur); cur = w
+            if cur:
+                wrapped.append(cur)
+            if not overflow and len(wrapped) <= 3:
+                lines = wrapped; break
+            size -= 5
+        if lines is None:
+            lines = wrapped[:3]
+        f = ImageFont.truetype(fpath, size)
+
+        # premium treatment: white fill, ONE clean dark stroke, soft drop shadow (no cheap triple-stroke)
+        stroke_col = (0, 0, 0, 220)
+        sw = max(3, int(size * 0.055))
+        sh = max(4, int(size * 0.06))
+        lh = size * 1.18
         total = lh * len(lines)
-        y = int(H * 0.30) - total / 2
-        sw = max(3, int(size * 0.07))
+        y = int(H * 0.27) - total / 2
         for ln in lines:
             lw = d.textlength(ln, font=f)
             x = (W - lw) / 2
             cyl = y + lh / 2
-            for col in strokes:
-                d.text((x, cyl), ln, font=f, fill=col, anchor="lm",
-                       stroke_width=sw, stroke_fill=col)
-            d.text((x, cyl), ln, font=f, fill=fill, anchor="lm")
+            d.text((x + sh, cyl + sh), ln, font=f, fill=(0, 0, 0, 110), anchor="lm")
+            d.text((x, cyl), ln, font=f, fill=fill, anchor="lm",
+                   stroke_width=sw, stroke_fill=stroke_col)
             y += lh
         img.save(out_path)
         return True
@@ -4569,7 +4620,7 @@ async def trim_silence(req: TrimSilenceRequest):
         # cuts ONLY in pauses between words (never mid-word) → no half words, smooth
         w2 = transcribe_audio(current)
         if w2:
-            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.35, pad=0.14)
+            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6, pad=0.12)
             if len(keeps2) > 1:
                 p2 = job_dir / "phase2.mp4"
                 if _trim_dead_air(current, keeps2, p2):

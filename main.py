@@ -57,7 +57,9 @@ BRAND_IMAGE_NEGATIVE = (
     "abstract shapes, glowing orb, floating glass sphere, neon cube, hologram network, "
     "digital particles, 3D render look, text, letters, words, captions, watermark, logo, "
     "people, faces, hands, distorted, cluttered, oversaturated, rainbow, cartoon, anime, "
-    "low quality, blurry, generic stock photo, ugly, amateur, deformed"
+    "low quality, blurry, generic stock photo, ugly, amateur, deformed, "
+    "macro photography, coral, reef, organic texture, fluid art, paint, marble, ink, "
+    "psychedelic, gradient blob, abstract background, fractal, microscopic, slime, goo"
 )
 
 # ── Brand colours (Justus defaults — used when no client template) ────────────
@@ -971,7 +973,7 @@ def _compute_keep_segments(words: list, duration: float,
     return [(s, e) for s, e in keeps if e - s > 0.02]
 
 
-def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.015) -> bool:
+def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.03) -> bool:
     """Cut to the keep-segments. Video = frame-accurate hard jump-cuts; audio = hard
     concat with a short edge fade-in/out per segment (declick, ~15ms) so there is zero
     popping AND zero A/V drift (true overlap-crossfade would desync over many cuts)."""
@@ -1025,7 +1027,7 @@ COHERENCE_SYS = (
 )
 
 
-def _coherence_keep_segments(words: list, duration: float, pad: float = 0.04):
+def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
     """LLM analysiert das Wort-Transkript und entfernt doppelte Takes / Fehlstarts.
     Returns (keeps, n_removed_words). Faellt sicher auf 'alles behalten' zurueck."""
     if not words or len(words) < 8:
@@ -1691,6 +1693,8 @@ def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6",
         tail_marker = (tail.split()[0] if tail else "anamorphic").lower()
         if tail_marker not in p.lower():
             p = f"{p}. {tail}."
+        # force a concrete real-world photo — kills flux's abstract macro/coral/paint default
+        p = "Photorealistic real-world photograph of a concrete, recognizable subject — NOT abstract. " + p
         out.append(p)
     return out
 
@@ -4565,7 +4569,7 @@ async def trim_silence(req: TrimSilenceRequest):
         # cuts ONLY in pauses between words (never mid-word) → no half words, smooth
         w2 = transcribe_audio(current)
         if w2:
-            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.35, pad=0.06)
+            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.35, pad=0.14)
             if len(keeps2) > 1:
                 p2 = job_dir / "phase2.mp4"
                 if _trim_dead_air(current, keeps2, p2):

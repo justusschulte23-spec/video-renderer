@@ -3718,7 +3718,7 @@ async def _render_impl(req: RenderRequest):
         # ── 0. Thumbnail freeze-frame clip (optional, created early) ─────────
         thumb_clip = None
         if req.thumbnail_url:
-            log.info("[RENDER] prepending 0.3s thumbnail freeze-frame")
+            log.info("[RENDER] appending 0.2s thumbnail freeze-frame at end")
             thumb_img = job_dir / "thumb.jpg"
             if download_file(req.thumbnail_url, thumb_img):
                 thumb_clip = job_dir / "thumb_clip.mp4"
@@ -4119,14 +4119,14 @@ async def _render_impl(req: RenderRequest):
             if mixed:
                 output_mp4 = mixed
 
-        # ── 12. Prepend thumbnail freeze-frame (optional) ─────────────────────
+        # ── 12. Append thumbnail freeze-frame at the END (optional) ───────────
         if thumb_clip and thumb_clip.exists():
             output_with_thumb = job_dir / "output_thumb.mp4"
             try:
                 run([
                     "ffmpeg", "-y",
-                    "-i", str(thumb_clip),
                     "-i", str(output_mp4),
+                    "-i", str(thumb_clip),
                     "-filter_complex",
                     "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]",
                     "-map", "[vout]",
@@ -4137,7 +4137,7 @@ async def _render_impl(req: RenderRequest):
                     str(output_with_thumb),
                 ], "thumb_concat")
                 output_mp4 = output_with_thumb
-                log.info("[RENDER] thumbnail + main concat done")
+                log.info("[RENDER] main + thumbnail(end) concat done")
             except Exception as exc:
                 log.warning("[RENDER] thumbnail concat failed, skipping: %s", exc)
 

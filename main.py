@@ -4598,8 +4598,13 @@ def render_remotion(req: RemotionRenderRequest):
         if not download_file(req.facecam, facecam_path):
             raise HTTPException(status_code=500, detail="facecam download failed")
         duration = probe_duration(facecam_path)
-        words = _whisperx_words(facecam_path) or []
+        # transcribe_audio extracts the audio track first, then tries WhisperX and
+        # falls back to whisper-1. Calling _whisperx_words on the mp4 directly
+        # skipped both the extraction and the fallback, so a missing
+        # REPLICATE_API_TOKEN silently produced zero captions.
+        words = transcribe_audio(facecam_path) or []
         captions = _remotion_captions(words)
+        log.info("[REMOTION] %d words → %d captions", len(words), len(captions))
 
         punch = []
         if req.punch_ins:

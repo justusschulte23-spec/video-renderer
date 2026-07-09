@@ -377,6 +377,32 @@ class RenderRequest(BaseModel):
     template:         Optional[dict] = None         # OR pass the template JSON inline (wins over client_id)
 
 
+# ── Remotion renderer integration (primary motion-graphics; ffmpeg = audio mux) ──
+REMOTION_URL = os.environ.get(
+    "REMOTION_URL", "https://remotion-renderer-production-4e7d.up.railway.app"
+).rstrip("/")
+FORMAT_COMPOSITION = {
+    "broll_automated":      "JustusBroll",
+    "usecase_bubble":       "JustusUsecase",
+    "talking_head_punches": "JustusPunches",
+}
+
+
+class RemotionRenderRequest(BaseModel):
+    facecam:     str
+    format:      str
+    hook_text:   str = ""
+    screen_url:  Optional[str]  = None   # usecase_bubble
+    client_id:   Optional[str]  = "justus"
+    topic_label: Optional[str]  = None   # broll
+    headline:    Optional[str]  = None   # broll
+    stats:       Optional[list] = None   # broll [{value,label}]
+    ticker:      Optional[list] = None   # broll [str]
+    code_lines:  Optional[list] = None   # broll [str]
+    punch_ins:   Optional[list] = None   # punches [seconds]
+    impacts:     Optional[list] = None   # fallback source for punch_ins
+
+
 class ThumbnailRequest(BaseModel):
     topic:               str
     thumbnail_concept:   Optional[str] = None
@@ -4533,6 +4559,101 @@ async def generate_infosheet(req: InfosheetRequest):
     except Exception as exc:
         log.error("[INFOSHEET] Error: %s", exc)
         raise HTTPException(status_code=500, detail=f"Infosheet generation failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def _remotion_captions(words: list, max_words: int = 4) -> list:
+    """Group WhisperX words into short caption phrases with start/end (seconds)."""
+    items, cur, start = [], [], None
+    for w in words:
+        if start is None:
+            start = w["start"]
+        cur.append(w)
+        if len(cur) >= max_words or re.search(r"[.,!?;:]$", w["word"]):
+            items.append({"text": " ".join(x["word"] for x in cur),
+                          "start": round(start, 3), "end": round(cur[-1]["end"], 3)})
+            cur, start = [], None
+    if cur:
+        items.append({"text": " ".join(x["word"] for x in cur),
+                      "start": round(start, 3), "end": round(cur[-1]["end"], 3)})
+    return items
+
+
+@app.post("/render-remotion")
+def render_remotion(req: RemotionRenderRequest):
+    """Primary render path: build props from facecam (WhisperX captions + impacts),
+    call the Remotion service for the format's composition, then ffmpeg-mux the
+    facecam audio onto the muted graphic. Returns a Cloudinary URL."""
+    comp = FORMAT_COMPOSITION.get(req.format)
+    if not comp:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown format '{req.format}'; known: {list(FORMAT_COMPOSITION)}")
+    job_id = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/remotion_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    log.info("[REMOTION] START format=%s comp=%s", req.format, comp)
+    try:
+        facecam_path = job_dir / "facecam.mp4"
+        if not download_file(req.facecam, facecam_path):
+            raise HTTPException(status_code=500, detail="facecam download failed")
+        duration = probe_duration(facecam_path)
+        words = _whisperx_words(facecam_path) or []
+        captions = _remotion_captions(words)
+
+        punch = []
+        if req.punch_ins:
+            punch = [float(x) for x in req.punch_ins]
+        elif req.impacts:
+            for it in req.impacts:
+                t = it.get("time") if isinstance(it, dict) else it
+                if t is not None:
+                    punch.append(float(t))
+        elif captions:
+            punch = [c["start"] for c in captions[1::2]][:6]
+
+        base = {"durationInSeconds": round(duration, 3)}
+        if comp == "JustusBroll":
+            props = {**base, "face_url": req.facecam,
+                     "topicLabel": req.topic_label or "AI // AGENTS",
+                     "headline":  req.headline or req.hook_text or "",
+                     "stats":     req.stats  or [{"value": "3.4x", "label": "schneller"}],
+                     "ticker":    req.ticker or ["AI shipping", "automation +240%"]}
+            if req.code_lines:
+                props["codeLines"] = req.code_lines
+        elif comp == "JustusUsecase":
+            props = {**base, "screen_url": req.screen_url or req.facecam,
+                     "face_url": req.facecam, "hook_text": req.hook_text, "captions": captions}
+        else:  # JustusPunches
+            props = {**base, "face_url": req.facecam, "hook_text": req.hook_text,
+                     "captions": captions, "punch_ins": punch}
+
+        r = requests.post(f"{REMOTION_URL}/render",
+                          json={"composition": comp, "inputProps": props}, timeout=600)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise HTTPException(status_code=502, detail=f"remotion error: {data.get('error')}")
+        gfx_url = data["url"]
+        log.info("[REMOTION] graphic rendered %s (%d frames)", gfx_url, data.get("durationInFrames", 0))
+
+        gfx_path = job_dir / "gfx.mp4"
+        if not download_file(gfx_url, gfx_path):
+            raise HTTPException(status_code=500, detail="remotion output download failed")
+
+        out = job_dir / "final.mp4"
+        run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
+             "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-shortest", "-movflags", "+faststart", str(out)], "remotion_mux")
+        url = upload_cloudinary(out, f"remotion_{comp}_{job_id}")
+        log.info("[REMOTION] DONE %s", url)
+        return {"ok": True, "url": url, "composition": comp, "format": req.format,
+                "duration": round(duration, 3), "captions": len(captions)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("[REMOTION] fail")
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 

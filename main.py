@@ -403,6 +403,8 @@ class RemotionRenderRequest(BaseModel):
     impacts:     Optional[list] = None   # SFX cues + punch source; detected if omitted
     sfx:         bool = True             # mix the SFX library into the final audio
     overlays:    bool = True             # fly-in stock cards (punches only)
+    trim:        bool = True             # auto-cut before rendering (skip if N8N already did)
+    grade:       bool = True             # cinematic colour grade on the facecam
 
 
 class ThumbnailRequest(BaseModel):
@@ -4724,6 +4726,18 @@ def render_remotion(req: RemotionRenderRequest):
         facecam_path = job_dir / "facecam.mp4"
         if not download_file(req.facecam, facecam_path):
             raise HTTPException(status_code=500, detail="facecam download failed")
+
+        # Cut first. Every timestamp downstream — captions, punches, SFX cues —
+        # is measured against the finished timeline, so the transcript has to be
+        # taken from the trimmed clip, not the raw one.
+        face_url = req.facecam
+        if req.trim:
+            trimmed, _ = _trim_pipeline(facecam_path, job_dir)
+            if trimmed != facecam_path:
+                facecam_path = trimmed
+                face_url = upload_cloudinary(trimmed, f"trimmed_{job_id}")
+                log.info("[REMOTION] trimmed facecam → %s", face_url)
+
         duration = probe_duration(facecam_path)
         # transcribe_audio extracts the audio track first, then tries WhisperX and
         # falls back to whisper-1. Calling _whisperx_words on the mp4 directly
@@ -4738,7 +4752,7 @@ def render_remotion(req: RemotionRenderRequest):
 
         base = {"durationInSeconds": round(duration, 3)}
         if comp == "JustusBroll":
-            props = {**base, "face_url": req.facecam,
+            props = {**base, "face_url": face_url,
                      "topicLabel": req.topic_label or "AI // AGENTS",
                      "headline":  req.headline or req.hook_text or "",
                      "stats":     req.stats  or [{"value": "3.4x", "label": "schneller"}],
@@ -4747,8 +4761,8 @@ def render_remotion(req: RemotionRenderRequest):
                 props["codeLines"] = req.code_lines
         elif comp == "JustusUsecase":
             captions = _remotion_captions(words)
-            props = {**base, "screen_url": req.screen_url or req.facecam,
-                     "face_url": req.facecam, "hook_text": req.hook_text, "captions": captions}
+            props = {**base, "screen_url": req.screen_url or face_url,
+                     "face_url": face_url, "hook_text": req.hook_text, "captions": captions}
         else:  # JustusPunches
             chunks = _remotion_chunks(words)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
@@ -4760,9 +4774,10 @@ def render_remotion(req: RemotionRenderRequest):
             overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
             log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches",
                      len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames))
-            props = {**base, "face_url": req.facecam, "hook_text": req.hook_text,
+            props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
-                     "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f}
+                     "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f,
+                     "grade": req.grade}
 
         r = requests.post(f"{REMOTION_URL}/render",
                           json={"composition": comp, "inputProps": props}, timeout=600)
@@ -4839,6 +4854,51 @@ async def enrich_image_prompt(req: EnrichImageRequest):
             result["error"] = str(exc)
     return result
 
+def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = True) -> tuple:
+    """3-phase auto-cut. Returns (path, n_fillers); path is `src` if nothing was cut.
+
+    Phase 0 drops repeated takes and false starts (LLM over a disfluency-preserving
+    transcript). Phase 1 kills acoustic filler words. Phase 2 removes the remaining
+    dead air, cutting only in the pauses between words so no word is halved."""
+    current = src
+
+    n_coherence = 0
+    if smart_cut:
+        cwords = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
+        if cwords:
+            ckeeps, n_coherence = _coherence_keep_segments(cwords, probe_duration(current))
+            if n_coherence > 0 and len(ckeeps) >= 1:
+                p0 = job_dir / "phase0.mp4"
+                if _trim_dead_air(current, ckeeps, p0):
+                    current = p0
+                    log.info("[TRIM] phase0: smart cut removed %d words (takes/false-starts)", n_coherence)
+
+    n_fillers = 0
+    words = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
+    if words:
+        keeps, n_fillers = _filler_keep_segments(words, probe_duration(current))
+        if n_fillers > 0 and len(keeps) >= 1:
+            p1 = job_dir / "phase1.mp4"
+            if _trim_dead_air(current, keeps, p1):   # video hard-cut + 15ms edge declick
+                current = p1
+                log.info("[TRIM] phase1: cut %d filler word(s)", n_fillers)
+    else:
+        log.warning("[TRIM] phase1: no transcript — skipping filler cut")
+
+    w2 = transcribe_audio(current)
+    if w2:
+        keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6, pad=0.12)
+        if len(keeps2) > 1:
+            p2 = job_dir / "phase2.mp4"
+            if _trim_dead_air(current, keeps2, p2):
+                current = p2
+                log.info("[TRIM] phase2: word-based dead-air trim, %d keep-segments", len(keeps2))
+    else:
+        log.warning("[TRIM] phase2: no transcript — skipping dead-air trim")
+
+    return current, n_fillers
+
+
 @app.post("/trim-silence")
 async def trim_silence(req: TrimSilenceRequest):
     """Front-of-pipeline 2-phase auto-cut. Phase 1 kills acoustic filler words
@@ -4854,46 +4914,7 @@ async def trim_silence(req: TrimSilenceRequest):
             raise HTTPException(status_code=500, detail="facecam download failed")
         orig_dur = probe_duration(src)
 
-        current = src
-
-        # ── PHASE 0: smart coherence cut (doppelte Takes / Fehlstarts via LLM) ─
-        n_coherence = 0
-        if getattr(req, "smart_cut", True):
-            # filler-prompt transcript keeps disfluencies (äh/Doppler) visible so the LLM can cut them
-            cwords = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
-            if cwords:
-                ckeeps, n_coherence = _coherence_keep_segments(cwords, probe_duration(current))
-                if n_coherence > 0 and len(ckeeps) >= 1:
-                    p0 = job_dir / "phase0.mp4"
-                    if _trim_dead_air(current, ckeeps, p0):
-                        current = p0
-                        log.info("[TRIM] phase0: smart cut removed %d words (takes/false-starts)", n_coherence)
-
-        # ── PHASE 1: acoustic filler-word killer ──────────────────────────────
-        n_fillers = 0
-        words = transcribe_audio(current, prompt=WHISPER_FILLER_PROMPT)
-        if words:
-            keeps, n_fillers = _filler_keep_segments(words, probe_duration(current))
-            if n_fillers > 0 and len(keeps) >= 1:
-                p1 = job_dir / "phase1.mp4"
-                if _trim_dead_air(current, keeps, p1):   # video hard-cut + 15ms edge declick
-                    current = p1
-                    log.info("[TRIM] phase1: cut %d filler word(s)", n_fillers)
-        else:
-            log.warning("[TRIM] phase1: no transcript — skipping filler cut")
-
-        # ── PHASE 2: WORD-BASED dead-air trim (replaces energy auto-editor) ───
-        # cuts ONLY in pauses between words (never mid-word) → no half words, smooth
-        w2 = transcribe_audio(current)
-        if w2:
-            keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6, pad=0.12)
-            if len(keeps2) > 1:
-                p2 = job_dir / "phase2.mp4"
-                if _trim_dead_air(current, keeps2, p2):
-                    current = p2
-                    log.info("[TRIM] phase2: word-based dead-air trim, %d keep-segments", len(keeps2))
-        else:
-            log.warning("[TRIM] phase2: no transcript — skipping dead-air trim")
+        current, n_fillers = _trim_pipeline(src, job_dir, getattr(req, "smart_cut", True))
 
         # ── result ────────────────────────────────────────────────────────────
         if current == src:

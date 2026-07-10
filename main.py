@@ -400,7 +400,9 @@ class RemotionRenderRequest(BaseModel):
     ticker:      Optional[list] = None   # broll [str]
     code_lines:  Optional[list] = None   # broll [str]
     punch_ins:   Optional[list] = None   # punches [seconds]
-    impacts:     Optional[list] = None   # fallback source for punch_ins
+    impacts:     Optional[list] = None   # SFX cues + punch source; detected if omitted
+    sfx:         bool = True             # mix the SFX library into the final audio
+    overlays:    bool = True             # fly-in stock cards (punches only)
 
 
 class ThumbnailRequest(BaseModel):
@@ -3575,6 +3577,59 @@ async def generate_broll(req: GenerateBrollRequest):
 
 
 # ── POST /detect-impacts ──────────────────────────────────────────────────────
+def _llm_impacts(words: list) -> list:
+    """Place SFX-library cues on the transcript. Returns [{time,category,asset,...}]."""
+    system_prompt = (
+        "You are a sound designer for short-form video. Read the word-level transcript and place\n"
+        "sound effects from the library below at the strongest moments. Pick the asset whose MEANING\n"
+        "best fits what is being said — match SEMANTICALLY (synonyms, related concepts, the emotional\n"
+        "vibe), not only the literal example words. Use 4-8 cues total. Do NOT place anything at t=0\n"
+        "(the intro stinger is added automatically). At most ONE 'hook' background bed per video.\n"
+        "\n"
+        "LIBRARY (category | asset | when to trigger):\n"
+        "hook (3.5s background bed, sparingly):\n"
+        "  distant_police_siren_bg | crisis, law, police, crime, scandal, lawsuit, danger, high stakes\n"
+        "  hook_cash_register_01   | revenue, sales, money won, scaling, profit, deals, funding, valuation\n"
+        "  hook_clock_tick_01      | deadlines, time pressure, history, urgency, countdown, 'too late'\n"
+        "  hook_coin_drop_01       | micro-savings, small amounts, cents, budgeting, finance tips\n"
+        "  hook_error_buzz_01      | failure, mistakes, penalties, losses, crashes, negative numbers\n"
+        "  hook_notification_01    | DMs, inbound pings, messages, notifications, digital comms\n"
+        "  hook_success_chime_01   | achievements, milestones, wins, unlocked value, breakthroughs\n"
+        "  hook_warning_sonar_01   | upcoming threats, critical alerts, macro risk, caution\n"
+        "impact (one-shot punch on a strong beat):\n"
+        "  impact_bass_drop_01     | focus shift, gravity, dramatic conceptual reveal\n"
+        "  impact_cinematic_hit_01 | bold cinematic statement / headline punctuation\n"
+        "  impact_digital_boom_01  | heavy tech realization, AI/software breakthrough\n"
+        "  impact_gong_reversed_01 | swell into a plot shift / reverse reveal / twist\n"
+        "  impact_heartbeat_01     | tension, fear, suspense, life-or-death stakes\n"
+        "  impact_metal_thud_01    | finality, hard proof, definitive structural fact\n"
+        "  impact_shatter_muted_01 | shock, breaking a pattern, a concept failing, busting a myth\n"
+        "  impact_tape_stop_01     | hard pattern interrupt, 'wait/actually', correction\n"
+        "pop (micro <0.4s, fast UI / keyword pop-ins):\n"
+        "  pop_blip_organic_01 | fluid minimalist pop      pop_bubble_muted_01 | light casual reveal\n"
+        "  pop_camera_shutter_01 | freeze-frame/snapshot    pop_click_mech_01 | code/data/typing\n"
+        "  pop_glass_tap_01 | premium UI tap                pop_snap_finger_01 | instant realization/choice\n"
+        "  pop_ui_clean_01 | minimal tech notification\n"
+        "transition (on a B-roll / full-frame swap):\n"
+        "  trans_digital_swipe_01 | data slide/panel wipe   trans_reverse_suck_01 | vacuum pull into next\n"
+        "  trans_swish_fabric_01 | organic whip-pan         trans_swish_paper_01 | flat/doc layout swipe\n"
+        "  trans_whoosh_deep_01 | deep cinematic sweep      trans_whoosh_fast_01 | fast modern whip\n"
+        "\n"
+        "time = the word's start time (seconds) from the transcript.\n"
+        'Return ONLY JSON: {"impacts":[{"time":2.34,"category":"impact","asset":"impact_bass_drop_01","word":"x","reason":"y"}]}'
+    )
+    raw = call_openrouter(system_prompt, json.dumps(words),
+                          model=CHEAP_MODEL, max_tokens=1000)
+    try:
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        impacts = json.loads(m.group()).get("impacts", []) if m else []
+    except (json.JSONDecodeError, AttributeError):
+        log.warning("[IMPACTS] Could not parse JSON: %s", raw[:200])
+        impacts = []
+    log.info("[IMPACTS] Detected %d moments", len(impacts))
+    return impacts
+
+
 @app.post("/detect-impacts")
 async def detect_impacts(req: DetectImpactsRequest):
     job_id  = str(uuid.uuid4())
@@ -3593,65 +3648,10 @@ async def detect_impacts(req: DetectImpactsRequest):
 
         transcript = " ".join(w["word"] for w in words)
 
-        system_prompt = (
-            "You are a sound designer for short-form video. Read the word-level transcript and place\n"
-            "sound effects from the library below at the strongest moments. Pick the asset whose MEANING\n"
-            "best fits what is being said — match SEMANTICALLY (synonyms, related concepts, the emotional\n"
-            "vibe), not only the literal example words. Use 4-8 cues total. Do NOT place anything at t=0\n"
-            "(the intro stinger is added automatically). At most ONE 'hook' background bed per video.\n"
-            "\n"
-            "LIBRARY (category | asset | when to trigger):\n"
-            "hook (3.5s background bed, sparingly):\n"
-            "  distant_police_siren_bg | crisis, law, police, crime, scandal, lawsuit, danger, high stakes\n"
-            "  hook_cash_register_01   | revenue, sales, money won, scaling, profit, deals, funding, valuation\n"
-            "  hook_clock_tick_01      | deadlines, time pressure, history, urgency, countdown, 'too late'\n"
-            "  hook_coin_drop_01       | micro-savings, small amounts, cents, budgeting, finance tips\n"
-            "  hook_error_buzz_01      | failure, mistakes, penalties, losses, crashes, negative numbers\n"
-            "  hook_notification_01    | DMs, inbound pings, messages, notifications, digital comms\n"
-            "  hook_success_chime_01   | achievements, milestones, wins, unlocked value, breakthroughs\n"
-            "  hook_warning_sonar_01   | upcoming threats, critical alerts, macro risk, caution\n"
-            "impact (one-shot punch on a strong beat):\n"
-            "  impact_bass_drop_01     | focus shift, gravity, dramatic conceptual reveal\n"
-            "  impact_cinematic_hit_01 | bold cinematic statement / headline punctuation\n"
-            "  impact_digital_boom_01  | heavy tech realization, AI/software breakthrough\n"
-            "  impact_gong_reversed_01 | swell into a plot shift / reverse reveal / twist\n"
-            "  impact_heartbeat_01     | tension, fear, suspense, life-or-death stakes\n"
-            "  impact_metal_thud_01    | finality, hard proof, definitive structural fact\n"
-            "  impact_shatter_muted_01 | shock, breaking a pattern, a concept failing, busting a myth\n"
-            "  impact_tape_stop_01     | hard pattern interrupt, 'wait/actually', correction\n"
-            "pop (micro <0.4s, fast UI / keyword pop-ins):\n"
-            "  pop_blip_organic_01 | fluid minimalist pop      pop_bubble_muted_01 | light casual reveal\n"
-            "  pop_camera_shutter_01 | freeze-frame/snapshot    pop_click_mech_01 | code/data/typing\n"
-            "  pop_glass_tap_01 | premium UI tap                pop_snap_finger_01 | instant realization/choice\n"
-            "  pop_ui_clean_01 | minimal tech notification\n"
-            "transition (on a B-roll / full-frame swap):\n"
-            "  trans_digital_swipe_01 | data slide/panel wipe   trans_reverse_suck_01 | vacuum pull into next\n"
-            "  trans_swish_fabric_01 | organic whip-pan         trans_swish_paper_01 | flat/doc layout swipe\n"
-            "  trans_whoosh_deep_01 | deep cinematic sweep      trans_whoosh_fast_01 | fast modern whip\n"
-            "\n"
-            "time = the word's start time (seconds) from the transcript.\n"
-            'Return ONLY JSON: {"impacts":[{"time":2.34,"category":"impact","asset":"impact_bass_drop_01","word":"x","reason":"y"}]}'
-        )
-
-        raw = call_openrouter(
-            system_prompt,
-            json.dumps(words),
-            model=CHEAP_MODEL,
-            max_tokens=1000,
-        )
-
-        try:
-            m            = re.search(r'\{.*\}', raw, re.DOTALL)
-            impacts_data = json.loads(m.group()) if m else {"impacts": []}
-        except (json.JSONDecodeError, AttributeError):
-            log.warning("[IMPACTS] Could not parse JSON: %s", raw[:200])
-            impacts_data = {"impacts": []}
-
-        n = len(impacts_data.get("impacts", []))
-        log.info("[IMPACTS] Detected %d moments", n)
+        impacts = _llm_impacts(words)
 
         return {
-            "impacts":        impacts_data.get("impacts", []),
+            "impacts":        impacts,
             "transcript":     transcript,
             "total_duration": duration,
         }
@@ -4563,6 +4563,133 @@ async def generate_infosheet(req: InfosheetRequest):
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
+REMOTION_HOOK_MAX_S   = 3.5   # hook scene never runs longer than this
+REMOTION_OUTRO_S      = 5.0   # trailing CTA scene
+REMOTION_PUNCH_GAP_S  = 2.5   # minimum spacing between camera jumps
+REMOTION_MAX_OVERLAYS = 3
+
+# Words the caption layer should hit harder. Kept deliberately small — the
+# alternative is an LLM pass per video, and this is a styling decision, not a
+# creative one.
+_HOT_WORD_RE = re.compile(
+    r"^(nie|niemand|alles|nichts|jeder|sofort|brutal|krass|null|"
+    r"\d+[.,]?\d*\s*(%|x|€|k|mio)?|\d+)$", re.IGNORECASE)
+
+
+def _remotion_chunks(words: list, max_words: int = 3) -> list:
+    """Word-level caption chunks: [{start,end,words:[{text,start,end,hot}]}].
+
+    JustusPunches reveals one word at a time, so unlike _remotion_captions the
+    per-word timings have to survive into the props."""
+    chunks, cur = [], []
+    for w in words:
+        clean = w["word"].strip()
+        if not clean:
+            continue
+        cur.append({
+            "text":  clean,
+            "start": round(float(w["start"]), 3),
+            "end":   round(float(w["end"]), 3),
+            "hot":   bool(_HOT_WORD_RE.match(clean.strip(".,!?;:"))),
+        })
+        if len(cur) >= max_words or re.search(r"[.,!?;:]$", clean):
+            chunks.append({"start": cur[0]["start"], "end": cur[-1]["end"], "words": cur})
+            cur = []
+    if cur:
+        chunks.append({"start": cur[0]["start"], "end": cur[-1]["end"], "words": cur})
+    # A chunk must stay on screen until the next one starts, otherwise the band
+    # blinks out between phrases.
+    for i, c in enumerate(chunks[:-1]):
+        c["end"] = chunks[i + 1]["start"]
+    if chunks:
+        chunks[-1]["end"] += 0.4
+    return chunks
+
+
+def _remotion_scenes(chunks: list, duration: float) -> tuple:
+    """(hookEndFrame, outroStartFrame). Both snap to chunk boundaries so the
+    layout never changes mid-sentence."""
+    hook_end = 2.0
+    for c in chunks:
+        if c["end"] <= REMOTION_HOOK_MAX_S:
+            hook_end = c["end"]
+        else:
+            break
+    outro_start = 0.0
+    target = duration - REMOTION_OUTRO_S
+    if target > hook_end + 4.0:
+        for c in chunks:
+            if c["start"] >= target:
+                outro_start = c["start"]
+                break
+    return int(hook_end * FPS), int(outro_start * FPS)
+
+
+def _remotion_punch_frames(impacts: list, chunks: list, hook_end_s: float, duration: float) -> list:
+    """Camera jump frames. Prefer the LLM's impact/transition cues — those are
+    where a new argument actually lands. Fall back to an even chunk cadence."""
+    times = [float(i["time"]) for i in (impacts or [])
+             if i.get("time") is not None
+             and i.get("category") in ("impact", "transition")]
+    if not times:
+        times = [c["start"] for c in chunks[2::3]]
+
+    out, last = [], -999.0
+    for t in sorted(times):
+        if t <= hook_end_s or t >= duration - 1.5 or (t - last) < REMOTION_PUNCH_GAP_S:
+            continue
+        out.append(int(t * FPS))
+        last = t
+    return out
+
+
+def _pexels_link(query: str) -> Optional[str]:
+    """Direct portrait clip URL. Remotion streams it, so nothing is downloaded here."""
+    if not PEXELS_API_KEY:
+        return None
+    try:
+        r = requests.get("https://api.pexels.com/videos/search",
+                         headers={"Authorization": PEXELS_API_KEY},
+                         params={"query": query, "per_page": 12,
+                                 "orientation": "portrait", "size": "large"},
+                         timeout=30)
+        r.raise_for_status()
+        vids = r.json().get("videos", [])
+        if not vids:
+            return None
+        best = max(vids, key=lambda v: (1 if (v.get("height") or 0) >= (v.get("width") or 1) else 0,
+                                        min(v.get("height") or 0, 2400), v.get("id") or 0))
+        files = sorted(best["video_files"], key=lambda f: abs((f.get("height") or 0) - 1920))
+        return files[0]["link"]
+    except Exception as exc:
+        log.warning("[VID] pexels link failed (%s): %s", query, exc)
+        return None
+
+
+def _remotion_overlays(words: list, duration: float, hook_end_s: float) -> list:
+    """Stock clips as fly-in cards. Size and position come from an enum the
+    composition owns — the LLM only picks the moment and the search query."""
+    cuts = _detect_video_cuts(words, duration, max_cuts=REMOTION_MAX_OVERLAYS)
+    overlays = []
+    for i, c in enumerate(cuts):
+        if c["time"] <= hook_end_s:
+            continue
+        link = _pexels_link(c["query"])
+        if not link:
+            continue
+        overlays.append({
+            "startFrame": int(c["time"] * FPS),
+            "endFrame":   int(min(c["end"], duration - 0.5) * FPS),
+            "asset_url":  link,
+            "kind":       "video",
+            "size":       "half",
+            "position":   "upper_third" if i % 2 == 0 else "lower_third",
+            "from":       "left" if i % 2 == 0 else "right",
+        })
+    log.info("[REMOTION] %d fly-in overlays", len(overlays))
+    return overlays
+
+
 def _remotion_captions(words: list, max_words: int = 4) -> list:
     """Group WhisperX words into short caption phrases with start/end (seconds)."""
     items, cur, start = [], [], None
@@ -4603,19 +4730,11 @@ def render_remotion(req: RemotionRenderRequest):
         # skipped both the extraction and the fallback, so a missing
         # REPLICATE_API_TOKEN silently produced zero captions.
         words = transcribe_audio(facecam_path) or []
-        captions = _remotion_captions(words)
-        log.info("[REMOTION] %d words → %d captions", len(words), len(captions))
 
-        punch = []
-        if req.punch_ins:
-            punch = [float(x) for x in req.punch_ins]
-        elif req.impacts:
-            for it in req.impacts:
-                t = it.get("time") if isinstance(it, dict) else it
-                if t is not None:
-                    punch.append(float(t))
-        elif captions:
-            punch = [c["start"] for c in captions[1::2]][:6]
+        impacts = req.impacts
+        if impacts is None and words:
+            impacts = _llm_impacts(words)
+        impacts = impacts or []
 
         base = {"durationInSeconds": round(duration, 3)}
         if comp == "JustusBroll":
@@ -4627,11 +4746,23 @@ def render_remotion(req: RemotionRenderRequest):
             if req.code_lines:
                 props["codeLines"] = req.code_lines
         elif comp == "JustusUsecase":
+            captions = _remotion_captions(words)
             props = {**base, "screen_url": req.screen_url or req.facecam,
                      "face_url": req.facecam, "hook_text": req.hook_text, "captions": captions}
         else:  # JustusPunches
+            chunks = _remotion_chunks(words)
+            hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
+            hook_end_s = hook_end_f / FPS
+            if req.punch_ins:
+                punch_frames = [int(float(x) * FPS) for x in req.punch_ins]
+            else:
+                punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
+            overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
+            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches",
+                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames))
             props = {**base, "face_url": req.facecam, "hook_text": req.hook_text,
-                     "captions": captions, "punch_ins": punch}
+                     "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
+                     "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f}
 
         r = requests.post(f"{REMOTION_URL}/render",
                           json={"composition": comp, "inputProps": props}, timeout=600)
@@ -4650,10 +4781,19 @@ def render_remotion(req: RemotionRenderRequest):
         run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
              "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
              "-shortest", "-movflags", "+faststart", str(out)], "remotion_mux")
+
+        if req.sfx:
+            mixed = mix_sfx_into_video(out, impacts, job_dir, duration)
+            if mixed:
+                out = mixed
+            else:
+                log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
+
         url = upload_cloudinary(out, f"remotion_{comp}_{job_id}")
         log.info("[REMOTION] DONE %s", url)
         return {"ok": True, "url": url, "composition": comp, "format": req.format,
-                "duration": round(duration, 3), "captions": len(captions)}
+                "duration": round(duration, 3), "words": len(words),
+                "impacts": len(impacts)}
     except HTTPException:
         raise
     except Exception as exc:

@@ -4645,6 +4645,41 @@ def _remotion_punch_frames(impacts: list, chunks: list, hook_end_s: float, durat
     return out
 
 
+# A spoken number is the one thing worth putting on screen without asking an LLM:
+# it is unambiguous, and the viewer cannot re-listen to a stat they missed.
+_STAT_RE = re.compile(
+    r"^(?:(?P<cur>[€$])\s?)?(?P<num>\d{1,3}(?:[.,]\d+)?)(?P<suf>%|x|k|K|€|mio|Mio)?$")
+_STAT_MIN_GAP_S = 6.0
+
+
+def _remotion_stat_pops(words: list, hook_end_s: float, duration: float,
+                        max_pops: int = 4) -> list:
+    """Chips for numbers spoken aloud. Bare integers under 10 are usually
+    counting ('drei Schritte'), not a stat, so they stay in the caption band."""
+    pops, last = [], -999.0
+    for w in words:
+        raw = w["word"].strip().strip(".,!?;:")
+        m = _STAT_RE.match(raw)
+        if not m:
+            continue
+        t = float(w["start"])
+        if t <= hook_end_s or t >= duration - 2.0 or (t - last) < _STAT_MIN_GAP_S:
+            continue
+        suffix = m.group("suf")
+        num = m.group("num")
+        if not suffix and not m.group("cur") and "," not in num and "." not in num:
+            if int(num) < 10:
+                continue
+        pops.append({"frame": int(t * FPS),
+                     "value": (m.group("cur") or "") + num + (suffix or ""),
+                     "label": ""})
+        last = t
+        if len(pops) >= max_pops:
+            break
+    log.info("[REMOTION] %d stat pops", len(pops))
+    return pops
+
+
 def _pexels_link(query: str) -> Optional[str]:
     """Direct portrait clip URL. Remotion streams it, so nothing is downloaded here."""
     if not PEXELS_API_KEY:
@@ -4772,10 +4807,12 @@ def render_remotion(req: RemotionRenderRequest):
             else:
                 punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
             overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
+            stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
             log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches",
                      len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
+                     "statPops": stat_pops,
                      "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f,
                      "grade": req.grade}
 

@@ -385,6 +385,14 @@ FORMAT_COMPOSITION = {
     "broll_automated":      "JustusBroll",
     "usecase_bubble":       "JustusUsecase",
     "talking_head_punches": "JustusPunches",
+    # Quadrant format keys (Supabase clients.formats / used_topics.format) map
+    # straight onto a composition, so the render-engine can pass the format key
+    # it already has instead of a second translation table in n8n.
+    "tool_drop":            "JustusUsecase",   # Q1 tool_reveal
+    "tool_reveal":          "JustusUsecase",
+    "build_story":          "JustusBroll",     # Q2 builder-in-the-trenches
+    "business_result":      "JustusPunches",   # Q3
+    "hot_take":             "JustusPunches",   # Q4
 }
 
 

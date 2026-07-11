@@ -418,6 +418,7 @@ class RemotionRenderRequest(BaseModel):
     overlays:    bool = True             # fly-in stock cards (punches only)
     trim:        bool = True             # auto-cut before rendering (skip if N8N already did)
     grade:       bool = True             # cinematic colour grade on the facecam
+    briefing:    Optional[dict] = None   # production_briefing.segments → regie drives the render
 
 
 class ThumbnailRequest(BaseModel):
@@ -4621,6 +4622,62 @@ def _remotion_chunks(words: list, max_words: int = 3) -> list:
     return chunks
 
 
+def _norm_token(s: str) -> str:
+    return re.sub(r"[^0-9a-zäöüß]", "", s.lower())
+
+
+def _find_word_time(words: list, target: str, after: float = 0.0) -> Optional[float]:
+    """Start time of the first transcript word matching `target` (its first
+    meaningful token), searched from `after` seconds on. None if not found."""
+    toks = [_norm_token(t) for t in re.split(r"\s+", target) if _norm_token(t)]
+    if not toks:
+        return None
+    key = toks[0]
+    for w in words:
+        if float(w["start"]) < after:
+            continue
+        ww = _norm_token(w["word"])
+        if ww and (ww == key or (len(key) > 3 and key in ww)):
+            return float(w["start"])
+    return None
+
+
+def _briefing_props(briefing: dict, words: list, hook_end_s: float, duration: float) -> tuple:
+    """Map production_briefing.regie onto the ACTUAL transcript timeline.
+    Returns (punch_frames, lower_thirds). Script timings are ignored — the words
+    people actually spoke drive where punches/cards land."""
+    segs = (briefing or {}).get("segments", []) or []
+    punch, lowers = [], []
+    for s in segs:
+        regie = s.get("regie", {}) or {}
+        for pw in (regie.get("punch_words") or []):
+            t = _find_word_time(words, str(pw))
+            if t is not None and hook_end_s < t < duration - 1.0:
+                punch.append(int(t * FPS))
+        cta = regie.get("cta_keyword")
+        if cta:
+            t = _find_word_time(words, str(cta))
+            if t is not None and t < duration - 0.3:
+                punch.append(int(t * FPS))
+        lt = regie.get("lower_third") or {}
+        if lt.get("title"):
+            st = _find_word_time(words, s.get("text", "")) or hook_end_s
+            lowers.append({
+                "startFrame": int(st * FPS),
+                "endFrame": int(min(st + 4.5, duration - 0.2) * FPS),
+                "title": str(lt.get("title"))[:42],
+                "subtitle": str(lt.get("subtitle") or "")[:70],
+            })
+    # dedupe + keep punches spaced apart
+    punch = sorted(set(punch))
+    spaced, last = [], -999
+    for f in punch:
+        if f - last >= int(REMOTION_PUNCH_GAP_S * FPS):
+            spaced.append(f)
+            last = f
+    return spaced, lowers
+
+
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
     """(hookEndFrame, outroStartFrame). Both snap to chunk boundaries so the
     layout never changes mid-sentence."""
@@ -4815,17 +4872,24 @@ def render_remotion(req: RemotionRenderRequest):
             chunks = _remotion_chunks(words)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
             hook_end_s = hook_end_f / FPS
+            # the production briefing's regie wins when present: punches + lower-
+            # thirds land on the words actually spoken. impacts are the fallback.
+            lower_thirds = []
             if req.punch_ins:
                 punch_frames = [int(float(x) * FPS) for x in req.punch_ins]
+            elif req.briefing:
+                punch_frames, lower_thirds = _briefing_props(req.briefing, words, hook_end_s, duration)
+                if not punch_frames:
+                    punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
             else:
                 punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
             overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
             stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
-            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches",
-                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames))
+            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d lower-thirds (briefing=%s)",
+                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(lower_thirds), bool(req.briefing))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
-                     "statPops": stat_pops,
+                     "statPops": stat_pops, "lowerThirds": lower_thirds,
                      "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f,
                      "grade": req.grade}
 

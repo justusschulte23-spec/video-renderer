@@ -393,6 +393,11 @@ FORMAT_COMPOSITION = {
     "build_story":          "JustusBroll",     # Q2 builder-in-the-trenches
     "business_result":      "JustusPunches",   # Q3
     "hot_take":             "JustusPunches",   # Q4
+    # Tim Kemper quadrant keys → his own compositions (TIM_BRAND petrol/gold)
+    "freiheits_werkzeug":   "TimTalkingHead",  # Q1
+    "bollerwagen":          "TimTalkingHead",  # Q2
+    "news_impact":          "TimBroll",        # Q3 (the one gold-stat)
+    "klartext":             "TimTalkingHead",  # Q4
 }
 
 

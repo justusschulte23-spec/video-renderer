@@ -4678,6 +4678,109 @@ def _briefing_props(briefing: dict, words: list, hook_end_s: float, duration: fl
     return spaced, lowers
 
 
+def _visual_director(words: list, briefing: dict, duration: float,
+                     hook_end_s: float, brand_accent: str = "#8B5CF6") -> dict:
+    """Smart visual layer. One LLM plans the whole timeline from the REAL
+    transcript + the script intent — which moments get a clean glass text card
+    vs a real stock scene, where lower-thirds/stats sit, where captions go so
+    they don't cover the face, and a brightness curve. Returns {} on failure so
+    the caller falls back to the dumb derivation."""
+    if not words or duration < 4:
+        return {}
+    transcript = " ".join(w["word"] for w in words)
+    seg_intent = ""
+    for s in (briefing or {}).get("segments", []) or []:
+        r = s.get("regie", {}) or {}
+        seg_intent += f"- {s.get('rolle')}: {s.get('text','')[:160]}"
+        if r.get("lower_third", {}).get("title"):
+            seg_intent += f" [Kernbegriff: {r['lower_third']['title']}]"
+        seg_intent += "\n"
+
+    system = (
+        "Du bist VISUAL DIRECTOR fuer einen 9:16 Talking-Head-Clip (Gesicht mittig, darf NIE "
+        "verdeckt werden). Du bekommst das echte Wort-Transkript mit Zeiten und die Skript-Absicht. "
+        "Entwirf eine GESCHMACKVOLLE visuelle Timeline die die Aussage verstaerkt — NICHT jede Sekunde "
+        "ein Overlay, das Gesicht muss atmen. Entscheide pro starkem Moment das BESTE Mittel:\n"
+        "- overlay kind 'glass' = kurze, knackige TEXT-Karte (2-5 Woerter) fuer Konzept/Claim/Begriff. "
+        "Bevorzugt fuer abstrakte/Tech-/Aussage-Momente. IMMER sauber, nie sloppy.\n"
+        "- overlay kind 'stock' = echte reale Szene, NUR wenn ein woertliches Realbild wirklich hilft. "
+        "Gib eine 3-5 Woerter ENGLISCHE Suchquery.\n"
+        "- position IMMER 'upper_third' oder 'lower_third', NIE 'center' (verdeckt das Gesicht).\n"
+        "- lower_thirds: fuer EINEN Definitions-/Label-Moment (title 2-4 Woerter + kurzer subtitle).\n"
+        "- stats: wenn eine ZAHL/Metrik gesprochen wird (value z.B. '3x','90%').\n"
+        "- caption_y: wo die Captions sitzen (0.60-0.72) damit sie das Gesicht nicht verdecken.\n"
+        "- brightness: leicht abdunkeln (0.86) bei Spannung/Problem, voll (1.0) bei Hook/Payoff.\n"
+        "REGELN: max ~1 Overlay pro 4-5 Sekunden. Glass-Text max 5 Woerter. Zeiten in Sekunden. "
+        "Waehle bewusst Abwechslung (mal glass, mal stock, mal nichts). NUR JSON zurueck:\n"
+        '{"overlays":[{"start":4.2,"end":6.2,"kind":"glass","text":"kostet echtes Geld","position":"upper_third","query":""}],'
+        '"lower_thirds":[{"start":12,"end":16,"title":"Workflow > Agent","subtitle":"fuer 90% der Faelle"}],'
+        '"stats":[{"time":20,"value":"90%","label":"der Faelle"}],'
+        '"caption_y":0.65,"brightness":[{"t":0,"level":1.0},{"t":5,"level":0.88}]}'
+    )
+    user = (f"Dauer: {duration:.1f}s. Hook endet bei {hook_end_s:.1f}s (davor keine Overlays).\n\n"
+            f"SKRIPT-ABSICHT:\n{seg_intent}\n\nWORT-TRANSKRIPT (mit Zeiten):\n"
+            + json.dumps([{"w": w["word"], "t": round(float(w["start"]), 2)} for w in words], ensure_ascii=False))
+    try:
+        raw = call_openrouter(system, user, model="anthropic/claude-sonnet-4.5", max_tokens=2000)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        plan = json.loads(m.group()) if m else {}
+    except Exception as exc:
+        log.warning("[DIRECTOR] failed: %s", exc)
+        return {}
+    log.info("[DIRECTOR] %d overlays, %d lower-thirds, %d stats",
+             len(plan.get("overlays", [])), len(plan.get("lower_thirds", [])), len(plan.get("stats", [])))
+    return plan
+
+
+def _director_to_props(plan: dict, duration: float, hook_end_s: float) -> dict:
+    """Turn the director's plan into Remotion props: overlays (glass text stay as
+    text; stock get a Pexels link), lowerThirds, statPops, captionY, brightness."""
+    overlays, lowers, stats = [], [], []
+    for i, o in enumerate(plan.get("overlays", []) or []):
+        try:
+            st, en = float(o["start"]), float(o["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if st < hook_end_s or st >= duration - 0.5:
+            continue
+        en = min(en, duration - 0.2)
+        pos = o.get("position") if o.get("position") in ("upper_third", "lower_third") else "upper_third"
+        frm = "left" if i % 2 == 0 else "right"
+        kind = o.get("kind")
+        if kind == "glass" and o.get("text"):
+            overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
+                             "kind": "glass", "text": str(o["text"])[:60], "size": "half",
+                             "position": pos, "from": frm, "asset_url": ""})
+        elif kind == "stock" and o.get("query"):
+            link = _pexels_link(str(o["query"]))
+            if link:
+                overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
+                                 "kind": "video", "asset_url": link, "size": "half",
+                                 "position": pos, "from": frm, "text": ""})
+    for lt in (plan.get("lower_thirds", []) or []):
+        try:
+            st = float(lt["start"]); en = float(lt["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if lt.get("title"):
+            lowers.append({"startFrame": int(st * FPS), "endFrame": int(min(en, duration - 0.2) * FPS),
+                           "title": str(lt["title"])[:42], "subtitle": str(lt.get("subtitle", ""))[:70]})
+    for s in (plan.get("stats", []) or []):
+        try:
+            t = float(s["time"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if s.get("value") and hook_end_s < t < duration - 1.0:
+            stats.append({"frame": int(t * FPS), "value": str(s["value"])[:8], "label": str(s.get("label", ""))[:24]})
+    cap_y = plan.get("caption_y")
+    try:
+        cap_y = float(cap_y) if cap_y is not None else None
+    except (TypeError, ValueError):
+        cap_y = None
+    return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
+            "captionY": cap_y, "brightness": plan.get("brightness") or []}
+
+
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
     """(hookEndFrame, outroStartFrame). Both snap to chunk boundaries so the
     layout never changes mid-sentence."""
@@ -4872,8 +4975,7 @@ def render_remotion(req: RemotionRenderRequest):
             chunks = _remotion_chunks(words)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
             hook_end_s = hook_end_f / FPS
-            # the production briefing's regie wins when present: punches + lower-
-            # thirds land on the words actually spoken. impacts are the fallback.
+            # punches (audio hits) from the briefing/impacts; lands on real words.
             lower_thirds = []
             if req.punch_ins:
                 punch_frames = [int(float(x) * FPS) for x in req.punch_ins]
@@ -4883,15 +4985,31 @@ def render_remotion(req: RemotionRenderRequest):
                     punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
             else:
                 punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
-            overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
-            stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
-            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d lower-thirds (briefing=%s)",
-                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(lower_thirds), bool(req.briefing))
+
+            # the visual director plans the whole visual layer (overlays/cards/
+            # caption position/brightness). Falls back to the dumb derivation.
+            plan = _visual_director(words, req.briefing or {}, duration, hook_end_s) if req.overlays else {}
+            caption_y, brightness = None, []
+            if plan:
+                dp = _director_to_props(plan, duration, hook_end_s)
+                overlays, stat_pops = dp["overlays"], dp["statPops"]
+                if dp["lowerThirds"]:
+                    lower_thirds = dp["lowerThirds"]
+                caption_y, brightness = dp["captionY"], dp["brightness"]
+            else:
+                overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
+                stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
+            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds (director=%s)",
+                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(overlays), len(lower_thirds), bool(plan))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
                      "statPops": stat_pops, "lowerThirds": lower_thirds,
                      "hookEndFrame": hook_end_f, "outroStartFrame": outro_start_f,
                      "grade": req.grade}
+            if caption_y is not None:
+                props["captionY"] = caption_y
+            if brightness:
+                props["brightness"] = brightness
 
         r = requests.post(f"{REMOTION_URL}/render",
                           json={"composition": comp, "inputProps": props}, timeout=600)

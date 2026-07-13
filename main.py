@@ -36,6 +36,7 @@ cloudinary.config(
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+GOOGLE_AI_KEY = os.environ.get("GOOGLE_AI_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
 # WhisperX via Replicate — precise word-level timestamps (wav2vec2 align) for cut+captions
@@ -419,6 +420,7 @@ class RemotionRenderRequest(BaseModel):
     trim:        bool = True             # auto-cut before rendering (skip if N8N already did)
     grade:       bool = True             # cinematic colour grade on the facecam
     briefing:    Optional[dict] = None   # production_briefing.segments → regie drives the render
+    qa:          bool = True             # Gemini QA gate on the final render
 
 
 class ThumbnailRequest(BaseModel):
@@ -4976,6 +4978,58 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
     return items
 
 
+def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
+    """QA gate: sample frames at the risky moments (overlays/captions active) and
+    ask Gemini vision whether anything covers the face or clips off-frame. Returns
+    {overall: 'OK'|'ISSUES'|'SKIP', frames:[{t, ok, issue}]}."""
+    if not GOOGLE_AI_KEY:
+        return {"overall": "SKIP", "reason": "no GOOGLE_AI_KEY"}
+    import base64
+    # dedupe + cap the moments; always include a couple of general samples
+    ts = sorted(set(round(m, 2) for m in moments if 0.5 < m < duration - 0.3))
+    if len(ts) > 6:
+        ts = ts[:: max(1, len(ts) // 6)][:6]
+    if not ts:
+        ts = [duration * 0.3, duration * 0.6]
+    parts = [{"text": (
+        "Du bist QA fuer 9:16 Short-Form-Video-Frames. Pruefe JEDES Bild (in Reihenfolge) gegen: "
+        "(1) Das Gesicht des Sprechers muss klar sichtbar sein — Text/Grafik/Karte darf es NICHT verdecken. "
+        "(2) Nichts darf am Bildrand abgeschnitten sein (Text/Karte/Box komplett im Frame). "
+        "(3) Keine sich ueberlappenden Text-Elemente die unlesbar werden. "
+        "Antworte NUR mit JSON: {\"frames\":[{\"ok\":true,\"issue\":\"\"}],\"overall\":\"OK\"|\"ISSUES\"} "
+        "— ein frames-Eintrag pro Bild, gleiche Reihenfolge."
+    )}]
+    tmp = mp4_path.parent
+    for i, t in enumerate(ts):
+        fp = tmp / f"qa_{i}.jpg"
+        try:
+            subprocess.run(["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(mp4_path),
+                            "-frames:v", "1", "-vf", "scale=540:-1", str(fp)],
+                           check=True, capture_output=True)
+            b64 = base64.b64encode(fp.read_bytes()).decode()
+            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
+        except Exception:
+            continue
+    if len(parts) < 2:
+        return {"overall": "SKIP", "reason": "no frames"}
+    try:
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key={GOOGLE_AI_KEY}",
+            json={"contents": [{"parts": parts}], "generationConfig": {"temperature": 0}},
+            timeout=90)
+        r.raise_for_status()
+        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        m = re.search(r"\{[\s\S]*\}", txt)
+        qa = json.loads(m.group()) if m else {"overall": "SKIP"}
+    except Exception as exc:
+        log.warning("[QA] gemini failed: %s", exc)
+        return {"overall": "SKIP", "reason": str(exc)}
+    qa["checked_at"] = ts
+    issues = [f for f in qa.get("frames", []) if not f.get("ok", True)]
+    log.info("[QA] overall=%s, %d/%d frames flagged", qa.get("overall"), len(issues), len(ts))
+    return qa
+
+
 # ── Async render jobs ─────────────────────────────────────────────────────────
 # A full render is minutes long and blows Railway's ~5-min HTTP edge timeout, so
 # /render-remotion returns a job id immediately and renders in a worker thread;
@@ -5024,6 +5078,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             impacts = _llm_impacts(words)
         impacts = impacts or []
 
+        qa_moments = []
         base = {"durationInSeconds": round(duration, 3)}
         if comp == "JustusBroll":
             props = {**base, "face_url": face_url,
@@ -5081,6 +5136,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["washes"] = washes
             if callouts:
                 props["callouts"] = callouts
+            # QA samples the risky moments — where an overlay/lower-third/stat is up
+            qa_moments = ([o["startFrame"] / FPS + 0.4 for o in overlays]
+                          + [lt["startFrame"] / FPS + 0.6 for lt in lower_thirds]
+                          + [s["frame"] / FPS + 0.3 for s in stat_pops]
+                          + [c["start"] + 0.5 for c in callouts])
 
         r = requests.post(f"{REMOTION_URL}/render",
                           json={"composition": comp, "inputProps": props}, timeout=600)
@@ -5107,11 +5167,13 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
 
+        qa = _gemini_qa(out, qa_moments, duration) if req.qa else {"overall": "SKIP"}
+
         url = upload_cloudinary(out, f"remotion_{comp}_{job_id}")
         log.info("[REMOTION] DONE %s", url)
         return {"ok": True, "url": url, "composition": comp, "format": req.format,
                 "duration": round(duration, 3), "words": len(words),
-                "impacts": len(impacts)}
+                "impacts": len(impacts), "qa": qa}
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 

@@ -1017,6 +1017,38 @@ def _compute_keep_segments(words: list, duration: float,
     return [(s, e) for s, e in keeps if e - s > 0.02]
 
 
+def _silence_intervals(audio_path: Path, noise_db: int = -30, min_silence: float = 0.35) -> list:
+    """Real silence intervals from ffmpeg silencedetect — the hard audio signal
+    that Whisper word-gaps miss (loose word ends, breaths inside word spans)."""
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-i", str(audio_path), "-af",
+             f"silencedetect=noise={noise_db}dB:d={min_silence}", "-f", "null", "-"],
+            capture_output=True, text=True).stderr
+        starts = [float(x) for x in re.findall(r"silence_start:\s*([0-9.]+)", out)]
+        ends = [float(x) for x in re.findall(r"silence_end:\s*([0-9.]+)", out)]
+        return list(zip(starts, ends))
+    except Exception as exc:
+        log.warning("[TRIM] silencedetect failed: %s", exc)
+        return []
+
+
+def _silence_keep_segments(silences: list, duration: float, pad: float = 0.09) -> list:
+    """Keep everything except the interior of each real silence (minus a small pad
+    so speech onsets/tails aren't clipped)."""
+    keeps, cur = [], 0.0
+    for s, e in silences:
+        a, b = s + pad, e - pad
+        if b - a <= 0.06:
+            continue
+        if a > cur:
+            keeps.append((round(cur, 3), round(a, 3)))
+        cur = b
+    if cur < duration:
+        keeps.append((round(cur, 3), round(duration, 3)))
+    return [(s, e) for s, e in keeps if e - s > 0.05]
+
+
 def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08) -> bool:
     """Smooth pro joins: each keep-segment cross-faded into the next (video xfade +
     audio acrossfade, SAME duration each join -> A and V shrink equally -> stays in sync).
@@ -4710,11 +4742,17 @@ def _visual_director(words: list, briefing: dict, duration: float,
         "- stats: wenn eine ZAHL/Metrik gesprochen wird (value z.B. '3x','90%').\n"
         "- caption_y: wo die Captions sitzen (0.60-0.72) damit sie das Gesicht nicht verdecken.\n"
         "- brightness: leicht abdunkeln (0.86) bei Spannung/Problem, voll (1.0) bei Hook/Payoff.\n"
+        "- washes: dramatischer FARB-Wash auf emotionalen Beats. color = 'red' (Spannung/Aggro), "
+        "'amethyst'/'cyan' (Tech/Fokus), 'warm' (Payoff/Aufloesung), 'blue' (Ruhe). strength 0.2-0.35. Sparsam, 1-3 total.\n"
+        "- callouts: gestrichelte Box die auf etwas ZEIGT (nur wenn im Bild wirklich was zum Zeigen ist), "
+        "mit kurzem label. position upper/mid/lower. Selten, max 1-2.\n"
         "REGELN: max ~1 Overlay pro 4-5 Sekunden. Glass-Text max 5 Woerter. Zeiten in Sekunden. "
-        "Waehle bewusst Abwechslung (mal glass, mal stock, mal nichts). NUR JSON zurueck:\n"
+        "Waehle bewusst Abwechslung (mal glass, mal stock, mal wash, mal nichts). NUR JSON zurueck:\n"
         '{"overlays":[{"start":4.2,"end":6.2,"kind":"glass","text":"kostet echtes Geld","position":"upper_third","query":""}],'
         '"lower_thirds":[{"start":12,"end":16,"title":"Workflow > Agent","subtitle":"fuer 90% der Faelle"}],'
         '"stats":[{"time":20,"value":"90%","label":"der Faelle"}],'
+        '"washes":[{"start":3,"end":6,"color":"red","strength":0.3}],'
+        '"callouts":[{"start":14,"end":17,"position":"mid","size":"half","label":"HIER"}],'
         '"caption_y":0.65,"brightness":[{"t":0,"level":1.0},{"t":5,"level":0.88}]}'
     )
     user = (f"Dauer: {duration:.1f}s. Hook endet bei {hook_end_s:.1f}s (davor keine Overlays).\n\n"
@@ -4777,8 +4815,29 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float) -> dict:
         cap_y = float(cap_y) if cap_y is not None else None
     except (TypeError, ValueError):
         cap_y = None
+
+    washes = []
+    for w in (plan.get("washes", []) or [])[:3]:
+        try:
+            washes.append({"start": float(w["start"]), "end": float(min(float(w["end"]), duration)),
+                           "color": str(w.get("color", "amethyst")), "strength": float(w.get("strength", 0.28))})
+        except (KeyError, TypeError, ValueError):
+            continue
+    callouts = []
+    for c in (plan.get("callouts", []) or [])[:2]:
+        try:
+            st = float(c["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if st < hook_end_s:
+            continue
+        callouts.append({"start": st, "end": float(min(float(c.get("end", st + 3)), duration)),
+                         "position": c.get("position", "mid") if c.get("position") in ("upper", "mid", "lower") else "mid",
+                         "size": c.get("size", "half") if c.get("size") in ("third", "half") else "half",
+                         "label": str(c.get("label", ""))[:20]})
     return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
-            "captionY": cap_y, "brightness": plan.get("brightness") or []}
+            "captionY": cap_y, "brightness": plan.get("brightness") or [],
+            "washes": washes, "callouts": callouts}
 
 
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
@@ -4989,13 +5048,14 @@ def render_remotion(req: RemotionRenderRequest):
             # the visual director plans the whole visual layer (overlays/cards/
             # caption position/brightness). Falls back to the dumb derivation.
             plan = _visual_director(words, req.briefing or {}, duration, hook_end_s) if req.overlays else {}
-            caption_y, brightness = None, []
+            caption_y, brightness, washes, callouts = None, [], [], []
             if plan:
                 dp = _director_to_props(plan, duration, hook_end_s)
                 overlays, stat_pops = dp["overlays"], dp["statPops"]
                 if dp["lowerThirds"]:
                     lower_thirds = dp["lowerThirds"]
                 caption_y, brightness = dp["captionY"], dp["brightness"]
+                washes, callouts = dp["washes"], dp["callouts"]
             else:
                 overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
@@ -5010,6 +5070,10 @@ def render_remotion(req: RemotionRenderRequest):
                 props["captionY"] = caption_y
             if brightness:
                 props["brightness"] = brightness
+            if washes:
+                props["washes"] = washes
+            if callouts:
+                props["callouts"] = callouts
 
         r = requests.post(f"{REMOTION_URL}/render",
                           json={"composition": comp, "inputProps": props}, timeout=600)
@@ -5127,6 +5191,26 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = True) -> tuple:
                 log.info("[TRIM] phase2: word-based dead-air trim, %d keep-segments", len(keeps2))
     else:
         log.warning("[TRIM] phase2: no transcript — skipping dead-air trim")
+
+    # ── PHASE 3: real-silence tightening (ffmpeg silencedetect) ───────────────
+    # catches the "dumb pauses" that word-gaps miss — the actual audio silence.
+    try:
+        a3 = job_dir / "audio3.mp3"
+        subprocess.run(["ffmpeg", "-y", "-i", str(current), "-vn", "-ar", "16000",
+                        "-ac", "1", str(a3)], check=True, capture_output=True)
+        sil = _silence_intervals(a3)
+        if sil:
+            dur3 = probe_duration(current)
+            keeps3 = _silence_keep_segments(sil, dur3)
+            # guard: don't nuke the clip if detection is pathological
+            kept = sum(e - s for s, e in keeps3)
+            if len(keeps3) > 1 and kept > dur3 * 0.5:
+                p3 = job_dir / "phase3.mp4"
+                if _trim_dead_air(current, keeps3, p3):
+                    current = p3
+                    log.info("[TRIM] phase3: removed %d real-silence gaps", len(sil))
+    except Exception as exc:
+        log.warning("[TRIM] phase3 skipped: %s", exc)
 
     return current, n_fillers
 

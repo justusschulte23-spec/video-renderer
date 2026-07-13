@@ -5036,10 +5036,12 @@ def _matte_video(facecam_path: Path, job_dir: Path) -> str:
             _REMBG_SESSION = new_session("u2netp")  # light + fast
         cap = cv2.VideoCapture(str(facecam_path))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        W = 540
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        W = 480
         frames = job_dir / "matte_frames"
         frames.mkdir(exist_ok=True)
         idx = 0
+        log.info("[MATTE] start: %d frames @ %dfps, W=%d", total, int(round(fps)), W)
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -5049,6 +5051,11 @@ def _matte_video(facecam_path: Path, job_dir: Path) -> str:
             cut = remove(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), session=_REMBG_SESSION)  # RGBA
             cv2.imwrite(str(frames / f"{idx:05d}.png"), cv2.cvtColor(cut, cv2.COLOR_RGBA2BGRA))
             idx += 1
+            del frame, cut
+            if idx % 100 == 0:
+                import gc as _gc
+                _gc.collect()
+                log.info("[MATTE] %d/%d frames", idx, total)
         cap.release()
         if idx < 5:
             return ""

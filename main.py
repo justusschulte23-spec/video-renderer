@@ -4773,9 +4773,18 @@ def _visual_director(words: list, briefing: dict, duration: float,
     return plan
 
 
-def _director_to_props(plan: dict, duration: float, hook_end_s: float) -> dict:
+def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dict = None) -> dict:
     """Turn the director's plan into Remotion props: overlays (glass text stay as
-    text; stock get a Pexels link), lowerThirds, statPops, captionY, brightness."""
+    text; stock get a Pexels link), lowerThirds, statPops, captionY, brightness.
+    Overlays are pinned to face-aware SAFE RAILS (above face.top / below face.bottom)
+    so a centred, punch-zoomed face is never covered — this is what the QA gate was
+    nuking. Cards stay small ('third')."""
+    face = face or {}
+    ft = face.get("top", 0.15)
+    fb = face.get("bottom", 0.66)
+    upper_rail = round(max(0.05, ft - 0.16), 3)   # card ends above the forehead
+    lower_rail = round(min(0.80, fb + 0.04), 3)    # card starts below the chin
+    has_upper = ft > 0.22                           # real room above the face?
     overlays, lowers, stats = [], [], []
     for i, o in enumerate(plan.get("overlays", []) or []):
         try:
@@ -4785,19 +4794,22 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float) -> dict:
         if st < hook_end_s or st >= duration - 0.5:
             continue
         en = min(en, duration - 0.2)
-        pos = o.get("position") if o.get("position") in ("upper_third", "lower_third") else "upper_third"
+        want_upper = o.get("position") == "upper_third" and has_upper
+        rail = upper_rail if want_upper else lower_rail
+        pos = "upper_third" if want_upper else "lower_third"
         frm = "left" if i % 2 == 0 else "right"
         kind = o.get("kind")
         if kind == "glass" and o.get("text"):
             overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
-                             "kind": "glass", "text": str(o["text"])[:60], "size": "half",
-                             "position": pos, "from": frm, "asset_url": ""})
+                             "kind": "glass", "text": str(o["text"])[:60], "size": "third",
+                             "position": pos, "topRatio": rail, "from": frm, "asset_url": ""})
         elif kind == "stock" and o.get("query"):
             link = _pexels_link(str(o["query"]))
             if link:
                 overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
                                  "kind": "video", "asset_url": link, "size": "half",
-                                 "position": pos, "from": frm, "text": ""})
+                                 "position": "lower_third", "topRatio": lower_rail,
+                                 "from": frm, "text": ""})
     for lt in (plan.get("lower_thirds", []) or []):
         try:
             st = float(lt["start"]); en = float(lt["end"])
@@ -5210,7 +5222,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             plan = _visual_director(words, req.briefing or {}, duration, hook_end_s) if req.overlays else {}
             caption_y, brightness, washes, callouts = None, [], [], []
             if plan:
-                dp = _director_to_props(plan, duration, hook_end_s)
+                dp = _director_to_props(plan, duration, hook_end_s, face)
                 overlays, stat_pops = dp["overlays"], dp["statPops"]
                 if dp["lowerThirds"]:
                     lower_thirds = dp["lowerThirds"]
@@ -5284,12 +5296,21 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         qa = _gemini_qa(out, qa_moments, duration) if req.qa else {"overall": "SKIP"}
 
         # ── QA auto-fix: one corrective re-render if the gate flags issues ──
-        # clear the face — drop the elements that cover it, keep captions (already
-        # below the face) + lower-thirds (bottom). Keep whichever render QA prefers.
+        # DON'T nuke the graphics (that shipped bare-captions videos). Instead pin
+        # every overlay to the safe rails (small 'third', above/below the face) and
+        # push captions lower. Drop only the callouts (they point INTO the frame).
         if req.qa and qa.get("overall") == "ISSUES" and comp == "JustusPunches":
-            fixed = {**props, "overlays": [], "callouts": [], "statPops": [],
-                     "captionY": min(0.78, (props.get("captionY") or 0.66) + 0.04)}
-            log.info("[QA] ISSUES → corrective re-render (clean face)")
+            _ft = (face or {}).get("top", 0.15)
+            _fb = (face or {}).get("bottom", 0.66)
+            _upper = round(max(0.05, _ft - 0.16), 3)
+            _lower = round(min(0.82, _fb + 0.06), 3)
+            safe_overlays = []
+            for k, o in enumerate(props.get("overlays", [])):
+                rail = _upper if (o.get("position") == "upper_third" and _ft > 0.22) else _lower
+                safe_overlays.append({**o, "size": "third", "topRatio": rail})
+            fixed = {**props, "overlays": safe_overlays, "callouts": [],
+                     "captionY": min(0.80, (props.get("captionY") or 0.66) + 0.05)}
+            log.info("[QA] ISSUES → corrective re-render (rail overlays, clean face)")
             out2 = _render_once(fixed, "b")
             qa2 = _gemini_qa(out2, qa_moments, duration)
             n1 = sum(1 for f in qa.get("frames", []) if not f.get("ok", True))

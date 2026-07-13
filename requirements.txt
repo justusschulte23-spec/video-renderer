@@ -11,3 +11,5 @@ httpx
 auto-editor
 opencv-python-headless
 numpy
+rembg
+onnxruntime

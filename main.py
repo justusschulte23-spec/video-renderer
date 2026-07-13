@@ -421,6 +421,7 @@ class RemotionRenderRequest(BaseModel):
     grade:       bool = True             # cinematic colour grade on the facecam
     briefing:    Optional[dict] = None   # production_briefing.segments → regie drives the render
     qa:          bool = True             # Gemini QA gate on the final render
+    bg_mode:     str = "original"        # original | canvas — replace bg with a studio canvas + matte
 
 
 class ThumbnailRequest(BaseModel):
@@ -5019,6 +5020,50 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
         return {}
 
 
+_REMBG_SESSION = None
+
+
+def _matte_video(facecam_path: Path, job_dir: Path) -> str:
+    """Self-hosted background removal (rembg, CPU — no API cost): matte the speaker
+    onto transparency and return a Cloudinary alpha-webm URL. Rendered at reduced
+    width for speed; Remotion upscales it over the generated canvas. '' on failure
+    → caller keeps the original background."""
+    global _REMBG_SESSION
+    try:
+        from rembg import remove, new_session
+        import cv2
+        if _REMBG_SESSION is None:
+            _REMBG_SESSION = new_session("u2netp")  # light + fast
+        cap = cv2.VideoCapture(str(facecam_path))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        W = 540
+        frames = job_dir / "matte_frames"
+        frames.mkdir(exist_ok=True)
+        idx = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            h, w = frame.shape[:2]
+            frame = cv2.resize(frame, (W, int(h * W / w)))
+            cut = remove(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), session=_REMBG_SESSION)  # RGBA
+            cv2.imwrite(str(frames / f"{idx:05d}.png"), cv2.cvtColor(cut, cv2.COLOR_RGBA2BGRA))
+            idx += 1
+        cap.release()
+        if idx < 5:
+            return ""
+        webm = job_dir / "matte.webm"
+        subprocess.run(["ffmpeg", "-y", "-framerate", str(int(round(fps))), "-i", str(frames / "%05d.png"),
+                        "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "2M", str(webm)],
+                       check=True, capture_output=True)
+        url = upload_cloudinary(webm, f"matte_{uuid.uuid4().hex[:8]}")
+        log.info("[MATTE] %d frames → %s", idx, url)
+        return url
+    except Exception as exc:
+        log.warning("[MATTE] failed: %s", exc)
+        return ""
+
+
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
     """QA gate: sample frames at the risky moments (overlays/captions active) and
     ask Gemini vision (via OpenRouter) whether anything covers the face or clips
@@ -5138,6 +5183,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                      "face_url": face_url, "hook_text": req.hook_text, "captions": captions}
         else:  # JustusPunches
             face = _face_track(facecam_path, duration)
+            matte_url = _matte_video(facecam_path, job_dir) if req.bg_mode == "canvas" else ""
             chunks = _remotion_chunks(words)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
             hook_end_s = hook_end_f / FPS
@@ -5188,6 +5234,10 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["faceBottom"] = face["bottom"]
                 if caption_y is None:
                     props["captionY"] = min(0.74, face["bottom"] + 0.05)
+            # bg replace: studio canvas behind the matted speaker (opt-in)
+            if matte_url:
+                props["speakerMatteUrl"] = matte_url
+                props["bgMode"] = req.bg_mode
             # QA samples the risky moments — where an overlay/lower-third/stat is up
             qa_moments = ([o["startFrame"] / FPS + 0.4 for o in overlays]
                           + [lt["startFrame"] / FPS + 0.6 for lt in lower_thirds]

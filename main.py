@@ -5194,32 +5194,60 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                           + [s["frame"] / FPS + 0.3 for s in stat_pops]
                           + [c["start"] + 0.5 for c in callouts])
 
-        r = requests.post(f"{REMOTION_URL}/render",
-                          json={"composition": comp, "inputProps": props}, timeout=600)
-        r.raise_for_status()
-        data = r.json()
-        if not data.get("ok"):
-            raise HTTPException(status_code=502, detail=f"remotion error: {data.get('error')}")
-        gfx_url = data["url"]
-        log.info("[REMOTION] graphic rendered %s (%d frames)", gfx_url, data.get("durationInFrames", 0))
+        LUT = "lut/cinematic.cube"
+        use_lut = req.grade and os.path.exists(LUT)
 
-        gfx_path = job_dir / "gfx.mp4"
-        if not download_file(gfx_url, gfx_path):
-            raise HTTPException(status_code=500, detail="remotion output download failed")
+        def _render_once(_props, _tag):
+            """Render the composition + mux the facecam audio (+ cinematic LUT).
+            No SFX here — that's applied once to the chosen render."""
+            r = requests.post(f"{REMOTION_URL}/render",
+                              json={"composition": comp, "inputProps": _props}, timeout=600)
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                raise HTTPException(status_code=502, detail=f"remotion error: {data.get('error')}")
+            log.info("[REMOTION] graphic rendered %s (%d frames)", data.get("url"), data.get("durationInFrames", 0))
+            gfx_path = job_dir / f"gfx_{_tag}.mp4"
+            if not download_file(data["url"], gfx_path):
+                raise HTTPException(status_code=500, detail="remotion output download failed")
+            _out = job_dir / f"final_{_tag}.mp4"
+            if use_lut:
+                run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
+                     "-map", "0:v:0", "-map", "1:a:0?", "-vf", f"lut3d={LUT}",
+                     "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(_out)],
+                    "mux_lut")
+            else:
+                run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
+                     "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                     "-shortest", "-movflags", "+faststart", str(_out)], "remotion_mux")
+            return _out
 
-        out = job_dir / "final.mp4"
-        run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
-             "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-             "-shortest", "-movflags", "+faststart", str(out)], "remotion_mux")
+        out = _render_once(props, "a")
+        qa = _gemini_qa(out, qa_moments, duration) if req.qa else {"overall": "SKIP"}
 
+        # ── QA auto-fix: one corrective re-render if the gate flags issues ──
+        # clear the face — drop the elements that cover it, keep captions (already
+        # below the face) + lower-thirds (bottom). Keep whichever render QA prefers.
+        if req.qa and qa.get("overall") == "ISSUES" and comp == "JustusPunches":
+            fixed = {**props, "overlays": [], "callouts": [], "statPops": [],
+                     "captionY": min(0.78, (props.get("captionY") or 0.66) + 0.04)}
+            log.info("[QA] ISSUES → corrective re-render (clean face)")
+            out2 = _render_once(fixed, "b")
+            qa2 = _gemini_qa(out2, qa_moments, duration)
+            n1 = sum(1 for f in qa.get("frames", []) if not f.get("ok", True))
+            n2 = sum(1 for f in qa2.get("frames", []) if not f.get("ok", True))
+            if n2 <= n1:
+                out, qa = out2, qa2
+                qa["auto_fixed"] = True
+
+        # SFX onto the chosen render (audio-only, doesn't affect visual QA)
         if req.sfx:
             mixed = mix_sfx_into_video(out, impacts, job_dir, duration)
             if mixed:
                 out = mixed
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
-
-        qa = _gemini_qa(out, qa_moments, duration) if req.qa else {"overall": "SKIP"}
 
         url = upload_cloudinary(out, f"remotion_{comp}_{job_id}")
         log.info("[REMOTION] DONE %s", url)

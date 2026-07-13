@@ -4980,18 +4980,17 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
 
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
     """QA gate: sample frames at the risky moments (overlays/captions active) and
-    ask Gemini vision whether anything covers the face or clips off-frame. Returns
-    {overall: 'OK'|'ISSUES'|'SKIP', frames:[{t, ok, issue}]}."""
-    if not GOOGLE_AI_KEY:
-        return {"overall": "SKIP", "reason": "no GOOGLE_AI_KEY"}
+    ask Gemini vision (via OpenRouter) whether anything covers the face or clips
+    off-frame. Returns {overall: 'OK'|'ISSUES'|'SKIP', frames:[{ok, issue}]}."""
+    if not OPENROUTER_API_KEY:
+        return {"overall": "SKIP", "reason": "no OPENROUTER_API_KEY"}
     import base64
-    # dedupe + cap the moments; always include a couple of general samples
     ts = sorted(set(round(m, 2) for m in moments if 0.5 < m < duration - 0.3))
     if len(ts) > 6:
         ts = ts[:: max(1, len(ts) // 6)][:6]
     if not ts:
-        ts = [duration * 0.3, duration * 0.6]
-    parts = [{"text": (
+        ts = [round(duration * 0.3, 2), round(duration * 0.6, 2)]
+    content = [{"type": "text", "text": (
         "Du bist QA fuer 9:16 Short-Form-Video-Frames. Pruefe JEDES Bild (in Reihenfolge) gegen: "
         "(1) Das Gesicht des Sprechers muss klar sichtbar sein — Text/Grafik/Karte darf es NICHT verdecken. "
         "(2) Nichts darf am Bildrand abgeschnitten sein (Text/Karte/Box komplett im Frame). "
@@ -5007,22 +5006,26 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
                             "-frames:v", "1", "-vf", "scale=540:-1", str(fp)],
                            check=True, capture_output=True)
             b64 = base64.b64encode(fp.read_bytes()).decode()
-            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
+            content.append({"type": "image_url",
+                            "image_url": {"url": "data:image/jpeg;base64," + b64}})
         except Exception:
             continue
-    if len(parts) < 2:
+    if len(content) < 2:
         return {"overall": "SKIP", "reason": "no frames"}
     try:
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key={GOOGLE_AI_KEY}",
-            json={"contents": [{"parts": parts}], "generationConfig": {"temperature": 0}},
-            timeout=90)
+        r = requests.post(OPENROUTER_URL, headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://schultensolutions.app.n8n.cloud",
+            "X-Title": "Schulten Solutions Video Renderer",
+        }, json={"model": "google/gemini-2.5-flash", "temperature": 0,
+                 "messages": [{"role": "user", "content": content}]}, timeout=90)
         r.raise_for_status()
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        txt = r.json()["choices"][0]["message"]["content"]
         m = re.search(r"\{[\s\S]*\}", txt)
         qa = json.loads(m.group()) if m else {"overall": "SKIP"}
     except Exception as exc:
-        log.warning("[QA] gemini failed: %s", exc)
+        log.warning("[QA] gemini(openrouter) failed: %s", exc)
         return {"overall": "SKIP", "reason": str(exc)}
     qa["checked_at"] = ts
     issues = [f for f in qa.get("frames", []) if not f.get("ok", True)]

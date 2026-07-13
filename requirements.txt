@@ -9,3 +9,5 @@ python-multipart
 playwright
 httpx
 auto-editor
+opencv-python-headless
+numpy

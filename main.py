@@ -4978,6 +4978,47 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
     return items
 
 
+def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
+    """Track the speaker's face across the clip with OpenCV (Haar cascade). Returns
+    {origin_x, origin_y, top, bottom} normalised 0..1 — the median face box, so
+    Remotion can lock punch-in zoom on the face and keep captions off it. Empty on
+    failure (composition falls back to its hardcoded centre)."""
+    try:
+        import cv2
+        import numpy as np
+        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        cap = cv2.VideoCapture(str(video_path))
+        vw = cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1080
+        vh = cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1920
+        cxs, cys, tops, bots = [], [], [], []
+        for i in range(samples):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (duration * 1000) * (i + 0.5) / samples)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(int(vw * 0.12), int(vh * 0.08)))
+            if len(faces) == 0:
+                continue
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])  # biggest face
+            cxs.append((x + w / 2) / vw)
+            cys.append((y + h / 2) / vh)
+            tops.append(y / vh)
+            bots.append((y + h) / vh)
+        cap.release()
+        if len(cxs) < 3:
+            return {}
+        med = lambda a: float(np.median(a))
+        track = {"origin_x": round(med(cxs), 3), "origin_y": round(med(cys), 3),
+                 "top": round(med(tops), 3), "bottom": round(med(bots), 3)}
+        log.info("[FACE] tracked %d/%d frames, centre=(%.2f,%.2f) bottom=%.2f",
+                 len(cxs), samples, track["origin_x"], track["origin_y"], track["bottom"])
+        return track
+    except Exception as exc:
+        log.warning("[FACE] tracking failed: %s", exc)
+        return {}
+
+
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
     """QA gate: sample frames at the risky moments (overlays/captions active) and
     ask Gemini vision (via OpenRouter) whether anything covers the face or clips
@@ -5096,6 +5137,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             props = {**base, "screen_url": req.screen_url or face_url,
                      "face_url": face_url, "hook_text": req.hook_text, "captions": captions}
         else:  # JustusPunches
+            face = _face_track(facecam_path, duration)
             chunks = _remotion_chunks(words)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
             hook_end_s = hook_end_f / FPS
@@ -5139,6 +5181,13 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["washes"] = washes
             if callouts:
                 props["callouts"] = callouts
+            # face-lock the punch-in origin + keep captions below the face
+            if face:
+                props["faceOriginX"] = face["origin_x"]
+                props["faceOriginY"] = face["origin_y"]
+                props["faceBottom"] = face["bottom"]
+                if caption_y is None:
+                    props["captionY"] = min(0.74, face["bottom"] + 0.05)
             # QA samples the risky moments — where an overlay/lower-third/stat is up
             qa_moments = ([o["startFrame"] / FPS + 0.4 for o in overlays]
                           + [lt["startFrame"] / FPS + 0.6 for lt in lower_thirds]

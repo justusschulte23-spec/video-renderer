@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN apt-get update \
-    && apt-get install -y ffmpeg curl --no-install-recommends \
+    && apt-get install -y ffmpeg curl libgl1 libglib2.0-0 --no-install-recommends \
     && pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium \
     && apt-get clean \

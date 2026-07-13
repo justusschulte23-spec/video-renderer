@@ -4976,8 +4976,15 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
     return items
 
 
-@app.post("/render-remotion")
-def render_remotion(req: RemotionRenderRequest):
+# ── Async render jobs ─────────────────────────────────────────────────────────
+# A full render is minutes long and blows Railway's ~5-min HTTP edge timeout, so
+# /render-remotion returns a job id immediately and renders in a worker thread;
+# the caller polls /render-status/{job_id}.
+RENDER_JOBS: dict = {}
+_render_executor = ThreadPoolExecutor(max_workers=2)
+
+
+def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
     facecam audio onto the muted graphic. Returns a Cloudinary URL."""
@@ -5105,13 +5112,46 @@ def render_remotion(req: RemotionRenderRequest):
         return {"ok": True, "url": url, "composition": comp, "format": req.format,
                 "duration": round(duration, 3), "words": len(words),
                 "impacts": len(impacts)}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log.exception("[REMOTION] fail")
-        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def _render_job(job_id: str, req: RemotionRenderRequest):
+    RENDER_JOBS[job_id] = {"status": "processing"}
+    try:
+        res = _render_remotion_impl(req)
+        RENDER_JOBS[job_id] = {"status": "done", **res}
+    except Exception as exc:
+        log.exception("[REMOTION] job %s failed", job_id)
+        RENDER_JOBS[job_id] = {"status": "error", "error": str(exc)}
+
+
+@app.post("/render-remotion")
+def render_remotion(req: RemotionRenderRequest, wait: bool = False):
+    """Async by default: returns {job_id, status} and renders in the background.
+    Poll /render-status/{job_id}. Pass ?wait=true to block and return the URL
+    directly (short clips / testing only)."""
+    if not FORMAT_COMPOSITION.get(req.format):
+        raise HTTPException(status_code=400,
+                            detail=f"unknown format '{req.format}'; known: {list(FORMAT_COMPOSITION)}")
+    if wait:
+        try:
+            return _render_remotion_impl(req)
+        except Exception as exc:
+            log.exception("[REMOTION] sync fail")
+            raise HTTPException(status_code=500, detail=str(exc))
+    job_id = str(uuid.uuid4())
+    RENDER_JOBS[job_id] = {"status": "queued"}
+    _render_executor.submit(_render_job, job_id, req)
+    return {"job_id": job_id, "status": "processing"}
+
+
+@app.get("/render-status/{job_id}")
+def render_status(job_id: str):
+    j = RENDER_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="unknown job_id")
+    return {"job_id": job_id, **j}
 
 
 @app.get("/health")

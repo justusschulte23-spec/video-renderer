@@ -5268,7 +5268,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["faceOriginY"] = face["origin_y"]
                 props["faceBottom"] = face["bottom"]
                 if caption_y is None:
-                    props["captionY"] = min(0.74, face["bottom"] + 0.05)
+                    props["captionY"] = min(0.68, face["bottom"] + 0.05)
             # bg replace: studio canvas behind the matted speaker (opt-in)
             if matte_url:
                 props["speakerMatteUrl"] = matte_url
@@ -5324,8 +5324,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             for k, o in enumerate(props.get("overlays", [])):
                 rail = _upper if (o.get("position") == "upper_third" and _ft > 0.22) else _lower
                 safe_overlays.append({**o, "size": "third", "topRatio": rail})
+            # keep captions ABOVE the lower-third band (0.82) — don't shove them down
             fixed = {**props, "overlays": safe_overlays, "callouts": [],
-                     "captionY": min(0.80, (props.get("captionY") or 0.66) + 0.05)}
+                     "captionY": min(0.70, (props.get("captionY") or 0.66) + 0.03)}
             log.info("[QA] ISSUES → corrective re-render (rail overlays, clean face)")
             out2 = _render_once(fixed, "b")
             qa2 = _gemini_qa(out2, qa_moments, duration)

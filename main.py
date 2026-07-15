@@ -4785,6 +4785,15 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
     upper_rail = round(max(0.05, ft - 0.16), 3)   # card ends above the forehead
     lower_rail = round(min(0.80, fb + 0.04), 3)    # card starts below the chin
     has_upper = ft > 0.22                           # real room above the face?
+    # lower-third occupies the bottom band — keep overlays off it (no bottom pile-up)
+    lt_ivals = []
+    for lt in (plan.get("lower_thirds", []) or []):
+        try:
+            lt_ivals.append((float(lt["start"]), float(lt["end"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    def _hits_lt(a, b):
+        return any(a < e and b > s for s, e in lt_ivals)
     overlays, lowers, stats = [], [], []
     for i, o in enumerate(plan.get("overlays", []) or []):
         try:
@@ -4795,6 +4804,11 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
             continue
         en = min(en, duration - 0.2)
         want_upper = o.get("position") == "upper_third" and has_upper
+        # a lower-third owns the bottom band → force overlay up, or drop if no room
+        if _hits_lt(st, en):
+            if not has_upper:
+                continue
+            want_upper = True
         rail = upper_rail if want_upper else lower_rail
         pos = "upper_third" if want_upper else "lower_third"
         frm = "left" if i % 2 == 0 else "right"
@@ -4804,6 +4818,8 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
                              "kind": "glass", "text": str(o["text"])[:60], "size": "third",
                              "position": pos, "topRatio": rail, "from": frm, "asset_url": ""})
         elif kind == "stock" and o.get("query"):
+            if want_upper:   # stock is big; only place it below the face, never on the top rail
+                continue
             link = _pexels_link(str(o["query"]))
             if link:
                 overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),

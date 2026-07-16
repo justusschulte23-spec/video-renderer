@@ -1691,15 +1691,17 @@ def _ensure_bucket() -> None:
         raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY not set — cannot upload media")
     hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
            "Content-Type": "application/json"}
+    # No file_size_limit: it must stay under the project's global cap or the
+    # create is rejected 413; omitting it inherits the project default.
     r = requests.post(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30,
-                      json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True,
-                            "file_size_limit": "524288000"})  # 500 MB
+                      json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True})
     if r.status_code in (200, 201):
         log.info("[STORAGE] created bucket '%s'", SUPABASE_BUCKET)
-    elif r.status_code in (400, 409) and "exist" in r.text.lower():
+    elif "exist" in r.text.lower():
         pass  # already there
     else:
-        log.warning("[STORAGE] bucket ensure returned %s: %s", r.status_code, r.text[:300])
+        # hard failure — don't cache success, surface it so the upload doesn't 404
+        raise RuntimeError(f"bucket create failed {r.status_code}: {r.text[:300]}")
     _BUCKET_READY = True
 
 
@@ -5442,8 +5444,7 @@ def debug_storage_test():
     hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
            "Content-Type": "application/json"}
     cr = requests.post(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30,
-                       json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True,
-                             "file_size_limit": "524288000"})
+                       json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True})
     lst = requests.get(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30)
     out = {"bucket": SUPABASE_BUCKET,
            "key_len": len(SUPABASE_SERVICE_KEY),

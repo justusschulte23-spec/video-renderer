@@ -26,12 +26,15 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ── Cloudinary ────────────────────────────────────────────────────────────────
-cloudinary.config(
-    cloud_name=os.environ["CLOUDINARY_CLOUD_NAME"],
-    api_key=os.environ["CLOUDINARY_API_KEY"],
-    api_secret=os.environ["CLOUDINARY_API_SECRET"],
-)
+# ── Cloudinary (LEGACY — uploads moved to Supabase Storage; only the static SFX
+#    library is still served from res.cloudinary.com. Config is now optional so the
+#    service boots even after the Cloudinary env vars are removed). ──────────────
+if os.environ.get("CLOUDINARY_CLOUD_NAME"):
+    cloudinary.config(
+        cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
+        api_key=os.environ.get("CLOUDINARY_API_KEY", ""),
+        api_secret=os.environ.get("CLOUDINARY_API_SECRET", ""),
+    )
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
@@ -73,6 +76,7 @@ WHITE         = (255, 255, 255)
 # ── Multi-tenant template loader ──────────────────────────────────────────────
 SUPABASE_URL         = os.environ.get("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_BUCKET      = os.environ.get("SUPABASE_BUCKET", "media")  # Storage bucket for all generated media (replaces Cloudinary)
 _TEMPLATE_CACHE: dict = {}
 
 
@@ -1668,16 +1672,60 @@ def build_watermark_png(path: Path):
     img.save(str(path))
 
 
+# ── Supabase Storage (replaces Cloudinary for all generated media) ────────────
+_CONTENT_TYPES = {
+    ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".pdf": "application/pdf", ".html": "text/html", ".mp3": "audio/mpeg",
+    ".wav": "audio/wav", ".json": "application/json",
+}
+_BUCKET_READY = False
+
+
+def _ensure_bucket() -> None:
+    """Create the public Storage bucket once (idempotent — 'already exists' is fine)."""
+    global _BUCKET_READY
+    if _BUCKET_READY:
+        return
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY not set — cannot upload media")
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+           "Content-Type": "application/json"}
+    r = requests.post(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30,
+                      json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True,
+                            "file_size_limit": "524288000"})  # 500 MB
+    if r.status_code in (200, 201):
+        log.info("[STORAGE] created bucket '%s'", SUPABASE_BUCKET)
+    elif r.status_code in (400, 409) and "exist" in r.text.lower():
+        pass  # already there
+    else:
+        log.warning("[STORAGE] bucket ensure returned %s: %s", r.status_code, r.text[:300])
+    _BUCKET_READY = True
+
+
+def upload_supabase(path: Path, key: str, folder: str = "renders",
+                    content_type: str = None) -> str:
+    """Upload a file to Supabase Storage and return its public URL.
+    Object path = <folder>/<key><ext>. Replaces the old Cloudinary uploader —
+    same call shape as upload_cloudinary(path, public_id)."""
+    _ensure_bucket()
+    ext = path.suffix.lower() or ""
+    ctype = content_type or _CONTENT_TYPES.get(ext, "application/octet-stream")
+    obj = f"{folder}/{key}{ext}" if not key.endswith(ext) else f"{folder}/{key}"
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{obj}"
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+           "Content-Type": ctype, "x-upsert": "true", "cache-control": "3600"}
+    log.info("[STORAGE] uploading %s → %s", path.name, obj)
+    with open(path, "rb") as fh:
+        r = requests.post(url, headers=hdr, data=fh, timeout=300)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Supabase upload failed {r.status_code}: {r.text[:400]}")
+    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{obj}"
+
+
 def upload_cloudinary(path: Path, public_id: str) -> str:
-    log.info("Uploading to Cloudinary …")
-    result = cloudinary.uploader.upload(
-        str(path),
-        resource_type="video",
-        folder="renders",
-        public_id=public_id,
-        overwrite=True,
-    )
-    return result["secure_url"]
+    """Back-compat shim — all media now goes to Supabase Storage."""
+    return upload_supabase(path, public_id, folder="renders")
 
 
 # ── fal.ai thumbnail generator ───────────────────────────────────────────────
@@ -3539,14 +3587,8 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
             ], "concat_scenes")
 
         # 6. Upload
-        result = cloudinary.uploader.upload(
-            str(broll_final),
-            resource_type="video",
-            folder="broll_synced",
-            public_id=f"broll_{req.topic_slug}_{job_id[:8]}",
-            overwrite=True,
-        )
-        url = result["secure_url"]
+        url = upload_supabase(broll_final, f"broll_{req.topic_slug}_{job_id[:8]}",
+                              folder="broll_synced")
         log.info("[BROLL_SYNC] uploaded: %s", url)
         return {"broll_video_url": url, "scenes": scenes, "duration": duration}
 
@@ -3623,14 +3665,7 @@ async def generate_broll(req: GenerateBrollRequest):
         html_path.write_text(html_content, encoding="utf-8")
         log.info("[BROLL] HTML saved: %s", html_path)
 
-        result   = cloudinary.uploader.upload(
-            str(html_path),
-            resource_type="raw",
-            folder="broll_html",
-            public_id=req.topic_slug,
-            overwrite=True,
-        )
-        html_url = result["secure_url"]
+        html_url = upload_supabase(html_path, req.topic_slug, folder="broll_html")
         log.info("[BROLL] HTML uploaded: %s", html_url)
 
         return {"html_url": html_url, "topic_slug": req.topic_slug}
@@ -3780,15 +3815,8 @@ async def generate_thumbnail(req: ThumbnailRequest):
         img  = img.crop((left, top, left + W, top + H))
         img.save(str(tmp_final), "JPEG", quality=95)
 
-        # ── Upload to Cloudinary ──────────────────────────────────────────────
-        result = cloudinary.uploader.upload(
-            str(tmp_final),
-            resource_type="image",
-            folder="thumbnails",
-            public_id=f"thumb_{job_id}",
-            overwrite=True,
-        )
-        url = result["secure_url"]
+        # ── Upload to Supabase Storage ────────────────────────────────────────
+        url = upload_supabase(tmp_final, f"thumb_{job_id}", folder="thumbnails")
         log.info("[THUMB] uploaded: %s", url)
         return {"thumbnail_url": url}
 
@@ -4606,17 +4634,7 @@ async def generate_infosheet(req: InfosheetRequest):
         if not ok or not pdf_path.exists():
             raise HTTPException(status_code=500, detail="PDF rendering failed")
 
-        result = cloudinary.uploader.upload(
-            str(pdf_path),
-            resource_type="image",          # PDFs as image deliver publicly (raw delivery is blocked → 401)
-            type="upload",
-            access_mode="public",
-            folder="infosheets",
-            public_id=f"infosheet_{job_id}",
-            format="pdf",
-            overwrite=True,
-        )
-        url = result["secure_url"]
+        url = upload_supabase(pdf_path, f"infosheet_{job_id}", folder="infosheets")
         log.info("[INFOSHEET] uploaded: %s", url)
         return {"url": url}
 
@@ -5301,7 +5319,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             """Render the composition + mux the facecam audio (+ cinematic LUT).
             No SFX here — that's applied once to the chosen render."""
             r = requests.post(f"{REMOTION_URL}/render",
-                              json={"composition": comp, "inputProps": _props}, timeout=600)
+                              json={"composition": comp, "inputProps": _props,
+                                    # remotion uploads its graphic to the same Supabase
+                                    # bucket; pass creds so it needs no env of its own.
+                                    "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
+                                                 "bucket": SUPABASE_BUCKET}}, timeout=600)
             r.raise_for_status()
             data = r.json()
             if not data.get("ok"):

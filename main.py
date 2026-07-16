@@ -1125,6 +1125,10 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
 
 
 # ── Smart coherence cut: remove duplicate takes / false starts via LLM ────────
+# The opening line IS the hook — the single most retention-critical moment. The
+# coherence pass (whose whole job is deleting sentence-beginnings/restarts) kept
+# eating it, so no removal is allowed to touch the first HOOK_GUARD_S seconds.
+HOOK_GUARD_S = float(os.getenv("HOOK_GUARD_S", "3.0"))
 COHERENCE_SYS = (
     "Du bekommst ein Wort-fuer-Wort-Transkript (je Zeile: INDEX<TAB>WORT) einer Facecam-Aufnahme. "
     "Der Sprecher nimmt EINEN Gedanken oft in MEHREREN Anlaeufen auf: verhaspelt sich, bricht ab, "
@@ -1138,6 +1142,8 @@ COHERENCE_SYS = (
     "- Schneide AUSSCHLIESSLICH an SATZ-/PHRASEN-Grenzen. Ein Entfernungs-Bereich MUSS an einer natuerlichen Pause beginnen und enden.\n"
     "- NIE mitten in einem zusammenhaengenden Satz ein paar Woerter rausschneiden. Entweder der ganze Anlauf weg oder gar nicht.\n"
     "- Das erste behaltene Wort nach einem Schnitt muss ein SATZANFANG sein, nicht ein Satz-Mittelstueck.\n"
+    "- HOOK IST HEILIG: Der ALLERERSTE gesprochene Satz (die Anfangssekunden) ist der Hook und wird NIE "
+    "entfernt, auch wenn er wie ein Anlauf/Wiederholung wirkt. Schneide erst AB dem zweiten Satz.\n"
     'OUTPUT NUR JSON: {"remove": [[startIdx, endIdx], ...]} - Indizes inklusive, auf die Wort-Indizes '
     'bezogen, aufsteigend, ohne Ueberlappung. Nichts zu entfernen -> {"remove": []}.'
 )
@@ -1169,6 +1175,15 @@ def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
             continue
         s = max(0.0, float(words[a]["start"]) - pad)
         e = min(duration, float(words[b]["end"]) + pad)
+        # HOOK GUARD: never let a removal reach into the opening hook window,
+        # no matter what the LLM proposed. Clip the range to start at the guard;
+        # if that leaves nothing, drop the removal entirely.
+        if s < HOOK_GUARD_S:
+            if e <= HOOK_GUARD_S:
+                log.info("[SMART] hook-guard: dropped removal %.2f-%.2fs (inside hook)", s, e)
+                continue
+            log.info("[SMART] hook-guard: clipped removal start %.2f→%.2fs", s, HOOK_GUARD_S)
+            s = HOOK_GUARD_S
         if e > s:
             removes.append((s, e)); removed_words += (b - a + 1)
     if not removes:

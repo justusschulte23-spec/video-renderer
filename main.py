@@ -429,6 +429,8 @@ class RemotionRenderRequest(BaseModel):
     thumbnail:   bool = True             # append a 0.2s thumbnail end-card
     thumbnail_url:     Optional[str] = None   # pre-made end-card image; else auto-generated
     thumbnail_concept: Optional[str] = None   # fal.ai prompt (defaults to hook_text/headline)
+    flow_diagram: Optional[dict] = None  # force a node-graph {nodes,chips,startFrame,endFrame} (else director)
+    cta_word:     Optional[dict] = None  # force a CTA word {word,startFrame,endFrame} (else director)
 
 
 class ThumbnailRequest(BaseModel):
@@ -4780,7 +4782,8 @@ def _visual_director(words: list, briefing: dict, duration: float,
         "Gib eine 3-5 Woerter ENGLISCHE Suchquery.\n"
         "- position IMMER 'upper_third' oder 'lower_third', NIE 'center' (verdeckt das Gesicht).\n"
         "- lower_thirds: fuer EINEN Definitions-/Label-Moment (title 2-4 Woerter + kurzer subtitle).\n"
-        "- stats: wenn eine ZAHL/Metrik gesprochen wird (value z.B. '3x','90%').\n"
+        "- stats: NUR fuer eine echte METRIK MIT EINHEIT (%, x-fach, €, Std, min) — z.B. '90%','3x','40 Std'. "
+        "NIEMALS fuer eine blosse Anzahl ('3 Aenderungen','5 Schritte' → kein stat, hoechstens glass/lower_third). value MUSS die Einheit enthalten.\n"
         "- caption_y: wo die Captions sitzen (0.60-0.72) damit sie das Gesicht nicht verdecken.\n"
         "- brightness: leicht abdunkeln (0.86) bei Spannung/Problem, voll (1.0) bei Hook/Payoff.\n"
         "- washes: dramatischer FARB-Wash auf emotionalen Beats. color = 'red' (Spannung/Aggro), "
@@ -5186,11 +5189,15 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
     if not ts:
         ts = [round(duration * 0.3, 2), round(duration * 0.6, 2)]
     content = [{"type": "text", "text": (
-        "Du bist QA fuer 9:16 Short-Form-Video-Frames. Pruefe JEDES Bild (in Reihenfolge) gegen: "
-        "(1) Das Gesicht des Sprechers muss klar sichtbar sein — Text/Grafik/Karte darf es NICHT verdecken. "
-        "(2) Nichts darf am Bildrand abgeschnitten sein (Text/Karte/Box komplett im Frame). "
-        "(3) Keine sich ueberlappenden Text-Elemente die unlesbar werden. "
-        "Antworte NUR mit JSON: {\"frames\":[{\"ok\":true,\"issue\":\"\"}],\"overall\":\"OK\"|\"ISSUES\"} "
+        "Du bist QA fuer 9:16 Short-Form-Video-Frames. Untertitel/Lower-Thirds/Karten im UNTEREN Drittel "
+        "und Titel/Grafik im OBEREN Drittel sind ABSICHT und voellig OK — das ist Standard-Short-Form-Layout, "
+        "NICHT flaggen. Flagge NUR echte Fehler: "
+        "(1) Text/Grafik/Karte liegt direkt AUF dem GESICHT (Augen/Nase/Mund) und verdeckt es — "
+        "ein Untertitel UNTER dem Kinn ist KEIN Fehler. "
+        "(2) Ein Element ist am Bildrand HART abgeschnitten sodass Sinn verloren geht. "
+        "(3) Zwei Text-Elemente liegen SO uebereinander dass beide unlesbar werden (blosse Naehe ist ok). "
+        "Im Zweifel ok:true. Antworte NUR mit JSON: "
+        "{\"frames\":[{\"ok\":true,\"issue\":\"\"}],\"overall\":\"OK\"|\"ISSUES\"} "
         "— ein frames-Eintrag pro Bild, gleiche Reihenfolge."
     )}]
     tmp = mp4_path.parent
@@ -5405,6 +5412,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["washes"] = washes
             if callouts:
                 props["callouts"] = callouts
+            # explicit request override (manual test / n8n) wins over the director
+            flow_diagram = req.flow_diagram or flow_diagram
+            cta_word = req.cta_word or cta_word
             if flow_diagram:
                 props["flowDiagram"] = flow_diagram
             if cta_word:

@@ -426,6 +426,9 @@ class RemotionRenderRequest(BaseModel):
     briefing:    Optional[dict] = None   # production_briefing.segments → regie drives the render
     qa:          bool = True             # Gemini QA gate on the final render
     bg_mode:     str = "original"        # original | canvas — replace bg with a studio canvas + matte
+    thumbnail:   bool = True             # append a 0.2s thumbnail end-card
+    thumbnail_url:     Optional[str] = None   # pre-made end-card image; else auto-generated
+    thumbnail_concept: Optional[str] = None   # fal.ai prompt (defaults to hook_text/headline)
 
 
 class ThumbnailRequest(BaseModel):
@@ -5197,6 +5200,72 @@ RENDER_JOBS: dict = {}
 _render_executor = ThreadPoolExecutor(max_workers=2)
 
 
+def _make_thumbnail_image(concept: str, client_id: str, out_path: Path) -> bool:
+    """Generate a branded 1080×1920 thumbnail jpg via fal.ai (dark fallback on
+    failure), center-cropped. Sync — mirrors /generate-thumbnail minus the upload."""
+    tpl  = _load_template(client_id, None)
+    cols = _tpl_colors(tpl)
+    timg = ((tpl or {}).get("images") or {})
+    raw  = out_path.with_suffix(".raw.jpg")
+    ok = False
+    try:
+        img_url = _call_fal_thumbnail(concept, cols.get("primary") or "#8B5CF6",
+                                      cols.get("bg") or "#12101a",
+                                      timg.get("glow_word") or "amethyst purple",
+                                      timg.get("thumbnail_vibe"))
+        log.info("[THUMB] fal.ai returned: %s", img_url)
+        ok = download_file(img_url, raw)
+    except Exception as exc:
+        log.warning("[THUMB] fal.ai failed — dark fallback: %s", exc)
+    if not ok:
+        Image.new("RGB", (W, H), (18, 16, 26)).save(str(raw), "JPEG", quality=95)
+    img = Image.open(str(raw)).convert("RGB")
+    if img.width / img.height > W / H:
+        new_h, new_w = H, int(img.width * H / img.height)
+    else:
+        new_w, new_h = W, int(img.height * W / img.width)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left, top = (new_w - W) // 2, (new_h - H) // 2
+    img.crop((left, top, left + W, top + H)).save(str(out_path), "JPEG", quality=95)
+    return True
+
+
+def _append_end_thumbnail(video_path: Path, req: RemotionRenderRequest, job_dir: Path) -> Path:
+    """Append a 0.2s thumbnail freeze-frame to the END of the render (never the
+    start — a still on frame 0 kills the hook). Returns the original path on any
+    failure so a thumbnail problem never drops the video."""
+    try:
+        thumb_img = job_dir / "thumb.jpg"
+        if req.thumbnail_url:
+            if not download_file(req.thumbnail_url, thumb_img):
+                log.warning("[REMOTION] thumbnail_url download failed — skipping end-card")
+                return video_path
+        else:
+            concept = req.thumbnail_concept or req.hook_text or req.headline or req.topic_label or ""
+            if not concept:
+                return video_path
+            _make_thumbnail_image(concept, req.client_id or "justus", thumb_img)
+        thumb_clip = job_dir / "thumb_clip.mp4"
+        run(["ffmpeg", "-y", "-loop", "1", "-framerate", str(FPS), "-i", str(thumb_img),
+             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+             "-t", "0.2", "-vf",
+             f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1",
+             "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "192k",
+             "-pix_fmt", "yuv420p", "-shortest", str(thumb_clip)], "thumb_clip")
+        out = job_dir / "with_thumb.mp4"
+        run(["ffmpeg", "-y", "-i", str(video_path), "-i", str(thumb_clip),
+             "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]",
+             "-map", "[vout]", "-map", "[aout]",
+             "-c:v", "libx264", "-crf", "20", "-preset", "medium",
+             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", str(out)], "thumb_concat")
+        log.info("[REMOTION] appended 0.2s thumbnail end-card")
+        return out
+    except Exception as exc:
+        log.warning("[REMOTION] thumbnail end-card failed, shipping without: %s", exc)
+        return video_path
+
+
 def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
@@ -5383,7 +5452,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
 
-        url = upload_cloudinary(out, f"remotion_{comp}_{job_id}")
+        # thumbnail end-card (0.2s freeze at the very end, after everything else)
+        if req.thumbnail:
+            out = _append_end_thumbnail(out, req, job_dir)
+
+        url = upload_supabase(out, f"remotion_{comp}_{job_id}", folder="renders")
         log.info("[REMOTION] DONE %s", url)
         return {"ok": True, "url": url, "composition": comp, "format": req.format,
                 "duration": round(duration, 3), "words": len(words),

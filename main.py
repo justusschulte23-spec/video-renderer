@@ -5435,17 +5435,31 @@ def health():
 @app.get("/debug/storage-test")
 def debug_storage_test():
     """Verify Supabase Storage upload end-to-end: create the bucket, upload a tiny
-    file, return the public URL + whether it is publicly fetchable."""
+    file, return the public URL + whether it is publicly fetchable. Also reports
+    the raw bucket-create response for diagnosis."""
+    global _BUCKET_READY
+    _BUCKET_READY = False
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+           "Content-Type": "application/json"}
+    cr = requests.post(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30,
+                       json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True,
+                             "file_size_limit": "524288000"})
+    lst = requests.get(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30)
+    out = {"bucket": SUPABASE_BUCKET,
+           "key_len": len(SUPABASE_SERVICE_KEY),
+           "create_status": cr.status_code, "create_body": cr.text[:300],
+           "list_status": lst.status_code, "list_body": lst.text[:400]}
     tmp = Path(f"/tmp/storage_test_{uuid.uuid4().hex[:8]}.txt")
     tmp.write_text(f"ok {time.time()}", encoding="utf-8")
     try:
+        _BUCKET_READY = True  # bucket handled above; skip re-create in helper
         url = upload_supabase(tmp, tmp.stem, folder="debug")
-        fetchable = requests.get(url, timeout=15).status_code
-        return {"ok": True, "bucket": SUPABASE_BUCKET, "url": url, "public_fetch_status": fetchable}
+        out.update(ok=True, url=url, public_fetch_status=requests.get(url, timeout=15).status_code)
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        out.update(ok=False, error=str(exc))
     finally:
         tmp.unlink(missing_ok=True)
+    return out
 
 @app.get("/debug/template")
 def debug_template(client_id: str = "justus"):

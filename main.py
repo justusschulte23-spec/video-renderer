@@ -4787,11 +4787,20 @@ def _visual_director(words: list, briefing: dict, duration: float,
         "'amethyst'/'cyan' (Tech/Fokus), 'warm' (Payoff/Aufloesung), 'blue' (Ruhe). strength 0.2-0.35. Sparsam, 1-3 total.\n"
         "- callouts: gestrichelte Box die auf etwas ZEIGT (nur wenn im Bild wirklich was zum Zeigen ist), "
         "mit kurzem label. position upper/mid/lower. Selten, max 1-2.\n"
+        "- flow: EIN animierter Node-Graph fuer EINEN System-/Architektur-/Datenfluss-/Vergleichs-Moment "
+        "(wenn ueber einen ABLAUF, eine Pipeline, ein 'A wird zu B wird zu C' geredet wird). nodes = 2-4 KURZE "
+        "Labels (1-2 Woerter) in Fluss-Reihenfolge [Quelle, Transformation/Kern, Output, (optionale 2. Quelle)]. "
+        "chips = 0-2 winzige Code-/Status-Chips (z.B. 'POST /infer','200 OK · 12ms'). start/end Sekunden. NUR wenn "
+        "wirklich ein Ablauf beschrieben wird — sonst ganz weglassen. Das ist der Keynote-Blickfang, sparsam einsetzen.\n"
+        "- cta: das EINE Call-to-Action-Wort am Schluss (z.B. 'ENGINE','JA','START') wenn der Sprecher zum "
+        "Kommentieren/Handeln auffordert. {word, time}. Sonst weglassen.\n"
         "REGELN: max ~1 Overlay pro 4-5 Sekunden. Glass-Text max 5 Woerter. Zeiten in Sekunden. "
-        "Waehle bewusst Abwechslung (mal glass, mal stock, mal wash, mal nichts). NUR JSON zurueck:\n"
+        "Waehle bewusst Abwechslung (mal glass, mal stock, mal flow, mal wash, mal nichts). NUR JSON zurueck:\n"
         '{"overlays":[{"start":4.2,"end":6.2,"kind":"glass","text":"kostet echtes Geld","position":"upper_third","query":""}],'
         '"lower_thirds":[{"start":12,"end":16,"title":"Workflow > Agent","subtitle":"fuer 90% der Faelle"}],'
         '"stats":[{"time":20,"value":"90%","label":"der Faelle"}],'
+        '"flow":{"nodes":["Prompt","Agent","Output"],"chips":["POST /infer","200 OK"],"start":11,"end":17},'
+        '"cta":{"word":"ENGINE","time":26},'
         '"washes":[{"start":3,"end":6,"color":"red","strength":0.3}],'
         '"callouts":[{"start":14,"end":17,"position":"mid","size":"half","label":"HIER"}],'
         '"caption_y":0.65,"brightness":[{"t":0,"level":1.0},{"t":5,"level":0.88}]}'
@@ -4806,8 +4815,9 @@ def _visual_director(words: list, briefing: dict, duration: float,
     except Exception as exc:
         log.warning("[DIRECTOR] failed: %s", exc)
         return {}
-    log.info("[DIRECTOR] %d overlays, %d lower-thirds, %d stats",
-             len(plan.get("overlays", [])), len(plan.get("lower_thirds", [])), len(plan.get("stats", [])))
+    log.info("[DIRECTOR] %d overlays, %d lower-thirds, %d stats, flow=%s, cta=%s",
+             len(plan.get("overlays", [])), len(plan.get("lower_thirds", [])), len(plan.get("stats", [])),
+             bool(plan.get("flow")), bool(plan.get("cta")))
     return plan
 
 
@@ -4904,9 +4914,35 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
                          "position": c.get("position", "mid") if c.get("position") in ("upper", "mid", "lower") else "mid",
                          "size": c.get("size", "half") if c.get("size") in ("third", "half") else "half",
                          "label": str(c.get("label", ""))[:20]})
+    # flow node-graph (one keynote centrepiece) + CTA word — the premium layer
+    flow_diagram = None
+    fl = plan.get("flow") or {}
+    fl_nodes = [str(n)[:18] for n in (fl.get("nodes") or []) if str(n).strip()][:4]
+    try:
+        fl_s, fl_e = float(fl["start"]), float(fl["end"])
+    except (KeyError, TypeError, ValueError):
+        fl_s = fl_e = None
+    if len(fl_nodes) >= 2 and fl_s is not None and fl_s >= hook_end_s and fl_s < duration - 1.0:
+        flow_diagram = {"nodes": fl_nodes,
+                        "chips": [str(c)[:18] for c in (fl.get("chips") or [])][:2],
+                        "startFrame": int(fl_s * FPS),
+                        "endFrame": int(min(fl_e, duration - 0.2) * FPS)}
+
+    cta_word = None
+    ct = plan.get("cta") or {}
+    try:
+        ct_t = float(ct["time"])
+    except (KeyError, TypeError, ValueError):
+        ct_t = None
+    if ct.get("word") and ct_t is not None and ct_t > hook_end_s:
+        cta_word = {"word": str(ct["word"]).split()[0][:16],
+                    "startFrame": int(ct_t * FPS),
+                    "endFrame": int(min(ct_t + 2.4, duration) * FPS)}
+
     return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
             "captionY": cap_y, "brightness": plan.get("brightness") or [],
-            "washes": washes, "callouts": callouts}
+            "washes": washes, "callouts": callouts,
+            "flowDiagram": flow_diagram, "ctaWord": cta_word}
 
 
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
@@ -5341,6 +5377,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # caption position/brightness). Falls back to the dumb derivation.
             plan = _visual_director(words, req.briefing or {}, duration, hook_end_s) if req.overlays else {}
             caption_y, brightness, washes, callouts = None, [], [], []
+            flow_diagram, cta_word = None, None
             if plan:
                 dp = _director_to_props(plan, duration, hook_end_s, face)
                 overlays, stat_pops = dp["overlays"], dp["statPops"]
@@ -5348,11 +5385,13 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                     lower_thirds = dp["lowerThirds"]
                 caption_y, brightness = dp["captionY"], dp["brightness"]
                 washes, callouts = dp["washes"], dp["callouts"]
+                flow_diagram, cta_word = dp.get("flowDiagram"), dp.get("ctaWord")
             else:
                 overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
-            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds (director=%s)",
-                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(overlays), len(lower_thirds), bool(plan))
+            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds, flow=%s cta=%s (director=%s)",
+                     len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(overlays), len(lower_thirds),
+                     bool(flow_diagram), bool(cta_word), bool(plan))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
                      "statPops": stat_pops, "lowerThirds": lower_thirds,
@@ -5366,6 +5405,10 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["washes"] = washes
             if callouts:
                 props["callouts"] = callouts
+            if flow_diagram:
+                props["flowDiagram"] = flow_diagram
+            if cta_word:
+                props["ctaWord"] = cta_word
             # face-lock the punch-in origin + keep captions below the face
             if face:
                 props["faceOriginX"] = face["origin_x"]

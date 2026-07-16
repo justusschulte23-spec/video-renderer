@@ -5432,6 +5432,21 @@ def render_status(job_id: str):
 def health():
     return {"status": "ok"}
 
+@app.get("/debug/storage-test")
+def debug_storage_test():
+    """Verify Supabase Storage upload end-to-end: create the bucket, upload a tiny
+    file, return the public URL + whether it is publicly fetchable."""
+    tmp = Path(f"/tmp/storage_test_{uuid.uuid4().hex[:8]}.txt")
+    tmp.write_text(f"ok {time.time()}", encoding="utf-8")
+    try:
+        url = upload_supabase(tmp, tmp.stem, folder="debug")
+        fetchable = requests.get(url, timeout=15).status_code
+        return {"ok": True, "bucket": SUPABASE_BUCKET, "url": url, "public_fetch_status": fetchable}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        tmp.unlink(missing_ok=True)
+
 @app.get("/debug/template")
 def debug_template(client_id: str = "justus"):
     """Verify Supabase template resolution works from Railway (env + fetch + parse)."""

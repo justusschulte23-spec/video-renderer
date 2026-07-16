@@ -15,7 +15,7 @@ from typing import Optional
 
 import httpx
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
@@ -5506,6 +5506,20 @@ def render_status(job_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.post("/debug/upload")
+async def debug_upload(file: UploadFile = File(...)):
+    """Upload an arbitrary file to Supabase Storage and return its public URL —
+    used to get a local clip into the pipeline for a test render."""
+    tmp = Path(f"/tmp/upload_{uuid.uuid4().hex[:8]}_{file.filename}")
+    try:
+        tmp.write_bytes(await file.read())
+        url = upload_supabase(tmp, tmp.stem, folder="uploads")
+        return {"ok": True, "url": url}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        tmp.unlink(missing_ok=True)
 
 @app.get("/debug/storage-test")
 def debug_storage_test():

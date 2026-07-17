@@ -4948,6 +4948,161 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
             "flowDiagram": flow_diagram, "ctaWord": cta_word}
 
 
+# ── Visual-script engine (anchor → transcript mapper) ─────────────────────────
+# Two stages, the way the user framed it: a VISUAL SCRIPT sets the rough intent
+# ("here a flow of X, here the concept 'Y', the CTA word is 'ENGINE'") anchored
+# to phrases the speaker will say; then the DIRECTOR maps each anchor onto the
+# ACTUAL Whisper transcript so every element lands EXACTLY where its words fall.
+def _find_phrase_time(words: list, phrase: str, after: float = 0.0) -> Optional[float]:
+    """Start time of where `phrase` is actually spoken, matched on its most
+    distinctive tokens (not just the first, which is often a stopword)."""
+    toks = [t for t in (_norm_token(x) for x in re.split(r"\s+", phrase)) if len(t) > 2]
+    if not toks:
+        return None
+    keys = sorted(set(toks), key=len, reverse=True)[:3]
+    for w in words:
+        if float(w["start"]) < after:
+            continue
+        ww = _norm_token(w["word"])
+        if ww and any(ww == k or (len(k) > 3 and k in ww) for k in keys):
+            return float(w["start"])
+    return None
+
+
+VISUAL_SCRIPT_SYS = (
+    "Du bist VISUAL-SCRIPT-AUTOR fuer einen 9:16 Talking-Head-Clip (Gesicht mittig, NIE verdecken). "
+    "Du bekommst die SKRIPT-ABSICHT (Argument-Struktur: hook/problem/value/payoff je mit Text). "
+    "Entwirf den GROBEN visuellen Ton als Beat-Liste — WAS an welchem Argument-Moment gezeigt wird. "
+    "Den GENAUEN Zeitpunkt bestimmt spaeter der echte Transkript-Abgleich, DU lieferst nur den ANKER: "
+    "eine kurze WOERTLICHE Phrase (2-5 Woerter) aus dem Skript-Text, bei der der Beat landen soll.\n"
+    "Beat-Typen:\n"
+    "- hook_title: DER Hook oben, anchor='__hook__'. content = 3-7 Wort Hook.\n"
+    "- concept_card: Premium-Textkarte fuer EINE Kernaussage. content={kicker(1-2 Wort Label),headline(2-5 Wort)}.\n"
+    "- flow: Node-Graph NUR wenn ein ABLAUF/Pipeline/'A wird zu B' beschrieben wird. content={nodes[2-4 kurze],chips[0-2 z.B. 'POST /infer']}.\n"
+    "- stat: NUR echte Metrik mit Einheit. content={value('90%'/'3x'/'40 Std'),label}.\n"
+    "- lower_third: Definition/Label unten. content={title(2-4 Wort),subtitle(kurz)}.\n"
+    "- cta: DAS eine CTA-Wort am Schluss wenn zum Handeln aufgerufen wird. content='ENGINE'.\n"
+    "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
+    "REGELN: sparsam (~1 Beat pro 4-6s), Abwechslung, das Gesicht muss atmen. anchor MUSS eine Phrase sein "
+    "die im Skript-Text wirklich vorkommt. hold_s = grobe Standzeit (2-6). NUR JSON:\n"
+    '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
+    '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
+    '{"type":"cta","content":"ENGINE","anchor":"kommentier Engine","hold_s":2.5}]}'
+)
+
+
+def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float) -> dict:
+    """Stage 1 — the visual SCRIPT (rough intent, anchored to script phrases).
+    Built from the briefing's argument structure. {} if no briefing to ground it."""
+    segs = (briefing or {}).get("segments", []) or []
+    if not segs:
+        return {}
+    intent = ""
+    for s in segs:
+        intent += f"[{s.get('rolle') or s.get('role') or '?'}] {s.get('text','')[:300]}\n"
+    user = f"Dauer ~{duration:.0f}s. SKRIPT-ABSICHT:\n{intent}"
+    try:
+        raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5", max_tokens=1500)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        vs = json.loads(m.group()) if m else {}
+    except Exception as exc:
+        log.warning("[VSCRIPT] gen failed: %s", exc)
+        return {}
+    beats = vs.get("beats") if isinstance(vs, dict) else None
+    log.info("[VSCRIPT] %d beats", len(beats or []))
+    return {"beats": beats or []}
+
+
+def _map_visual_script(beats: list, words: list, duration: float,
+                       hook_end_s: float, face: dict = None) -> dict:
+    """Stage 2 — the DIRECTOR maps each anchored beat onto the ACTUAL transcript:
+    find where the anchor phrase is really spoken → that is the exact frame. Same
+    return shape as _director_to_props so the render path consumes it identically."""
+    face = face or {}
+    ft, fb = face.get("top", 0.15), face.get("bottom", 0.66)
+    upper_rail = round(max(0.05, ft - 0.16), 3)
+    lower_rail = round(min(0.80, fb + 0.04), 3)
+    has_upper = ft > 0.22
+
+    overlays, lowers, stats, washes = [], [], [], []
+    flow_diagram, cta_word, hook_title = None, None, None
+    lt_ivals, busy = [], []  # busy = occupied [start,end] frames for heavy visuals
+
+    def _overlaps(a, b, ivals):
+        return any(a < e and b > s for s, e in ivals)
+
+    ci = 0
+    for beat in beats:
+        typ = str(beat.get("type", "")).strip()
+        content = beat.get("content")
+        anchor = str(beat.get("anchor", "")).strip()
+        hold = float(beat.get("hold_s") or 3.0)
+
+        if typ == "hook_title":
+            if isinstance(content, str) and content.strip():
+                hook_title = content.strip()[:60]
+            continue
+
+        # resolve the exact spoken time of the anchor
+        if anchor in ("__hook__", "hook"):
+            st = 0.0
+        else:
+            t = _find_phrase_time(words, anchor, after=hook_end_s)
+            if t is None:
+                log.info("[VSCRIPT] anchor not found, skip %s: %r", typ, anchor[:40])
+                continue
+            st = t
+        en = min(st + hold, duration - 0.2)
+        sf, ef = int(st * FPS), int(en * FPS)
+
+        if typ == "flow" and flow_diagram is None and st >= hook_end_s and isinstance(content, dict):
+            nodes = [str(n)[:18] for n in (content.get("nodes") or []) if str(n).strip()][:4]
+            if len(nodes) >= 2:
+                flow_diagram = {"nodes": nodes,
+                                "chips": [str(c)[:18] for c in (content.get("chips") or [])][:2],
+                                "startFrame": sf, "endFrame": ef}
+                busy.append((sf, ef))
+        elif typ == "cta" and cta_word is None and st > hook_end_s:
+            word = content if isinstance(content, str) else (content or {}).get("word", "")
+            if word:
+                cta_word = {"word": str(word).split()[0][:16], "startFrame": sf,
+                            "endFrame": int(min(st + max(hold, 2.2), duration) * FPS)}
+        elif typ == "lower_third" and isinstance(content, dict) and content.get("title"):
+            ef = int(min(st + max(hold, 4.0), duration - 0.2) * FPS)
+            lowers.append({"startFrame": sf, "endFrame": ef,
+                           "title": str(content["title"])[:42],
+                           "subtitle": str(content.get("subtitle") or "")[:70]})
+            lt_ivals.append((sf, ef))
+        elif typ == "stat" and isinstance(content, dict) and content.get("value") and st > hook_end_s:
+            stats.append({"frame": sf, "value": str(content["value"])[:8],
+                          "label": str(content.get("label") or "")[:24]})
+        elif typ == "wash" and isinstance(content, dict):
+            washes.append({"start": st, "end": en, "color": str(content.get("color", "amethyst")),
+                           "strength": 0.28})
+        elif typ == "concept_card" and st >= hook_end_s:
+            headline = content.get("headline") if isinstance(content, dict) else content
+            if not headline:
+                continue
+            # a lower-third owns the bottom band → force the card up (or drop)
+            want_upper = _overlaps(sf, ef, lt_ivals) or (ci % 2 == 0 and has_upper)
+            if want_upper and not has_upper:
+                if _overlaps(sf, ef, lt_ivals):
+                    continue
+                want_upper = False
+            rail = upper_rail if want_upper else lower_rail
+            overlays.append({"startFrame": sf, "endFrame": ef, "kind": "glass",
+                             "text": str(headline)[:60],
+                             "kicker": str((content or {}).get("kicker") or "")[:24] if isinstance(content, dict) else "",
+                             "size": "third", "position": "upper_third" if want_upper else "lower_third",
+                             "topRatio": rail, "from": "left" if ci % 2 == 0 else "right", "asset_url": ""})
+            ci += 1
+
+    washes = washes[:3]
+    return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
+            "captionY": None, "brightness": [], "washes": washes, "callouts": [],
+            "flowDiagram": flow_diagram, "ctaWord": cta_word, "hookTitle": hook_title}
+
+
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
     """(hookEndFrame, outroStartFrame). Both snap to chunk boundaries so the
     layout never changes mid-sentence."""
@@ -5380,13 +5535,29 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
 
-            # the visual director plans the whole visual layer (overlays/cards/
-            # caption position/brightness). Falls back to the dumb derivation.
-            plan = _visual_director(words, req.briefing or {}, duration, hook_end_s) if req.overlays else {}
+            # VISUAL SCRIPT (anchor intent) → DIRECTOR maps it onto the real
+            # transcript for exact placement. Preferred when a briefing exists;
+            # falls back to the invent-from-transcript director, then the dumb layer.
+            dp = None
+            hook_override = None
+            if req.overlays:
+                vs = (req.briefing or {}).get("visual_script")
+                if not vs:
+                    vs = _gen_visual_script(req.briefing or {}, words, duration, hook_end_s)
+                beats = vs.get("beats") if isinstance(vs, dict) else (vs if isinstance(vs, list) else None)
+                if beats:
+                    dp = _map_visual_script(beats, words, duration, hook_end_s, face)
+                    hook_override = dp.get("hookTitle")
+                    log.info("[VSCRIPT] mapped → %d overlays, %d lowers, flow=%s cta=%s hook=%s",
+                             len(dp["overlays"]), len(dp["lowerThirds"]), bool(dp["flowDiagram"]),
+                             bool(dp["ctaWord"]), bool(hook_override))
+                if dp is None:
+                    plan = _visual_director(words, req.briefing or {}, duration, hook_end_s)
+                    if plan:
+                        dp = _director_to_props(plan, duration, hook_end_s, face)
             caption_y, brightness, washes, callouts = None, [], [], []
             flow_diagram, cta_word = None, None
-            if plan:
-                dp = _director_to_props(plan, duration, hook_end_s, face)
+            if dp:
                 overlays, stat_pops = dp["overlays"], dp["statPops"]
                 if dp["lowerThirds"]:
                     lower_thirds = dp["lowerThirds"]
@@ -5419,6 +5590,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 props["flowDiagram"] = flow_diagram
             if cta_word:
                 props["ctaWord"] = cta_word
+            # the visual script can supply a sharper hook title than req.hook_text
+            if hook_override:
+                props["hook_text"] = hook_override
             # face-lock the punch-in origin + keep captions below the face
             if face:
                 props["faceOriginX"] = face["origin_x"]

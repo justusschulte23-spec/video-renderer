@@ -5464,6 +5464,28 @@ def _append_end_thumbnail(video_path: Path, req: RemotionRenderRequest, job_dir:
         return video_path
 
 
+def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0) -> Path:
+    """Guarantee the file fits the 50MB ceiling (Supabase bucket + Telegram
+    multipart). Re-encode to a duration-derived bitrate only if it's over."""
+    try:
+        if path.stat().st_size / 1e6 <= target_mb:
+            return path
+        dur = probe_duration(path)
+        vbit = int((target_mb * 8 * 1_000_000) / max(dur, 1.0)) - 160_000  # leave room for audio
+        vbit = max(1_500_000, vbit)
+        out = job_dir / "fit.mp4"
+        run(["ffmpeg", "-y", "-i", str(path), "-c:v", "libx264", "-b:v", str(vbit),
+             "-maxrate", str(int(vbit * 1.15)), "-bufsize", str(int(vbit * 2)),
+             "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+             "-movflags", "+faststart", str(out)], "fit_size")
+        if out.exists() and out.stat().st_size < path.stat().st_size:
+            log.info("[REMOTION] size-guard %.1fMB → %.1fMB", path.stat().st_size / 1e6, out.stat().st_size / 1e6)
+            return out
+    except Exception as exc:
+        log.warning("[REMOTION] size-guard failed: %s", exc)
+    return path
+
+
 def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
@@ -5616,8 +5638,14 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         def _render_once(_props, _tag):
             """Render the composition + mux the facecam audio (+ cinematic LUT).
             No SFX here — that's applied once to the chosen render."""
+            # Cap the graphic bitrate by clip length so the output always fits the
+            # 50MB ceiling (Supabase bucket + Telegram multipart). A long clip at a
+            # fixed maxrate blew past it (78s → 59MB → 413). Target ~44MB of video.
+            vkbit = int(44 * 8 * 1000 / max(duration, 1.0))
+            vkbit = max(3000, min(vkbit, 9000))
             r = requests.post(f"{REMOTION_URL}/render",
                               json={"composition": comp, "inputProps": _props,
+                                    "videoBitrate": f"{vkbit}k",
                                     # remotion uploads its graphic to the same Supabase
                                     # bucket; pass creds so it needs no env of its own.
                                     "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
@@ -5683,6 +5711,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         if req.thumbnail:
             out = _append_end_thumbnail(out, req, job_dir)
 
+        out = _fit_size(out, job_dir)   # never exceed the 50MB ceiling
         url = upload_supabase(out, f"remotion_{comp}_{job_id}", folder="renders")
         log.info("[REMOTION] DONE %s", url)
         return {"ok": True, "url": url, "composition": comp, "format": req.format,

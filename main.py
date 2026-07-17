@@ -5569,7 +5569,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
             log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds, flow=%s cta=%s (director=%s)",
                      len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(overlays), len(lower_thirds),
-                     bool(flow_diagram), bool(cta_word), bool(plan))
+                     bool(flow_diagram), bool(cta_word), bool(dp))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
                      "statPops": stat_pops, "lowerThirds": lower_thirds,

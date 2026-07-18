@@ -4986,10 +4986,11 @@ VISUAL_SCRIPT_SYS = (
     "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat)}. 'card'=App-Fenster mit Titel+Punkten, "
     "'statement'=EINE große Aussage, 'stat'=EINE große Zahl. anchor = Phrase wo der Cutaway sitzt.\n"
     "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
-    "REGELN: das RUECKGRAT sind 2-3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten (das ist der "
-    "premium Look) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. ~1 Beat pro 4-6s, das Gesicht "
-    "muss atmen. anchor MUSS eine Phrase sein die im WORT-TRANSKRIPT WOERTLICH vorkommt (sonst wird der Beat "
-    "verworfen). hold_s = grobe Standzeit (2-6). NUR JSON:\n"
+    "REGELN: PFLICHT sind MINDESTENS 2, besser 3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten "
+    "(das ist der premium Look, das Rueckgrat) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. "
+    "~1 Beat pro 4-6s, das Gesicht muss atmen. Jeder anchor MUSS ein KONKRETES, SELTENES Wort/Phrase sein das "
+    "IM WORT-TRANSKRIPT WOERTLICH steht (kopier es exakt daraus, KEIN Fuellwort wie 'und/das/ich' — sonst wird "
+    "der Beat verworfen). hold_s = grobe Standzeit (2-6). NUR JSON:\n"
     '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
     '{"type":"scene","content":{"scene_type":"card","title":"3 Schritte","lines":["Prompt sauber bauen","Tool anbinden","Output prüfen"]},"anchor":"drei Schritte","hold_s":3.5},'
     '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
@@ -5610,7 +5611,12 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 if beats:
                     dp = _map_visual_script(beats, words, duration, hook_end_s, face)
                     hook_override = dp.get("hookTitle")
-                    visual_diag = {"path": "vscript", "beats": len(beats),
+                    _tc = {}
+                    for _b in beats:
+                        _t = str(_b.get("type"))
+                        _tc[_t] = _tc.get(_t, 0) + 1
+                    visual_diag = {"path": "vscript", "beats": len(beats), "emitted": _tc,
+                                   "scenes": len(dp.get("scenes") or []),
                                    "overlays": len(dp["overlays"]), "lowers": len(dp["lowerThirds"]),
                                    "flow": bool(dp["flowDiagram"]), "cta": bool(dp["ctaWord"]),
                                    "hook": bool(hook_override)}

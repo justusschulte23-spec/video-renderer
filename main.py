@@ -5844,16 +5844,15 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             if not download_file(data["url"], gfx_path):
                 raise HTTPException(status_code=500, detail="remotion output download failed")
             _out = job_dir / f"final_{_tag}.mp4"
-            if use_lut:
-                run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
-                     "-map", "0:v:0", "-map", "1:a:0?", "-vf", f"lut3d={LUT}",
-                     "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
-                     "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(_out)],
-                    "mux_lut")
-            else:
-                run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
-                     "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                     "-shortest", "-movflags", "+faststart", str(_out)], "remotion_mux")
+            # "8000€-camera" grade: crisp detail (unsharp) + a lifted pop (eq) so
+            # it reads sharp + rich, not dark + soft. Always re-encode so it applies.
+            SHARP = "unsharp=5:5:0.9:5:5:0.0,eq=contrast=1.07:saturation=1.16:brightness=0.03:gamma=1.04"
+            vf = f"lut3d={LUT},{SHARP}" if use_lut else SHARP
+            run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
+                 "-map", "0:v:0", "-map", "1:a:0?", "-vf", vf,
+                 "-c:v", "libx264", "-crf", "19", "-preset", "medium", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(_out)],
+                "remotion_mux")
             return _out
 
         out = _render_once(props, "a")

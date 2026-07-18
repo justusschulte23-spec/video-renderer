@@ -432,6 +432,7 @@ class RemotionRenderRequest(BaseModel):
     flow_diagram: Optional[dict] = None  # force a node-graph {nodes,chips,startFrame,endFrame} (else director)
     cta_word:     Optional[dict] = None  # force a CTA word {word,startFrame,endFrame} (else director)
     scenes:       Optional[list] = None  # force full-screen cutaway scenes (else director/vscript)
+    music_url:    Optional[str] = None   # background bed, sidechain-ducked under the voice (§4)
 
 
 class ThumbnailRequest(BaseModel):
@@ -786,6 +787,50 @@ def probe_duration(path: Path) -> float:
     ]
     out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
     return float(out)
+
+
+def _audio_onsets(src: Path, job_dir: Path) -> list:
+    """§1 transient detection — times (s) where the audio energy jumps (hard
+    consonants / stress). Used to snap visual events onto the beat so nothing
+    lands a couple frames off. Lightweight energy-flux, no librosa."""
+    try:
+        import numpy as np
+        import wave
+        wav = job_dir / "onset.wav"
+        subprocess.run(["ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "22050", str(wav)],
+                       check=True, capture_output=True)
+        with wave.open(str(wav), "rb") as w:
+            sr = w.getframerate()
+            sig = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32)
+        if sig.size < sr:
+            return []
+        hop = 512
+        n = sig.size // hop
+        env = np.array([np.sqrt(np.mean(sig[i * hop:(i + 1) * hop] ** 2) + 1) for i in range(n)])
+        flux = np.diff(env, prepend=env[0])
+        flux[flux < 0] = 0
+        thr = flux.mean() + 1.4 * flux.std()
+        onsets = []
+        last = -999
+        for i in range(1, n - 1):
+            if flux[i] > thr and flux[i] >= flux[i - 1] and flux[i] >= flux[i + 1]:
+                t = i * hop / sr
+                if t - last > 0.12:
+                    onsets.append(round(t, 3))
+                    last = t
+        return onsets
+    except Exception as exc:
+        log.warning("[ONSET] detection failed: %s", exc)
+        return []
+
+
+def _snap_frame(f: int, onsets: list, fps: int, max_shift: float = 0.12) -> int:
+    """Snap a frame to the nearest audio onset within max_shift seconds."""
+    if not onsets:
+        return f
+    t = f / fps
+    best = min(onsets, key=lambda o: abs(o - t))
+    return int(round(best * fps)) if abs(best - t) <= max_shift else f
 
 
 def log_duration(path: Path, label: str) -> float:
@@ -5277,11 +5322,54 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
     return items
 
 
+def _face_track_mediapipe(video_path: Path, duration: float, samples: int = 24) -> dict:
+    """§3 precise face track via MediaPipe Face Mesh — origin locked on the nose
+    bridge (landmark 168), box from the full mesh. {} if mediapipe unavailable."""
+    try:
+        import cv2
+        import numpy as np
+        import mediapipe as mp
+        mesh = mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1,
+                                               refine_landmarks=True, min_detection_confidence=0.5)
+        cap = cv2.VideoCapture(str(video_path))
+        cxs, cys, tops, bots = [], [], [], []
+        for i in range(samples):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (duration * 1000) * (i + 0.5) / samples)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            res = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if not res.multi_face_landmarks:
+                continue
+            lm = res.multi_face_landmarks[0].landmark
+            ys = [p.y for p in lm]
+            cxs.append(lm[168].x)   # nose bridge
+            cys.append(lm[168].y)
+            tops.append(max(0.0, min(ys)))
+            bots.append(min(1.0, max(ys)))
+        cap.release()
+        mesh.close()
+        if len(cxs) < 3:
+            return {}
+        med = lambda a: float(np.median(a))
+        track = {"origin_x": round(med(cxs), 3), "origin_y": round(med(cys), 3),
+                 "top": round(med(tops), 3), "bottom": round(med(bots), 3)}
+        log.info("[FACE] mediapipe tracked %d/%d, nose=(%.2f,%.2f) bottom=%.2f",
+                 len(cxs), samples, track["origin_x"], track["origin_y"], track["bottom"])
+        return track
+    except Exception as exc:
+        log.info("[FACE] mediapipe unavailable (%s) → OpenCV", str(exc)[:80])
+        return {}
+
+
 def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
-    """Track the speaker's face across the clip with OpenCV (Haar cascade). Returns
-    {origin_x, origin_y, top, bottom} normalised 0..1 — the median face box, so
-    Remotion can lock punch-in zoom on the face and keep captions off it. Empty on
-    failure (composition falls back to its hardcoded centre)."""
+    """Track the speaker's face. MediaPipe Face Mesh first (nose-bridge locked),
+    OpenCV Haar cascade fallback. Returns {origin_x, origin_y, top, bottom} 0..1 —
+    the median face box so Remotion locks punch-in zoom on the face and keeps
+    captions off it. Empty on failure (composition falls back to its centre)."""
+    mp_track = _face_track_mediapipe(video_path, duration, samples)
+    if mp_track:
+        return mp_track
     try:
         import cv2
         import numpy as np
@@ -5524,6 +5612,30 @@ def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0) -> Path:
     return path
 
 
+def _add_music_ducked(video: Path, music_url: str, job_dir: Path) -> Path:
+    """§4 mix a background music bed UNDER the voice with sidechain ducking — the
+    music drops ~8dB while the speaker talks, breathes back in the pauses. Returns
+    the original path on any failure so music never breaks the render."""
+    try:
+        mus = job_dir / "music.mp3"
+        if not download_file(music_url, mus):
+            return video
+        out = job_dir / "with_music.mp4"
+        filt = (
+            "[1:a]volume=0.30,aloop=loop=-1:size=2000000000[m];"
+            "[0:a]asplit=2[v0][key];"
+            "[m][key]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[md];"
+            "[v0][md]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]"
+        )
+        run(["ffmpeg", "-y", "-i", str(video), "-i", str(mus), "-filter_complex", filt,
+             "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-shortest", "-movflags", "+faststart", str(out)], "music_duck")
+        return out if out.exists() else video
+    except Exception as exc:
+        log.warning("[MUSIC] ducking failed: %s", exc)
+        return video
+
+
 def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
@@ -5566,6 +5678,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
 
         qa_moments = []
         visual_diag = {"path": "n/a"}
+        onsets = _audio_onsets(facecam_path, job_dir)  # §1 transients for beat-sync
         base = {"durationInSeconds": round(duration, 3)}
         if comp == "JustusBroll":
             props = {**base, "face_url": face_url,
@@ -5644,9 +5757,20 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
-            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds, flow=%s cta=%s (director=%s)",
+            # §1 snap visual events onto the nearest audio transient
+            if onsets:
+                punch_frames = sorted({_snap_frame(int(f), onsets, FPS) for f in punch_frames})
+                for _o in overlays:
+                    _o["startFrame"] = _snap_frame(_o["startFrame"], onsets, FPS)
+                if flow_diagram:
+                    flow_diagram["startFrame"] = _snap_frame(flow_diagram["startFrame"], onsets, FPS)
+                if cta_word:
+                    cta_word["startFrame"] = _snap_frame(cta_word["startFrame"], onsets, FPS)
+                for _sc in (scenes_layer or []):
+                    _sc["startFrame"] = _snap_frame(_sc["startFrame"], onsets, FPS)
+            log.info("[REMOTION] %d words → %d chunks, hook@%df outro@%df, %d punches, %d overlays, %d lower-thirds, flow=%s cta=%s %d onsets (director=%s)",
                      len(words), len(chunks), hook_end_f, outro_start_f, len(punch_frames), len(overlays), len(lower_thirds),
-                     bool(flow_diagram), bool(cta_word), bool(dp))
+                     bool(flow_diagram), bool(cta_word), len(onsets), bool(dp))
             props = {**base, "face_url": face_url, "hook_text": req.hook_text,
                      "chunks": chunks, "punchFrames": punch_frames, "overlays": overlays,
                      "statPops": stat_pops, "lowerThirds": lower_thirds,
@@ -5768,6 +5892,10 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 out = mixed
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
+
+        # §4 background music bed, sidechain-ducked under the voice
+        if req.music_url:
+            out = _add_music_ducked(out, req.music_url, job_dir)
 
         # thumbnail end-card (0.2s freeze at the very end, after everything else)
         if req.thumbnail:

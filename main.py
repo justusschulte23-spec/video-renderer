@@ -5952,18 +5952,6 @@ def render_status(job_id: str):
 def health():
     return {"status": "ok"}
 
-@app.post("/debug/upload")
-async def debug_upload(file: UploadFile = File(...)):
-    """Temp: push a local clip into Supabase for a verification render."""
-    tmp = Path(f"/tmp/upload_{uuid.uuid4().hex[:8]}_{file.filename}")
-    try:
-        tmp.write_bytes(await file.read())
-        return {"ok": True, "url": upload_supabase(tmp, tmp.stem, folder="uploads")}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-    finally:
-        tmp.unlink(missing_ok=True)
-
 @app.get("/debug/storage-test")
 def debug_storage_test():
     """Verify Supabase Storage upload end-to-end: create the bucket, upload a tiny

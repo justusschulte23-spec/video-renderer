@@ -4788,8 +4788,6 @@ def _visual_director(words: list, briefing: dict, duration: float,
         "- brightness: leicht abdunkeln (0.86) bei Spannung/Problem, voll (1.0) bei Hook/Payoff.\n"
         "- washes: dramatischer FARB-Wash auf emotionalen Beats. color = 'red' (Spannung/Aggro), "
         "'amethyst'/'cyan' (Tech/Fokus), 'warm' (Payoff/Aufloesung), 'blue' (Ruhe). strength 0.2-0.35. Sparsam, 1-3 total.\n"
-        "- callouts: gestrichelte Box die auf etwas ZEIGT (nur wenn im Bild wirklich was zum Zeigen ist), "
-        "mit kurzem label. position upper/mid/lower. Selten, max 1-2.\n"
         "- flow: EIN animierter Node-Graph fuer EINEN System-/Architektur-/Datenfluss-/Vergleichs-Moment "
         "(wenn ueber einen ABLAUF, eine Pipeline, ein 'A wird zu B wird zu C' geredet wird). nodes = 2-4 KURZE "
         "Labels (1-2 Woerter) in Fluss-Reihenfolge [Quelle, Transformation/Kern, Output, (optionale 2. Quelle)]. "
@@ -4805,7 +4803,6 @@ def _visual_director(words: list, briefing: dict, duration: float,
         '"flow":{"nodes":["Prompt","Agent","Output"],"chips":["POST /infer","200 OK"],"start":11,"end":17},'
         '"cta":{"word":"ENGINE","time":26},'
         '"washes":[{"start":3,"end":6,"color":"red","strength":0.3}],'
-        '"callouts":[{"start":14,"end":17,"position":"mid","size":"half","label":"HIER"}],'
         '"caption_y":0.65,"brightness":[{"t":0,"level":1.0},{"t":5,"level":0.88}]}'
     )
     user = (f"Dauer: {duration:.1f}s. Hook endet bei {hook_end_s:.1f}s (davor keine Overlays).\n\n"
@@ -4944,7 +4941,7 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
 
     return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
             "captionY": cap_y, "brightness": plan.get("brightness") or [],
-            "washes": washes, "callouts": callouts,
+            "washes": washes, "callouts": [],  # callouts killed — the dashed "HIER" box landed on the face and read cheap
             "flowDiagram": flow_diagram, "ctaWord": cta_word}
 
 
@@ -5779,6 +5776,18 @@ def render_status(job_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.post("/debug/upload")
+async def debug_upload(file: UploadFile = File(...)):
+    """Temp: push a local clip into Supabase for a verification render."""
+    tmp = Path(f"/tmp/upload_{uuid.uuid4().hex[:8]}_{file.filename}")
+    try:
+        tmp.write_bytes(await file.read())
+        return {"ok": True, "url": upload_supabase(tmp, tmp.stem, folder="uploads")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        tmp.unlink(missing_ok=True)
 
 @app.get("/debug/storage-test")
 def debug_storage_test():

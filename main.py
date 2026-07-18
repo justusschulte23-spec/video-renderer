@@ -5778,22 +5778,21 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                      "grade": req.grade}
             if caption_y is not None:
                 props["captionY"] = caption_y
-            if brightness:
-                props["brightness"] = brightness
-            if washes:
-                props["washes"] = washes
-            if callouts:
-                props["callouts"] = callouts
+            # ALWAYS send these — Remotion merges missing keys from defaultProps
+            # (the Studio demo), so an unsent key leaks a demo overlay/callout/flow
+            # into production. Send explicit values (empty = off).
+            props["brightness"] = brightness or []
+            props["washes"] = washes or []
+            props["callouts"] = callouts or []
+            props["floatingQuotes"] = []
             # explicit request override (manual test / n8n) wins over the director
             flow_diagram = req.flow_diagram or flow_diagram
             cta_word = req.cta_word or cta_word
             scenes_layer = req.scenes if req.scenes is not None else scenes_layer
-            if flow_diagram:
-                props["flowDiagram"] = flow_diagram
-            if cta_word:
-                props["ctaWord"] = cta_word
-            if scenes_layer:
-                props["scenes"] = scenes_layer
+            # always send (null/[] override the Studio demo defaults)
+            props["flowDiagram"] = flow_diagram
+            props["ctaWord"] = cta_word
+            props["scenes"] = scenes_layer or []
             # the visual script can supply a sharper hook title than req.hook_text
             if hook_override:
                 props["hook_text"] = hook_override

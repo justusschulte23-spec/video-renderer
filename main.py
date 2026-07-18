@@ -4986,8 +4986,10 @@ VISUAL_SCRIPT_SYS = (
     "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat)}. 'card'=App-Fenster mit Titel+Punkten, "
     "'statement'=EINE große Aussage, 'stat'=EINE große Zahl. anchor = Phrase wo der Cutaway sitzt.\n"
     "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
-    "REGELN: sparsam (~1 Beat pro 4-6s), Abwechslung, das Gesicht muss atmen. anchor MUSS eine Phrase sein "
-    "die im Skript-Text wirklich vorkommt. hold_s = grobe Standzeit (2-6). NUR JSON:\n"
+    "REGELN: das RUECKGRAT sind 2-3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten (das ist der "
+    "premium Look) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. ~1 Beat pro 4-6s, das Gesicht "
+    "muss atmen. anchor MUSS eine Phrase sein die im WORT-TRANSKRIPT WOERTLICH vorkommt (sonst wird der Beat "
+    "verworfen). hold_s = grobe Standzeit (2-6). NUR JSON:\n"
     '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
     '{"type":"scene","content":{"scene_type":"card","title":"3 Schritte","lines":["Prompt sauber bauen","Tool anbinden","Output prüfen"]},"anchor":"drei Schritte","hold_s":3.5},'
     '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
@@ -4998,13 +5000,23 @@ VISUAL_SCRIPT_SYS = (
 def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float) -> dict:
     """Stage 1 — the visual SCRIPT (rough intent, anchored to script phrases).
     Built from the briefing's argument structure. {} if no briefing to ground it."""
+    # Works from the briefing's argument structure if present, ELSE straight from
+    # the transcript — so the planner ALWAYS fires (no briefing-only dependency
+    # that dropped prod into the dumb fallback). Anchors always come from the real
+    # transcript below, so they always resolve.
+    transcript = " ".join(str(w.get("word", "")) for w in (words or [])).strip()
     segs = (briefing or {}).get("segments", []) or []
-    if not segs:
-        return {}
-    intent = ""
-    for s in segs:
-        intent += f"[{s.get('rolle') or s.get('role') or '?'}] {s.get('text','')[:300]}\n"
-    user = f"Dauer ~{duration:.0f}s. SKRIPT-ABSICHT:\n{intent}"
+    if segs:
+        intent = ""
+        for s in segs:
+            intent += f"[{s.get('rolle') or s.get('role') or '?'}] {s.get('text','')[:300]}\n"
+        src = "SKRIPT-ABSICHT (Argument-Struktur):\n" + intent
+    elif transcript:
+        src = "TRANSKRIPT (was der Sprecher sagt, plane die Visuals dazu):\n" + transcript[:2600]
+    else:
+        return {"beats": [], "_diag": "no-input"}
+    user = (f"Dauer ~{duration:.0f}s.\n{src}\n\n"
+            f"WORT-TRANSKRIPT (nimm die anchor-Phrasen WOERTLICH hieraus):\n{transcript[:2600]}")
     try:
         raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5", max_tokens=2500)
     except Exception as exc:

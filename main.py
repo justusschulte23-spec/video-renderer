@@ -431,6 +431,7 @@ class RemotionRenderRequest(BaseModel):
     thumbnail_concept: Optional[str] = None   # fal.ai prompt (defaults to hook_text/headline)
     flow_diagram: Optional[dict] = None  # force a node-graph {nodes,chips,startFrame,endFrame} (else director)
     cta_word:     Optional[dict] = None  # force a CTA word {word,startFrame,endFrame} (else director)
+    scenes:       Optional[list] = None  # force full-screen cutaway scenes (else director/vscript)
 
 
 class ThumbnailRequest(BaseModel):
@@ -4979,10 +4980,16 @@ VISUAL_SCRIPT_SYS = (
     "- stat: NUR echte Metrik mit Einheit. content={value('90%'/'3x'/'40 Std'),label}.\n"
     "- lower_third: Definition/Label unten. content={title(2-4 Wort),subtitle(kurz)}.\n"
     "- cta: DAS eine CTA-Wort am Schluss wenn zum Handeln aufgerufen wird. content='ENGINE'.\n"
+    "- scene: FULL-SCREEN CUTAWAY — der stärkste Move. Bei einem wichtigen Value-/Erklär-Moment wird KOMPLETT "
+    "vom Gesicht weg auf eine saubere on-brand Erklär-Szene geschnitten (dann zurück). Nutze das für konkrete "
+    "Konzepte/Listen/Zahlen, 1-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat', "
+    "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat)}. 'card'=App-Fenster mit Titel+Punkten, "
+    "'statement'=EINE große Aussage, 'stat'=EINE große Zahl. anchor = Phrase wo der Cutaway sitzt.\n"
     "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
     "REGELN: sparsam (~1 Beat pro 4-6s), Abwechslung, das Gesicht muss atmen. anchor MUSS eine Phrase sein "
     "die im Skript-Text wirklich vorkommt. hold_s = grobe Standzeit (2-6). NUR JSON:\n"
     '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
+    '{"type":"scene","content":{"scene_type":"card","title":"3 Schritte","lines":["Prompt sauber bauen","Tool anbinden","Output prüfen"]},"anchor":"drei Schritte","hold_s":3.5},'
     '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
     '{"type":"cta","content":"ENGINE","anchor":"kommentier Engine","hold_s":2.5}]}'
 )
@@ -5028,7 +5035,7 @@ def _map_visual_script(beats: list, words: list, duration: float,
     lower_rail = round(min(0.80, fb + 0.04), 3)
     has_upper = ft > 0.22
 
-    overlays, lowers, stats, washes = [], [], [], []
+    overlays, lowers, stats, washes, scenes = [], [], [], [], []
     flow_diagram, cta_word, hook_title = None, None, None
     lt_ivals, busy = [], []  # busy = occupied [start,end] frames for heavy visuals
 
@@ -5083,6 +5090,19 @@ def _map_visual_script(beats: list, words: list, duration: float,
         elif typ == "wash" and isinstance(content, dict):
             washes.append({"start": st, "end": en, "color": str(content.get("color", "amethyst")),
                            "strength": 0.28})
+        elif typ == "scene" and isinstance(content, dict) and st >= hook_end_s and len(scenes) < 3:
+            stype = content.get("scene_type") or "card"
+            if stype not in ("card", "statement", "stat"):
+                stype = "card"
+            sc = {"type": stype, "startFrame": sf,
+                  "endFrame": int(min(st + max(hold, 2.5), duration - 0.2) * FPS),
+                  "title": str(content.get("title") or "")[:48],
+                  "subtitle": str(content.get("subtitle") or "")[:60] or None,
+                  "lines": [str(x)[:40] for x in (content.get("lines") or [])][:4] or None,
+                  "value": str(content.get("value") or "")[:8] or None,
+                  "label": str(content.get("label") or "")[:24] or None}
+            scenes.append({k: v for k, v in sc.items() if v is not None})
+            busy.append((sf, sc["endFrame"]))
         elif typ == "concept_card" and st >= hook_end_s:
             headline = content.get("headline") if isinstance(content, dict) else content
             if not headline:
@@ -5104,7 +5124,8 @@ def _map_visual_script(beats: list, words: list, duration: float,
     washes = washes[:3]
     return {"overlays": overlays, "lowerThirds": lowers, "statPops": stats,
             "captionY": None, "brightness": [], "washes": washes, "callouts": [],
-            "flowDiagram": flow_diagram, "ctaWord": cta_word, "hookTitle": hook_title}
+            "flowDiagram": flow_diagram, "ctaWord": cta_word, "hookTitle": hook_title,
+            "scenes": scenes}
 
 
 def _remotion_scenes(chunks: list, duration: float) -> tuple:
@@ -5593,6 +5614,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                                        "flow": bool(dp["flowDiagram"]), "callouts": len(dp["callouts"])}
             caption_y, brightness, washes, callouts = None, [], [], []
             flow_diagram, cta_word = None, None
+            scenes_layer = []
             if dp:
                 overlays, stat_pops = dp["overlays"], dp["statPops"]
                 if dp["lowerThirds"]:
@@ -5600,6 +5622,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 caption_y, brightness = dp["captionY"], dp["brightness"]
                 washes, callouts = dp["washes"], dp["callouts"]
                 flow_diagram, cta_word = dp.get("flowDiagram"), dp.get("ctaWord")
+                scenes_layer = dp.get("scenes") or []
             else:
                 overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
@@ -5622,10 +5645,13 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # explicit request override (manual test / n8n) wins over the director
             flow_diagram = req.flow_diagram or flow_diagram
             cta_word = req.cta_word or cta_word
+            scenes_layer = req.scenes if req.scenes is not None else scenes_layer
             if flow_diagram:
                 props["flowDiagram"] = flow_diagram
             if cta_word:
                 props["ctaWord"] = cta_word
+            if scenes_layer:
+                props["scenes"] = scenes_layer
             # the visual script can supply a sharper hook title than req.hook_text
             if hook_override:
                 props["hook_text"] = hook_override
@@ -5652,14 +5678,18 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         def _render_once(_props, _tag):
             """Render the composition + mux the facecam audio (+ cinematic LUT).
             No SFX here — that's applied once to the chosen render."""
-            # Cap the graphic bitrate by clip length so the output always fits the
-            # 50MB ceiling (Supabase bucket + Telegram multipart). A long clip at a
-            # fixed maxrate blew past it (78s → 59MB → 413). Target ~44MB of video.
-            vkbit = int(44 * 8 * 1000 / max(duration, 1.0))
-            vkbit = max(3000, min(vkbit, 9000))
+            # Fit the 50MB ceiling (Supabase + Telegram) WITHOUT the blur. Long clips
+            # render at 720x1280 (scale 0.667) so every pixel keeps a high bitrate =
+            # razor sharp, instead of a soft full-1080p at a crushed bitrate.
+            target_mb = 46
+            vkbit = int(target_mb * 8 * 1000 / max(duration, 1.0))
+            vkbit = max(4000, min(vkbit, 12000))
+            gfx_scale = 0.667 if duration > 55 else 1.0
+            _body = {"composition": comp, "inputProps": _props, "videoBitrate": f"{vkbit}k"}
+            if gfx_scale < 1.0:
+                _body["scale"] = gfx_scale
             r = requests.post(f"{REMOTION_URL}/render",
-                              json={"composition": comp, "inputProps": _props,
-                                    "videoBitrate": f"{vkbit}k",
+                              json={**_body,
                                     # remotion uploads its graphic to the same Supabase
                                     # bucket; pass creds so it needs no env of its own.
                                     "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,

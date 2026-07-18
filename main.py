@@ -5684,7 +5684,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             target_mb = 46
             vkbit = int(target_mb * 8 * 1000 / max(duration, 1.0))
             vkbit = max(4000, min(vkbit, 12000))
-            gfx_scale = 0.667 if duration > 55 else 1.0
+            gfx_scale = 0.75 if duration > 55 else 1.0   # 0.75 → exact 810x1440 (both even; H264 needs even dims)
             _body = {"composition": comp, "inputProps": _props, "videoBitrate": f"{vkbit}k"}
             if gfx_scale < 1.0:
                 _body["scale"] = gfx_scale

@@ -5002,15 +5002,22 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
         intent += f"[{s.get('rolle') or s.get('role') or '?'}] {s.get('text','')[:300]}\n"
     user = f"Dauer ~{duration:.0f}s. SKRIPT-ABSICHT:\n{intent}"
     try:
-        raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5", max_tokens=1500)
-        m = re.search(r"\{[\s\S]*\}", raw)
-        vs = json.loads(m.group()) if m else {}
+        raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5", max_tokens=2500)
     except Exception as exc:
-        log.warning("[VSCRIPT] gen failed: %s", exc)
-        return {}
+        log.warning("[VSCRIPT] gen call failed: %s", exc)
+        return {"beats": [], "_diag": f"call:{exc}"}
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        log.warning("[VSCRIPT] no JSON in response: %s", raw[:200])
+        return {"beats": [], "_diag": f"nojson:{raw[:120]}"}
+    try:
+        vs = json.loads(m.group())
+    except Exception as exc:
+        log.warning("[VSCRIPT] JSON parse failed: %s | %s", exc, m.group()[:200])
+        return {"beats": [], "_diag": f"parse:{exc}"}
     beats = vs.get("beats") if isinstance(vs, dict) else None
     log.info("[VSCRIPT] %d beats", len(beats or []))
-    return {"beats": beats or []}
+    return {"beats": beats or [], "_diag": f"ok:{len(beats or [])}"}
 
 
 def _map_visual_script(beats: list, words: list, duration: float,
@@ -5527,6 +5534,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         impacts = impacts or []
 
         qa_moments = []
+        visual_diag = {"path": "n/a"}
         base = {"durationInSeconds": round(duration, 3)}
         if comp == "JustusBroll":
             props = {**base, "face_url": face_url,
@@ -5562,14 +5570,20 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # falls back to the invent-from-transcript director, then the dumb layer.
             dp = None
             hook_override = None
+            visual_diag = {"path": "dumb", "beats": 0, "vs_raw": None}
             if req.overlays:
                 vs = (req.briefing or {}).get("visual_script")
                 if not vs:
                     vs = _gen_visual_script(req.briefing or {}, words, duration, hook_end_s)
                 beats = vs.get("beats") if isinstance(vs, dict) else (vs if isinstance(vs, list) else None)
+                visual_diag["vs_raw"] = (vs or {}).get("_diag") if isinstance(vs, dict) else None
                 if beats:
                     dp = _map_visual_script(beats, words, duration, hook_end_s, face)
                     hook_override = dp.get("hookTitle")
+                    visual_diag = {"path": "vscript", "beats": len(beats),
+                                   "overlays": len(dp["overlays"]), "lowers": len(dp["lowerThirds"]),
+                                   "flow": bool(dp["flowDiagram"]), "cta": bool(dp["ctaWord"]),
+                                   "hook": bool(hook_override)}
                     log.info("[VSCRIPT] mapped → %d overlays, %d lowers, flow=%s cta=%s hook=%s",
                              len(dp["overlays"]), len(dp["lowerThirds"]), bool(dp["flowDiagram"]),
                              bool(dp["ctaWord"]), bool(hook_override))
@@ -5577,6 +5591,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                     plan = _visual_director(words, req.briefing or {}, duration, hook_end_s)
                     if plan:
                         dp = _director_to_props(plan, duration, hook_end_s, face)
+                        visual_diag = {**visual_diag, "path": "director",
+                                       "overlays": len(dp["overlays"]), "lowers": len(dp["lowerThirds"]),
+                                       "flow": bool(dp["flowDiagram"]), "callouts": len(dp["callouts"])}
             caption_y, brightness, washes, callouts = None, [], [], []
             flow_diagram, cta_word = None, None
             if dp:
@@ -5713,10 +5730,10 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
 
         out = _fit_size(out, job_dir)   # never exceed the 50MB ceiling
         url = upload_supabase(out, f"remotion_{comp}_{job_id}", folder="renders")
-        log.info("[REMOTION] DONE %s", url)
+        log.info("[REMOTION] DONE %s visual=%s", url, visual_diag)
         return {"ok": True, "url": url, "composition": comp, "format": req.format,
                 "duration": round(duration, 3), "words": len(words),
-                "impacts": len(impacts), "qa": qa}
+                "impacts": len(impacts), "qa": qa, "visual": visual_diag}
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 

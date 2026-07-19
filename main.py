@@ -5027,9 +5027,10 @@ VISUAL_SCRIPT_SYS = (
     "- cta: DAS eine CTA-Wort am Schluss wenn zum Handeln aufgerufen wird. content='ENGINE'.\n"
     "- scene: FULL-SCREEN CUTAWAY — der stärkste Move. Bei einem wichtigen Value-/Erklär-Moment wird KOMPLETT "
     "vom Gesicht weg auf eine saubere on-brand Erklär-Szene geschnitten (dann zurück). Nutze das für konkrete "
-    "Konzepte/Listen/Zahlen, 1-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat', "
+    "Konzepte/Listen/Zahlen, 2-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat'|'quote', "
     "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat)}. 'card'=App-Fenster mit Titel+Punkten, "
-    "'statement'=EINE große Aussage, 'stat'=EINE große Zahl. anchor = Phrase wo der Cutaway sitzt.\n"
+    "'statement'=EINE große Aussage, 'stat'=EINE große Zahl+label, 'quote'=zugespitztes Zitat/Take (title=Zitat, subtitle=Quelle). "
+    "VARIIERE den scene_type — NIE 2x denselben hintereinander (nicht 3x card). anchor = Phrase wo der Cutaway sitzt.\n"
     "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
     "REGELN: PFLICHT sind MINDESTENS 2, besser 3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten "
     "(das ist der premium Look, das Rueckgrat) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. "
@@ -5150,7 +5151,7 @@ def _map_visual_script(beats: list, words: list, duration: float,
                            "strength": 0.28})
         elif typ == "scene" and isinstance(content, dict) and st >= hook_end_s and len(scenes) < 3:
             stype = content.get("scene_type") or "card"
-            if stype not in ("card", "statement", "stat"):
+            if stype not in ("card", "statement", "stat", "quote"):
                 stype = "card"
             sc = {"type": stype, "startFrame": sf,
                   "endFrame": int(min(st + max(hold, 2.5), duration - 0.2) * FPS),

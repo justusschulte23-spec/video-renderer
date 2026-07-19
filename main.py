@@ -5027,10 +5027,13 @@ VISUAL_SCRIPT_SYS = (
     "- cta: DAS eine CTA-Wort am Schluss wenn zum Handeln aufgerufen wird. content='ENGINE'.\n"
     "- scene: FULL-SCREEN CUTAWAY — der stärkste Move. Bei einem wichtigen Value-/Erklär-Moment wird KOMPLETT "
     "vom Gesicht weg auf eine saubere on-brand Erklär-Szene geschnitten (dann zurück). Nutze das für konkrete "
-    "Konzepte/Listen/Zahlen, 2-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat'|'quote', "
-    "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat)}. 'card'=App-Fenster mit Titel+Punkten, "
-    "'statement'=EINE große Aussage, 'stat'=EINE große Zahl+label, 'quote'=zugespitztes Zitat/Take (title=Zitat, subtitle=Quelle). "
-    "VARIIERE den scene_type — NIE 2x denselben hintereinander (nicht 3x card). anchor = Phrase wo der Cutaway sitzt.\n"
+    "Konzepte/Listen/Zahlen, 2-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat'|'quote'|'image', "
+    "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat), concept?(für image)}. "
+    "'card'=App-Fenster mit Titel+Punkten, 'statement'=EINE große Aussage, 'stat'=EINE große Zahl+label, "
+    "'quote'=zugespitztes Zitat/Take (title=Zitat, subtitle=Quelle), 'image'=PHOTOREALE gebrandete Szene "
+    "(concept=3-6 WÖRTER ENGLISCH was gezeigt wird, EIN Hero-Objekt/Szene, KEIN Text/Gesicht; title=optionales kurzes Label). "
+    "Nutze 'image' fuer bildhafte/greifbare Momente. VARIIERE den scene_type — NIE 2x denselben hintereinander. "
+    "anchor = Phrase wo der Cutaway sitzt.\n"
     "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
     "REGELN: PFLICHT sind MINDESTENS 2, besser 3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten "
     "(das ist der premium Look, das Rueckgrat) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. "
@@ -5039,6 +5042,7 @@ VISUAL_SCRIPT_SYS = (
     "der Beat verworfen). hold_s = grobe Standzeit (2-6). NUR JSON:\n"
     '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
     '{"type":"scene","content":{"scene_type":"card","title":"3 Schritte","lines":["Prompt sauber bauen","Tool anbinden","Output prüfen"]},"anchor":"drei Schritte","hold_s":3.5},'
+    '{"type":"scene","content":{"scene_type":"image","concept":"glowing AI phone agent on a desk","title":"24/7 erreichbar"},"anchor":"rund um die Uhr","hold_s":3},'
     '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
     '{"type":"cta","content":"ENGINE","anchor":"kommentier Engine","hold_s":2.5}]}'
 )
@@ -5151,15 +5155,16 @@ def _map_visual_script(beats: list, words: list, duration: float,
                            "strength": 0.28})
         elif typ == "scene" and isinstance(content, dict) and st >= hook_end_s and len(scenes) < 3:
             stype = content.get("scene_type") or "card"
-            if stype not in ("card", "statement", "stat", "quote"):
+            if stype not in ("card", "statement", "stat", "quote", "image"):
                 stype = "card"
             sc = {"type": stype, "startFrame": sf,
                   "endFrame": int(min(st + max(hold, 2.5), duration - 0.2) * FPS),
-                  "title": str(content.get("title") or "")[:48],
+                  "title": str(content.get("title") or "")[:48] or None,
                   "subtitle": str(content.get("subtitle") or "")[:60] or None,
                   "lines": [str(x)[:40] for x in (content.get("lines") or [])][:4] or None,
                   "value": str(content.get("value") or "")[:8] or None,
-                  "label": str(content.get("label") or "")[:24] or None}
+                  "label": str(content.get("label") or "")[:24] or None,
+                  "concept": str(content.get("concept") or "")[:80] or None}  # image scenes
             scenes.append({k: v for k, v in sc.items() if v is not None})
             busy.append((sf, sc["endFrame"]))
         elif typ == "concept_card" and st >= hook_end_s:
@@ -5637,6 +5642,37 @@ def _add_music_ducked(video: Path, music_url: str, job_dir: Path) -> Path:
         return video
 
 
+def _gen_scene_image(concept: str, client_id: str, job_dir: Path) -> str:
+    """Generate an on-brand PHOTOREAL scene image (fal nano-banana, no text) for a
+    cutaway and return its public Supabase URL. '' on failure → caller drops the
+    image scene. ~$0.03/image. Brand palette from the client template."""
+    try:
+        tpl = _load_template(client_id, None)
+        cols = _tpl_colors(tpl)
+        timg = ((tpl or {}).get("images") or {})
+        img_url = _call_fal_thumbnail(concept, cols.get("primary") or "#8B5CF6",
+                                      cols.get("bg") or "#0A0A0F",
+                                      timg.get("glow_word") or "amethyst purple",
+                                      timg.get("thumbnail_vibe"))
+        raw = job_dir / f"scene_{uuid.uuid4().hex[:8]}.jpg"
+        if not download_file(img_url, raw):
+            return ""
+        # center-crop to exact 1080x1920
+        img = Image.open(str(raw)).convert("RGB")
+        if img.width / img.height > W / H:
+            nh, nw = H, int(img.width * H / img.height)
+        else:
+            nw, nh = W, int(img.height * W / img.width)
+        img = img.resize((nw, nh), Image.LANCZOS)
+        left, top = (nw - W) // 2, (nh - H) // 2
+        fin = job_dir / raw.name.replace(".jpg", "_c.jpg")
+        img.crop((left, top, left + W, top + H)).save(str(fin), "JPEG", quality=92)
+        return upload_supabase(fin, fin.stem, folder="scenes")
+    except Exception as exc:
+        log.warning("[SCENE-IMG] failed: %s", exc)
+        return ""
+
+
 def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
@@ -5790,6 +5826,15 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             flow_diagram = req.flow_diagram or flow_diagram
             cta_word = req.cta_word or cta_word
             scenes_layer = req.scenes if req.scenes is not None else scenes_layer
+            # generate photoreal on-brand images for 'image' scene cutaways
+            for _sc in (scenes_layer or []):
+                if _sc.get("type") == "image" and _sc.get("concept") and not _sc.get("imageUrl"):
+                    _u = _gen_scene_image(_sc["concept"], req.client_id or "justus", job_dir)
+                    if _u:
+                        _sc["imageUrl"] = _u
+                    else:
+                        _sc["type"] = "statement"  # fallback keeps a scene if fal fails
+                _sc.pop("concept", None)
             # always send (null/[] override the Studio demo defaults)
             props["flowDiagram"] = flow_diagram
             props["ctaWord"] = cta_word

@@ -5875,9 +5875,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # Fit the 50MB ceiling (Supabase + Telegram) WITHOUT the blur. Long clips
             # render at 720x1280 (scale 0.667) so every pixel keeps a high bitrate =
             # razor sharp, instead of a soft full-1080p at a crushed bitrate.
-            target_mb = 46
+            target_mb = 42
             vkbit = int(target_mb * 8 * 1000 / max(duration, 1.0))
-            vkbit = max(4000, min(vkbit, 12000))
+            # low floor so a LONG clip's graphic still fits <50MB (the 4000 floor made
+            # a 125s graphic ~62MB → Supabase 413). Short clips still get a high bitrate.
+            vkbit = max(800, min(vkbit, 12000))
             gfx_scale = 0.75 if duration > 55 else 1.0   # 0.75 → exact 810x1440 (both even; H264 needs even dims)
             _body = {"composition": comp, "inputProps": _props, "videoBitrate": f"{vkbit}k"}
             if gfx_scale < 1.0:

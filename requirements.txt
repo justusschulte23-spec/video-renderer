@@ -13,4 +13,3 @@ opencv-python-headless
 numpy
 rembg
 onnxruntime
-mediapipe

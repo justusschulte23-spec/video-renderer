@@ -5596,17 +5596,20 @@ def _append_end_thumbnail(video_path: Path, req: RemotionRenderRequest, job_dir:
         return video_path
 
 
-def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0) -> Path:
+def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0, name: str = "fit.mp4") -> Path:
     """Guarantee the file fits the 50MB ceiling (Supabase bucket + Telegram
-    multipart). Re-encode to a duration-derived bitrate only if it's over."""
+    multipart). Re-encode to a duration-derived bitrate only if it's over. For a
+    long clip it also downscales to 720p wide so the bitrate stays sharp."""
     try:
         if path.stat().st_size / 1e6 <= target_mb:
             return path
         dur = probe_duration(path)
         vbit = int((target_mb * 8 * 1_000_000) / max(dur, 1.0)) - 160_000  # leave room for audio
         vbit = max(1_500_000, vbit)
-        out = job_dir / "fit.mp4"
-        run(["ffmpeg", "-y", "-i", str(path), "-c:v", "libx264", "-b:v", str(vbit),
+        out = job_dir / name
+        # long clip → downscale to 720x1280 so the fewer pixels keep a crisp bitrate
+        scale = ["-vf", "scale=-2:1280"] if dur > 70 else []
+        run(["ffmpeg", "-y", "-i", str(path), *scale, "-c:v", "libx264", "-b:v", str(vbit),
              "-maxrate", str(int(vbit * 1.15)), "-bufsize", str(int(vbit * 2)),
              "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
              "-movflags", "+faststart", str(out)], "fit_size")
@@ -5698,8 +5701,12 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             trimmed, _ = _trim_pipeline(facecam_path, job_dir)
             if trimmed != facecam_path:
                 facecam_path = trimmed
-                face_url = upload_cloudinary(trimmed, f"trimmed_{job_id}")
-                log.info("[REMOTION] trimmed facecam → %s", face_url)
+        # the facecam source (raw or trimmed) may be >50MB on a long clip → compress
+        # it under the Supabase ceiling so remotion can fetch it (the big RAW itself
+        # arrives via the self-hosted bot-api server, not Supabase).
+        facecam_path = _fit_size(facecam_path, job_dir, target_mb=46, name="facecam_fit.mp4")
+        face_url = upload_supabase(facecam_path, f"facecam_{job_id}", folder="uploads")
+        log.info("[REMOTION] facecam source → %s", face_url)
 
         duration = probe_duration(facecam_path)
         # transcribe_audio extracts the audio track first, then tries WhisperX and

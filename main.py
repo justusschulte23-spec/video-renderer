@@ -1,4 +1,3 @@
-import threading
 import os
 import hashlib
 import uuid
@@ -16,8 +15,7 @@ from typing import Optional
 
 import httpx
 import requests
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
@@ -6005,98 +6003,6 @@ def render_status(job_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-# ── Direct upload bypass (Telegram bot getFile caps at 20MB; upload big raws here) ──
-def _client_connector(client_id: str) -> dict:
-    """Telegram {token, chatId} for a client from Supabase clients.connector."""
-    try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients?client_id=eq.{client_id}&select=connector",
-                         headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
-                         timeout=20)
-        c = (r.json() or [{}])[0].get("connector") or {}
-        return c if isinstance(c, dict) else json.loads(c)
-    except Exception as exc:
-        log.warning("[INGEST] connector lookup failed: %s", exc)
-        return {}
-
-
-def _deliver_telegram_video(video_path: Path, client_id: str, caption: str = "Fertig! 🎬") -> None:
-    conn = _client_connector(client_id)
-    token, chat = conn.get("token"), conn.get("chatId")
-    if not token or not chat:
-        log.error("[INGEST] no telegram connector for %s", client_id)
-        return
-    with open(video_path, "rb") as fh:
-        requests.post(f"https://api.telegram.org/bot{token}/sendVideo",
-                      data={"chat_id": chat, "caption": caption, "supports_streaming": "true",
-                            "width": "1080", "height": "1920"},
-                      files={"video": fh}, timeout=600)
-
-
-def _deliver_telegram_msg(client_id: str, text: str) -> None:
-    conn = _client_connector(client_id)
-    token, chat = conn.get("token"), conn.get("chatId")
-    if token and chat:
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": chat, "text": text}, timeout=30)
-
-
-def _ingest_worker(raw_path: Path, client_id: str):
-    job_dir = Path(f"/tmp/ingest_{uuid.uuid4().hex[:8]}")
-    job_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        fc = _fit_size(raw_path, job_dir, target_mb=46, name="ingest_fit.mp4")
-        url = upload_supabase(fc, f"ingest_{uuid.uuid4().hex[:8]}", folder="uploads")
-        req = RemotionRenderRequest(facecam=url, format="talking_head_punches",
-                                    client_id=client_id, hook_text="", trim=True)
-        res = _render_remotion_impl(req)
-        out = job_dir / "deliver.mp4"
-        if res.get("url") and download_file(res["url"], out):
-            _deliver_telegram_video(out, client_id)
-            log.info("[INGEST] delivered to %s", client_id)
-        else:
-            _deliver_telegram_msg(client_id, "Render fertig aber Download fehlgeschlagen.")
-    except Exception as exc:
-        log.exception("[INGEST] failed")
-        _deliver_telegram_msg(client_id, f"Render fehlgeschlagen: {str(exc)[:150]}")
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raw_path.unlink(missing_ok=True)
-
-
-@app.post("/ingest")
-async def ingest(file: UploadFile = File(...), client_id: str = Form("justus")):
-    """Upload a raw clip (up to Supabase's 50MB) — bypasses the Telegram bot's 20MB
-    getFile wall. Renders async + delivers the finished video to the client's chat."""
-    raw = Path(f"/tmp/ingest_raw_{uuid.uuid4().hex[:8]}.mp4")
-    raw.write_bytes(await file.read())
-    mb = raw.stat().st_size / 1e6
-    threading.Thread(target=_ingest_worker, args=(raw, client_id), daemon=True).start()
-    return {"ok": True, "size_mb": round(mb, 1),
-            "msg": "Upload läuft — dein fertiges Video kommt in ~8-11 min in Telegram."}
-
-
-@app.get("/upload", response_class=HTMLResponse)
-def upload_page():
-    return """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Raw hochladen</title>
-<style>body{font-family:-apple-system,sans-serif;background:#09090B;color:#fafafa;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-.c{max-width:420px;width:90%;text-align:center}h1{font-weight:800;letter-spacing:-1px}
-input,button,select{width:100%;padding:16px;margin:8px 0;border-radius:12px;border:1px solid #333;background:#141414;color:#fafafa;font-size:16px;box-sizing:border-box}
-button{background:#8B5CF6;border:0;font-weight:700}#s{margin-top:16px;color:#a1a1aa;min-height:24px}</style>
-<div class=c><h1>🎬 Raw hochladen</h1><p style=color:#a1a1aa>Video rein, Rest macht die Engine. Kommt fertig in Telegram.</p>
-<select id=cid><option value=justus>Justus</option><option value=tim>Tim</option></select>
-<input type=file id=f accept=video/*>
-<button onclick=go()>Hochladen + Rendern</button><div id=s></div></div>
-<script>
-async function go(){const f=document.getElementById('f').files[0];if(!f){s.innerText='Kein Video gewählt.';return}
-const fd=new FormData();fd.append('file',f);fd.append('client_id',document.getElementById('cid').value);
-s.innerText='Lädt hoch ('+(f.size/1e6).toFixed(1)+' MB)...';
-try{const r=await fetch('/ingest',{method:'POST',body:fd});const j=await r.json();
-s.innerText=j.ok?('✅ '+j.msg):('❌ '+(j.error||'Fehler'));}catch(e){s.innerText='❌ '+e}}
-const s=document.getElementById('s');
-</script>"""
 
 @app.get("/debug/storage-test")
 def debug_storage_test():

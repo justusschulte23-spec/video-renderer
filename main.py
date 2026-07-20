@@ -1199,6 +1199,9 @@ COHERENCE_SYS = (
     "- Das erste behaltene Wort nach einem Schnitt muss ein SATZANFANG sein, nicht ein Satz-Mittelstueck.\n"
     "- HOOK IST HEILIG: Der ALLERERSTE gesprochene Satz (die Anfangssekunden) ist der Hook und wird NIE "
     "entfernt, auch wenn er wie ein Anlauf/Wiederholung wirkt. Schneide erst AB dem zweiten Satz.\n"
+    "- IM ZWEIFEL NICHT SCHNEIDEN: Entferne NUR was EINDEUTIG ein doppelter Take/Abbruch ist (derselbe Satz "
+    "zweimal, klarer Versprecher mit Neustart). Lieber ein Wort zu viel behalten als einen echten Satz "
+    "zerschneiden. Konservativ bleiben.\n"
     'OUTPUT NUR JSON: {"remove": [[startIdx, endIdx], ...]} - Indizes inklusive, auf die Wort-Indizes '
     'bezogen, aufsteigend, ohne Ueberlappung. Nichts zu entfernen -> {"remove": []}.'
 )
@@ -5901,7 +5904,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             _out = job_dir / f"final_{_tag}.mp4"
             # "8000€-camera" grade: crisp detail (unsharp) + a lifted pop (eq) so
             # it reads sharp + rich, not dark + soft. Always re-encode so it applies.
-            SHARP = "unsharp=5:5:0.9:5:5:0.0,eq=contrast=1.07:saturation=1.16:brightness=0.03:gamma=1.04"
+            # Subtle, natural cinematic grade — NOT a crunchy over-sharpened HDR
+            # filter. Light unsharp (no halos), gentle contrast, skin stays real.
+            SHARP = "unsharp=3:3:0.35:3:3:0.0,eq=contrast=1.03:saturation=1.05:brightness=0.012"
             vf = f"lut3d={LUT},{SHARP}" if use_lut else SHARP
             run(["ffmpeg", "-y", "-i", str(gfx_path), "-i", str(facecam_path),
                  "-map", "0:v:0", "-map", "1:a:0?", "-vf", vf,

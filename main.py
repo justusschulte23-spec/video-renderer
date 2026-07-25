@@ -471,8 +471,10 @@ class EnrichImageRequest(BaseModel):
 
 class TrimSilenceRequest(BaseModel):
     facecam: str
-    max_gap: float = 0.30   # gaps <= this stay (natural cadence)
-    pad:     float = 0.05   # silence kept on each side of a trimmed gap
+    # 0.30/0.05 hat jede Atempause gefressen und mit nur 50ms Rand die Wortenden
+    # angeschnitten. Es soll geschnitten werden, aber fluessig klingen.
+    max_gap: float = 0.45   # gaps <= this stay (natural cadence)
+    pad:     float = 0.12   # silence kept on each side of a trimmed gap
     smart_cut: bool = True  # phase 0: LLM coherence cut (duplicate takes / false starts)
 
 
@@ -1220,6 +1222,22 @@ COHERENCE_SYS = (
 )
 
 
+def _hook_guard_end(words: list) -> float:
+    """Ende des ERSTEN Satzes, nicht eine feste Sekundenzahl. Ein fixer 3s-Guard
+    schneidet mitten in den Hook, wenn der Satz laenger ist — und genau das ist
+    passiert ('...und auf einmal | war meine Kampagne weg' → Pointe weg).
+    Satzgrenze = erste echte Pause nach mindestens 6 Woertern."""
+    if not words:
+        return HOOK_GUARD_S
+    for i in range(len(words) - 1):
+        if i < 5:
+            continue
+        gap = float(words[i + 1]["start"]) - float(words[i]["end"])
+        if gap >= 0.35:
+            return max(HOOK_GUARD_S, min(12.0, float(words[i]["end"]) + 0.15))
+    return max(HOOK_GUARD_S, min(12.0, float(words[-1]["end"])))
+
+
 def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
     """LLM analysiert das Wort-Transkript und entfernt doppelte Takes / Fehlstarts.
     Returns (keeps, n_removed_words). Faellt sicher auf 'alles behalten' zurueck."""
@@ -1235,6 +1253,7 @@ def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
         log.warning("[SMART] coherence analysis failed: %s", exc)
         return [(0.0, duration)], 0
     n = len(words)
+    guard = _hook_guard_end(words)
     removes, removed_words = [], 0
     for pair in remove:
         try:
@@ -1244,19 +1263,30 @@ def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
         a, b = max(0, a), min(n - 1, b)
         if b < a:
             continue
+        # HOOK GUARD: der erste Satz ist unantastbar. Frueher wurde ein
+        # ueberlappender Schnitt auf den Guard GEKAPPT — das garantiert einen
+        # Schnitt mitten im Hooksatz. Jetzt faellt die Entfernung ganz weg.
+        if float(words[a]["start"]) < guard:
+            log.info("[SMART] hook-guard: removal %d-%d verworfen (Hook bis %.2fs)", a, b, guard)
+            continue
+        # Nur an echten Pausen schneiden. Liegt eine Kante mitten im Redefluss,
+        # hoert man den Schnitt als abgehackten Halbsatz — dann lieber nicht.
+        gap_vor  = float(words[a]["start"]) - float(words[a - 1]["end"]) if a > 0 else 99.0
+        gap_nach = float(words[b + 1]["start"]) - float(words[b]["end"]) if b < n - 1 else 99.0
+        if gap_vor < 0.18 or gap_nach < 0.18:
+            log.info("[SMART] removal %d-%d verworfen (keine Pause: vor %.2fs, nach %.2fs)",
+                     a, b, gap_vor, gap_nach)
+            continue
         s = max(0.0, float(words[a]["start"]) - pad)
         e = min(duration, float(words[b]["end"]) + pad)
-        # HOOK GUARD: never let a removal reach into the opening hook window,
-        # no matter what the LLM proposed. Clip the range to start at the guard;
-        # if that leaves nothing, drop the removal entirely.
-        if s < HOOK_GUARD_S:
-            if e <= HOOK_GUARD_S:
-                log.info("[SMART] hook-guard: dropped removal %.2f-%.2fs (inside hook)", s, e)
-                continue
-            log.info("[SMART] hook-guard: clipped removal start %.2f→%.2fs", s, HOOK_GUARD_S)
-            s = HOOK_GUARD_S
         if e > s:
             removes.append((s, e)); removed_words += (b - a + 1)
+    # Reissleine: wer ein Viertel des Textes wegwirft, hat den Take nicht
+    # verstanden. Dann lieber gar kein Phase-0-Schnitt.
+    if removed_words > 0.25 * n:
+        log.warning("[SMART] %d/%d Woerter vorgeschlagen (>25%%) — Phase 0 komplett verworfen",
+                    removed_words, n)
+        return [(0.0, duration)], 0
     if not removes:
         return [(0.0, duration)], 0
     removes.sort()

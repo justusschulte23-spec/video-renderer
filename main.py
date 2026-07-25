@@ -1145,7 +1145,7 @@ def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08
             return False
         off = max(0.0, cum - dd)
         parts.append(f"[{cur_v}][v{i}]xfade=transition=fade:duration={dd:.3f}:offset={off:.3f}[vx{i}];")
-        parts.append(f"[{cur_a}][a{i}]acrossfade=d={dd:.3f}[ax{i}];")
+        parts.append(f"[{cur_a}][a{i}]acrossfade=d={dd:.3f}:c1=tri:c2=tri[ax{i}];")
         cur_v, cur_a = f"vx{i}", f"ax{i}"
         cum = cum + lengths[i] - dd
     cmd = [
@@ -5620,6 +5620,11 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
         "ein Untertitel UNTER dem Kinn ist KEIN Fehler. "
         "(2) Ein Element ist am Bildrand HART abgeschnitten sodass Sinn verloren geht. "
         "(3) Zwei Text-Elemente liegen SO uebereinander dass beide unlesbar werden (blosse Naehe ist ok). "
+        "(4) PCI-Budget: mehr als ZWEI UI-Elemente gleichzeitig im Bild (Karten, Overlays, Lower-Thirds, "
+        "Stat-Blocks, Flow-Graphen). Untertitel zaehlen NICHT mit. Mehr als zwei -> ok:false. "
+        "(5) Lesbarkeit unter einer Sekunde: ein Element, dessen Bedeutung sich nicht sofort erschliesst. "
+        "Das NUR im issue-Text melden mit Praefix 'HINWEIS:' und ok:true lassen — das ist Geschmack, "
+        "keine Maschinenentscheidung. "
         "Im Zweifel ok:true. Antworte NUR mit JSON: "
         "{\"frames\":[{\"ok\":true,\"issue\":\"\"}],\"overall\":\"OK\"|\"ISSUES\"} "
         "— ein frames-Eintrag pro Bild, gleiche Reihenfolge."
@@ -5758,6 +5763,46 @@ def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0, name: str = "f
     return path
 
 
+MUSIC_SELECTOR_URL = os.environ.get(
+    "MUSIC_SELECTOR_URL", "https://ad-music-selector-production.up.railway.app/select-music")
+
+
+def _pick_music(client_id: str, briefing: dict, duration: float) -> str:
+    """Waehlt das Musikbett aus der Bibliothek des Kunden (clients.music_tracks).
+    Ohne Bibliothek gibt es kein Bett — es wird keine erfunden. Die Auswahl macht
+    der ad-music-selector (Gemini hoert die Previews)."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY and client_id):
+        return ""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients", timeout=20,
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+                         params={"client_id": f"eq.{client_id}", "select": "music_tracks"})
+        rows = r.json() if r.ok else []
+        tracks = (rows[0].get("music_tracks") if rows else None) or []
+    except Exception as exc:
+        log.warning("[MUSIC] Bibliothek nicht lesbar: %s", exc)
+        return ""
+    if not tracks:
+        log.info("[MUSIC] keine Tracks fuer %s hinterlegt — Render laeuft ohne Bett", client_id)
+        return ""
+    b = briefing or {}
+    try:
+        sel = requests.post(MUSIC_SELECTOR_URL, timeout=180, json={
+            "tracks": tracks[:8],
+            "adCtx": {"stil": b.get("hook_formel", ""), "mood": "",
+                      "hook_audio": b.get("hook", ""),
+                      "zielgruppe": b.get("avatar_pain", "")}})
+        sel.raise_for_status()
+        data = sel.json() or {}
+        url = data.get("best_track_url") or data.get("url") or ""
+        log.info("[MUSIC] gewaehlt: %s", url[:80] or "nichts")
+        return url
+    except Exception as exc:
+        log.warning("[MUSIC] Auswahl fehlgeschlagen: %s", exc)
+        return ""
+
+
 def _add_music_ducked(video: Path, music_url: str, job_dir: Path) -> Path:
     """§4 mix a background music bed UNDER the voice with sidechain ducking — the
     music drops ~8dB while the speaker talks, breathes back in the pauses. Returns
@@ -5768,9 +5813,9 @@ def _add_music_ducked(video: Path, music_url: str, job_dir: Path) -> Path:
             return video
         out = job_dir / "with_music.mp4"
         filt = (
-            "[1:a]volume=0.30,aloop=loop=-1:size=2000000000[m];"
+            "[1:a]volume=0.18,aloop=loop=-1:size=2000000000[m];"
             "[0:a]asplit=2[v0][key];"
-            "[m][key]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[md];"
+            "[m][key]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=250[md];"
             "[v0][md]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]"
         )
         run(["ffmpeg", "-y", "-i", str(video), "-i", str(mus), "-filter_complex", filt,
@@ -6124,9 +6169,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
 
-        # §4 background music bed, sidechain-ducked under the voice
-        if req.music_url:
-            out = _add_music_ducked(out, req.music_url, job_dir)
+        # §4 background music bed, sidechain-ducked under the voice. Ohne
+        # explizite URL waehlt der Selector aus der Bibliothek des Kunden.
+        _music = req.music_url or _pick_music(req.client_id or "", req.briefing or {}, duration)
+        if _music:
+            out = _add_music_ducked(out, _music, job_dir)
 
         # thumbnail end-card (0.2s freeze at the very end, after everything else)
         if req.thumbnail:

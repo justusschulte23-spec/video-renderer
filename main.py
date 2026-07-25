@@ -5061,38 +5061,56 @@ def _find_phrase_time(words: list, phrase: str, after: float = 0.0) -> Optional[
 
 
 VISUAL_SCRIPT_SYS = (
-    "Du bist VISUAL-SCRIPT-AUTOR fuer einen 9:16 Talking-Head-Clip (Gesicht mittig, NIE verdecken). "
-    "Du bekommst die SKRIPT-ABSICHT (Argument-Struktur: hook/problem/value/payoff je mit Text). "
-    "Entwirf den GROBEN visuellen Ton als Beat-Liste — WAS an welchem Argument-Moment gezeigt wird. "
-    "Den GENAUEN Zeitpunkt bestimmt spaeter der echte Transkript-Abgleich, DU lieferst nur den ANKER: "
-    "eine kurze WOERTLICHE Phrase (2-5 Woerter) aus dem Skript-Text, bei der der Beat landen soll.\n"
-    "Beat-Typen:\n"
-    "- hook_title: DER Hook oben, anchor='__hook__'. content = 3-7 Wort Hook.\n"
-    "- concept_card: Premium-Textkarte fuer EINE Kernaussage. content={kicker(1-2 Wort Label),headline(2-5 Wort)}.\n"
-    "- flow: Node-Graph NUR wenn ein ABLAUF/Pipeline/'A wird zu B' beschrieben wird. content={nodes[2-4 kurze],chips[0-2 z.B. 'POST /infer']}.\n"
-    "- stat: NUR echte Metrik mit Einheit. content={value('90%'/'3x'/'40 Std'),label}.\n"
-    "- lower_third: Definition/Label unten. content={title(2-4 Wort),subtitle(kurz)}.\n"
-    "- cta: DAS eine CTA-Wort am Schluss wenn zum Handeln aufgerufen wird. content='ENGINE'.\n"
-    "- scene: FULL-SCREEN CUTAWAY — der stärkste Move. Bei einem wichtigen Value-/Erklär-Moment wird KOMPLETT "
-    "vom Gesicht weg auf eine saubere on-brand Erklär-Szene geschnitten (dann zurück). Nutze das für konkrete "
-    "Konzepte/Listen/Zahlen, 2-3 pro Video, je 2-4s. content={scene_type: 'card'|'statement'|'stat'|'quote'|'image', "
-    "title, subtitle?, lines?(2-4 kurze Punkte für card), value?+label?(für stat), concept?(für image)}. "
-    "'card'=App-Fenster mit Titel+Punkten, 'statement'=EINE große Aussage, 'stat'=EINE große Zahl+label, "
-    "'quote'=zugespitztes Zitat/Take (title=Zitat, subtitle=Quelle), 'image'=PHOTOREALE gebrandete Szene "
-    "(concept=3-6 WÖRTER ENGLISCH was gezeigt wird, EIN Hero-Objekt/Szene, KEIN Text/Gesicht; title=optionales kurzes Label). "
-    "Nutze 'image' fuer bildhafte/greifbare Momente. VARIIERE den scene_type — NIE 2x denselben hintereinander. "
-    "anchor = Phrase wo der Cutaway sitzt.\n"
-    "- wash: Farb-Wash auf emotionalem Beat. content={color: red|amethyst|cyan|warm|blue}.\n"
-    "REGELN: PFLICHT sind MINDESTENS 2, besser 3 'scene'-Cutaways an den staerksten Erklaer-/Value-Momenten "
-    "(das ist der premium Look, das Rueckgrat) — plane die ZUERST. Dazu Hook-Title + CTA + sparsam overlays. "
-    "~1 Beat pro 4-6s, das Gesicht muss atmen. Jeder anchor MUSS ein KONKRETES, SELTENES Wort/Phrase sein das "
-    "IM WORT-TRANSKRIPT WOERTLICH steht (kopier es exakt daraus, KEIN Fuellwort wie 'und/das/ich' — sonst wird "
-    "der Beat verworfen). hold_s = grobe Standzeit (2-6). NUR JSON:\n"
-    '{"beats":[{"type":"hook_title","content":"Dein Agent klingt nach ChatGPT","anchor":"__hook__","hold_s":2},'
-    '{"type":"scene","content":{"scene_type":"card","title":"3 Schritte","lines":["Prompt sauber bauen","Tool anbinden","Output prüfen"]},"anchor":"drei Schritte","hold_s":3.5},'
-    '{"type":"scene","content":{"scene_type":"image","concept":"glowing AI phone agent on a desk","title":"24/7 erreichbar"},"anchor":"rund um die Uhr","hold_s":3},'
-    '{"type":"flow","content":{"nodes":["Prompt","Agent","Antwort"],"chips":["POST /infer","200 OK"]},"anchor":"Prompt wird zu","hold_s":6},'
-    '{"type":"cta","content":"ENGINE","anchor":"kommentier Engine","hold_s":2.5}]}'
+    "Du bist Bildregisseur fuer ein 9:16-Video. Du bekommst das Skript in fuenf "
+    "Bloecken und das wortgenaue Transkript der echten Aufnahme.\n"
+    "EISERNE REGEL: Das Transkript ist die Wahrheit. Er hat nicht wortwoertlich das "
+    "gesagt, was im Skript steht. Ordne die Bloecke den tatsaechlich gesprochenen "
+    "Stellen zu. Findest du einen Block nicht wieder, lass ihn visuell leer.\n"
+    "DEINE AUFGABE: EIN visueller Zustand pro Block. Nicht mehr. Du platzierst keine "
+    "Effekte, du triffst Regieentscheidungen.\n"
+    "PCI — VERBINDLICH, NICHT VERHANDELBAR\n"
+    "P Precision   Maximal 2 Elemente gleichzeitig im Bild. Weissraum ist Koenig. "
+    "Keine Partikel, kein Flimmern, keine Deko.\n"
+    "C Cleverness  Niemals Wort-fuer-Wort-Bebilderung. Kein Haus-Icon bei 'Haus'. Du "
+    "uebersetzt die BEDEUTUNG einer Aussage in ein UI-Primitive: concept_card, stat, "
+    "flow, lower_third, scene. Wenn dir nur ein illustratives Bild einfaellt: lass es weg.\n"
+    "I Intuitive   Unter 100ms erfassbar. Wer eine Sekunde hinsehen muss, um es zu "
+    "verstehen, sieht das Falsche.\n"
+    "DIE FUENF ZUSTAENDE\n"
+    "HOOK     Vollbild. Titel ein. Kein zweites Element. Der Satz muss allein tragen.\n"
+    "SZENE    Vollbild. Hoechstens EIN Element, seitlich, nie ueber dem Gesicht. Nur "
+    "wenn eine Zahl, ein Name oder ein Produkt faellt.\n"
+    "WENDUNG  Dein einziger grosser Wechsel. Layout darf kippen. Maximal 2 Elemente. "
+    "Das ist der teuerste Moment im Video — verschiess ihn nicht woanders.\n"
+    "HALTUNG  Vollbild. NICHTS. Kein Overlay, keine Karte. Das ist eine Anweisung, "
+    "keine Auslassung. Die Stille hier ist der Grund, warum die WENDUNG davor knallt.\n"
+    "CTA      Ein Wort, gross, kurz. Sonst nichts.\n"
+    "RHYTHMUS: Zwischen zwei Zustaenden mindestens 4 Sekunden. Gleichmaessige "
+    "Verteilung ist verboten — Wechsel liegen dort, wo der Inhalt kippt, nicht im Takt.\n"
+    "BEAT-TYPEN (typ):\n"
+    "- hook_title: der Hook oben, anchor='__hook__', content = 3-7 Woerter.\n"
+    "- scene: FULL-SCREEN Cutaway, der staerkste Move. content={scene_type: "
+    "'card'|'statement'|'stat'|'quote'|'image', title, subtitle?, lines?(2-4 kurz), "
+    "value?+label?, concept?(3-6 WOERTER ENGLISCH, ein Hero-Objekt, kein Text/Gesicht)}.\n"
+    "- concept_card: Textkarte fuer EINE Kernaussage. content={kicker,headline}.\n"
+    "- stat: NUR echte Metrik mit Einheit. content={value,label}.\n"
+    "- flow: Node-Graph NUR bei einem echten Ablauf. content={nodes[2-4],chips[0-2]}.\n"
+    "- lower_third: Label unten. content={title,subtitle}.\n"
+    "- cta: das eine CTA-Wort am Schluss. content='ENGINE'.\n"
+    "- none: kein Bild. Ein gueltiges und oft das beste Ergebnis.\n"
+    "ANKER: jeder Beat braucht anchor = eine WOERTLICHE, seltene Phrase (2-5 Woerter) "
+    "aus dem WORT-TRANSKRIPT, kopiert, kein Fuellwort wie 'und/das/ich'. Dort landet "
+    "der Beat. Findest du keine passende Stelle: typ 'none'.\n"
+    "block = hook|szene|wendung|haltung|cta. prio 1-5 (5 = darf nie fliegen). "
+    "hold_s = Standzeit 2-6.\n"
+    "NUR JSON:\n"
+    '{"beats":['
+    '{"block":"hook","typ":"hook_title","content":"40 Euro, Kampagne weg","anchor":"__hook__","prio":5,"hold_s":2},'
+    '{"block":"szene","typ":"stat","content":{"value":"40 EUR","label":"pro Monat"},"anchor":"Starter-Abo","prio":3,"hold_s":3},'
+    '{"block":"wendung","typ":"scene","content":{"scene_type":"statement","title":"Selbst gebaut","subtitle":"in zwei Abenden"},"anchor":"selber bauen","prio":5,"hold_s":3.5},'
+    '{"block":"haltung","typ":"none","content":null,"anchor":"","prio":1,"hold_s":0},'
+    '{"block":"cta","typ":"cta","content":"ABO","anchor":"Kommentare","prio":4,"hold_s":2.5}'
+    '],"leer_gelassen":["haltung: bewusst still"]}'
 )
 
 
@@ -5104,11 +5122,20 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
     # that dropped prod into the dumb fallback). Anchors always come from the real
     # transcript below, so they always resolve.
     transcript = " ".join(str(w.get("word", "")) for w in (words or [])).strip()
-    segs = (briefing or {}).get("segments", []) or []
-    if segs:
-        intent = ""
-        for s in segs:
-            intent += f"[{s.get('rolle') or s.get('role') or '?'}] {s.get('text','')[:300]}\n"
+    b = briefing or {}
+    bloecke = [(k, str(b.get(k) or "").strip())
+               for k in ("hook", "szene", "wendung", "haltung", "cta")]
+    if any(t for _, t in bloecke):
+        intent = "".join(f"[{k.upper()}] {t[:400]}\n" for k, t in bloecke if t)
+        src = ("SKRIPT IN FUENF BLOECKEN (das ist die visuelle Struktur — "
+               "ein Zustand pro Block):\n" + intent)
+        if b.get("hook_formel"):
+            src += f"HOOK-FORMEL: {b['hook_formel']}\n"
+        if b.get("avatar_pain"):
+            src += f"SCHMERZ DER ZIELGRUPPE: {str(b['avatar_pain'])[:200]}\n"
+    elif (briefing or {}).get("segments"):
+        intent = "".join(f"[{sg.get('rolle') or sg.get('role') or '?'}] {sg.get('text','')[:300]}\n"
+                         for sg in briefing["segments"])
         src = "SKRIPT-ABSICHT (Argument-Struktur):\n" + intent
     elif transcript:
         src = "TRANSKRIPT (was der Sprecher sagt, plane die Visuals dazu):\n" + transcript[:2600]
@@ -5135,6 +5162,68 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
     return {"beats": beats or [], "_diag": f"ok:{len(beats or [])}"}
 
 
+                                                                                  # noqa
+# Maximal zwei Elemente gleichzeitig, mindestens vier Sekunden zwischen zwei
+# Zustaenden. Der Prompt allein haelt das nicht — sobald ein Modell zwoelf gute
+# Ideen hat, legt es sie uebereinander.
+PCI_MAX_GLEICHZEITIG = 2
+PCI_MIN_ABSTAND_S = 4.0
+# Prioritaet nach Gewicht des Elements: was die Aussage traegt, bleibt.
+PCI_PRIO = {"scene": 5, "flow": 4, "lower_third": 3, "overlay": 2, "stat": 2}
+
+
+def _pci_gate(dp: dict, duration: float) -> dict:
+    """Entzerrt die gemappten Beats: hoechstens zwei gleichzeitig, Mindestabstand
+    zwischen den Einsaetzen. Captions, Hook-Titel und CTA zaehlen nicht mit —
+    die sind Text, keine Flaeche. Wirft das Gate regelmaessig die Haelfte weg,
+    ist der Prompt kaputt und nicht das Gate: deshalb das Logging."""
+    items = []
+    for key, kind in (("scenes", "scene"), ("flowDiagram", "flow"),
+                      ("lowerThirds", "lower_third"), ("overlays", "overlay"),
+                      ("statPops", "stat")):
+        val = dp.get(key)
+        if not val:
+            continue
+        for el in (val if isinstance(val, list) else [val]):
+            start = el.get("startFrame", el.get("frame"))
+            if start is None:
+                continue
+            end = el.get("endFrame", start + int(2.0 * FPS))
+            items.append({"key": key, "kind": kind, "el": el,
+                          "start": int(start), "end": int(end),
+                          "prio": PCI_PRIO.get(kind, 1)})
+    if not items:
+        return dp
+    rein = len(items)
+    items.sort(key=lambda x: (x["start"], -x["prio"]))
+
+    behalten = []
+    for it in items:
+        parallel = [b for b in behalten if it["start"] < b["end"] and it["end"] > b["start"]]
+        if len(parallel) >= PCI_MAX_GLEICHZEITIG:
+            schwaechster = min(parallel, key=lambda b: b["prio"])
+            if it["prio"] <= schwaechster["prio"]:
+                continue
+            behalten.remove(schwaechster)
+        # Mindestabstand: zwei Einsaetze duerfen nicht aufeinander kleben
+        if behalten and (it["start"] - behalten[-1]["start"]) / FPS < PCI_MIN_ABSTAND_S:
+            if it["prio"] <= behalten[-1]["prio"]:
+                continue
+            behalten.pop()
+        behalten.append(it)
+
+    out = dict(dp)
+    for key in ("scenes", "lowerThirds", "overlays", "statPops"):
+        if isinstance(dp.get(key), list):
+            keep = [b["el"] for b in behalten if b["key"] == key]
+            out[key] = keep
+    if dp.get("flowDiagram") and not any(b["key"] == "flowDiagram" for b in behalten):
+        out["flowDiagram"] = None
+    log.info("[PCI] %d Elemente rein, %d raus (max %d gleichzeitig, min %.1fs Abstand)",
+             rein, len(behalten), PCI_MAX_GLEICHZEITIG, PCI_MIN_ABSTAND_S)
+    return out
+
+
 def _map_visual_script(beats: list, words: list, duration: float,
                        hook_end_s: float, face: dict = None) -> dict:
     """Stage 2 — the DIRECTOR maps each anchored beat onto the ACTUAL transcript:
@@ -5155,7 +5244,7 @@ def _map_visual_script(beats: list, words: list, duration: float,
 
     ci = 0
     for beat in beats:
-        typ = str(beat.get("type", "")).strip()
+        typ = str(beat.get("typ") or beat.get("type") or "").strip()
         content = beat.get("content")
         anchor = str(beat.get("anchor", "")).strip()
         hold = float(beat.get("hold_s") or 3.0)
@@ -5839,6 +5928,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 visual_diag["vs_raw"] = (vs or {}).get("_diag") if isinstance(vs, dict) else None
                 if beats:
                     dp = _map_visual_script(beats, words, duration, hook_end_s, face)
+                    # PCI: entzerren BEVOR gesnappt wird — sonst rasten zwei
+                    # Elemente auf denselben Transienten und stehen doch zusammen.
+                    dp = _pci_gate(dp, duration)
                     hook_override = dp.get("hookTitle")
                     _tc = {}
                     for _b in beats:

@@ -5692,6 +5692,22 @@ def _gen_scene_image(concept: str, client_id: str, job_dir: Path) -> str:
         return ""
 
 
+def _log_run(client_id: str, tool: str, status: str, detail: dict) -> None:
+    """Ein Eintrag in run_log. Fehlschlaege, die still weiterlaufen, merkt sonst
+    niemand — und ein gerissener Durchstich sieht aus wie ein schwaches Modell."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/run_log", timeout=15,
+                      headers={"apikey": SUPABASE_SERVICE_KEY,
+                               "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                               "Content-Type": "application/json"},
+                      json=[{"client_id": client_id or "unknown", "tool": tool,
+                             "status": status, "detail": detail}])
+    except Exception as exc:
+        log.warning("[RUNLOG] %s", exc)
+
+
 def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     """Primary render path: build props from facecam (WhisperX captions + impacts),
     call the Remotion service for the format's composition, then ffmpeg-mux the
@@ -5704,6 +5720,14 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
     job_dir = Path(f"/tmp/remotion_{job_id}")
     job_dir.mkdir(parents=True, exist_ok=True)
     log.info("[REMOTION] START format=%s comp=%s", req.format, comp)
+    # Ohne Briefing erfindet die Regie die Bildsprache aus dem Transkript. Das ist
+    # ein Notbetrieb, kein Normalzustand — laut protokollieren, sonst faellt der
+    # gerissene Durchstich nie auf.
+    if not req.briefing:
+        log.warning("[REMOTION] render_ohne_briefing — Regie raet aus dem Transkript")
+        _log_run(req.client_id or "", "render-remotion", "warn",
+                 {"grund": "render_ohne_briefing", "format": req.format,
+                  "hook_text": bool(req.hook_text)})
     try:
         facecam_path = job_dir / "facecam.mp4"
         if not download_file(req.facecam, facecam_path):
@@ -5848,6 +5872,18 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # explicit request override (manual test / n8n) wins over the director
             flow_diagram = req.flow_diagram or flow_diagram
             cta_word = req.cta_word or cta_word
+            # CTA aus dem Skript: ein Wort, gross, am Ende. Nur wenn die Regie
+            # selbst keins gesetzt hat — das Skript kennt den Abbinder, das
+            # Transkript-Raten nicht.
+            if not cta_word and (req.briefing or {}).get("cta"):
+                _cw = re.sub(r"[^\wÄÖÜäöüß]", "",
+                             str(req.briefing["cta"]).strip().split()[0] if
+                             str(req.briefing["cta"]).strip() else "")
+                _start = outro_start_f or max(0, int((duration - 2.2) * FPS))
+                if _cw:
+                    cta_word = {"word": _cw.upper()[:14],
+                                "startFrame": _start,
+                                "endFrame": int(duration * FPS)}
             scenes_layer = req.scenes if req.scenes is not None else scenes_layer
             # generate photoreal on-brand images for 'image' scene cutaways
             for _sc in (scenes_layer or []):

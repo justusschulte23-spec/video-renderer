@@ -475,7 +475,9 @@ class TrimSilenceRequest(BaseModel):
     # angeschnitten. Es soll geschnitten werden, aber fluessig klingen.
     max_gap: float = 0.45   # gaps <= this stay (natural cadence)
     pad:     float = 0.12   # silence kept on each side of a trimmed gap
-    smart_cut: bool = True  # phase 0: LLM coherence cut (duplicate takes / false starts)
+    # AUS. Phase 0 entfernt gesprochene Woerter und hat dabei die Pointe des Hooks
+    # gefressen. Der Trimmer schneidet Stille, er redigiert nicht.
+    smart_cut: bool = False  # phase 0: LLM coherence cut (duplicate takes / false starts)
 
 
 class ImageRequest(BaseModel):
@@ -6150,7 +6152,7 @@ async def enrich_image_prompt(req: EnrichImageRequest):
             result["error"] = str(exc)
     return result
 
-def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = True) -> tuple:
+def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False) -> tuple:
     """3-phase auto-cut. Returns (path, n_fillers); path is `src` if nothing was cut.
 
     Phase 0 drops repeated takes and false starts (LLM over a disfluency-preserving
@@ -6230,7 +6232,7 @@ async def trim_silence(req: TrimSilenceRequest):
             raise HTTPException(status_code=500, detail="facecam download failed")
         orig_dur = probe_duration(src)
 
-        current, n_fillers = _trim_pipeline(src, job_dir, getattr(req, "smart_cut", True))
+        current, n_fillers = _trim_pipeline(src, job_dir, getattr(req, "smart_cut", False))
 
         # ── result ────────────────────────────────────────────────────────────
         if current == src:

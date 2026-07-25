@@ -5137,7 +5137,17 @@ WAS KEIN ANKER IST
 - Konkrete Substantive. "Depot", "Handy", "Kunde" sind schon Dinge.
   Ein Bild vom Ding ist keine Metapher, das ist Illustration.
 - Wörter ohne körperliche Wurzel: "Struktur", "Möglichkeit", "System"
+- Blasse Allerweltsverben. "packen", "nehmen", "machen", "schaffen",
+  "haben", "geben", "gehen" sind KEINE Anker. Sie haben zwar eine
+  körperliche Bedeutung, aber keine, die ein bestimmtes Bild erzwingt.
 - Füllwörter und Verstärker
+
+"traegt":"hoch" vergibst du NUR, wenn die körperliche Ursprungsbedeutung
+so eindeutig ist, dass sie einen konkreten Vorgang erzwingt — Reibung,
+ein Haken, eine Lücke, ein Riss. Im Zweifel "mittel".
+
+NULL ANKER IST EIN GUELTIGES ERGEBNIS. Fuell nicht auf, nur damit
+etwas dasteht. Lieber leer als beliebig.
 
 WIE VIELE
 Ein 50-Sekunden-Video hat 2 bis 4 Anker. Nicht mehr.
@@ -5189,6 +5199,56 @@ AUSGABE — nur JSON:
 VERB_LISTE = {"rollen", "abtragen", "füllen", "leerlaufen", "spalten", "verbinden",
               "trennen", "stapeln", "zerbrechen", "verformen", "wachsen", "kippen"}
 
+# Zweiter Call, der die Ideen NICHT selbst erzeugt hat. Ein Modell, das seine
+# eigenen Einfaelle benotet, benotet sie gut — deshalb Rangfolge statt Note.
+RANG_SYS = """Du bekommst drei Bilder für ein Wort. Du hast sie nicht erfunden.
+
+Ordne sie danach, wie NAHELIEGEND sie sind: Welches würde jedem sofort
+einfallen, wenn er das Wort hört? Das ist Platz 1 der naheliegenden.
+Welches ist überraschend, aber sofort verständlich, sobald man es sieht?
+
+Ein Bild, das man erklären muss, ist nicht überraschend — es ist daneben.
+Ein Bild, das man schon hundertmal gesehen hat, ist naheliegend, auch wenn
+es gut gemacht ist.
+
+AUSGABE — nur JSON, Indizes der Eingabe:
+{ "von_naheliegend_nach_ueberraschend": [0,2,1],
+  "begruendung": "ein Satz, warum das letzte das stärkste ist" }"""
+
+# Bilder, die jeder schon hundertmal gesehen hat. Der Prompt allein haelt sie
+# nicht: das Modell hat den Schneeball trotz Gegenbeispiel mit 5 bewertet.
+ANTI_BLOCKLIST = ["schneeball", "marionette", "glühbirne", "gluehbirne",
+                  "hamsterrad", "hamster im rad", "zug fährt", "zug faehrt",
+                  "sisyphos", "brennende geldschein", "geldschein brennt",
+                  "brennender geldschein", "puzzleteil", "eisberg"]
+
+
+def _blockiert(bild: str) -> str:
+    b = str(bild or "").lower()
+    for w in ANTI_BLOCKLIST:
+        if w in b:
+            return w
+    return ""
+
+
+def _rang(wort: str, ideen: list) -> list:
+    """Gibt die Reihenfolge von naheliegend nach ueberraschend zurueck."""
+    if len(ideen) < 2:
+        return list(range(len(ideen)))
+    liste = "\n".join(f"{i}: {x.get('bild','')}" for i, x in enumerate(ideen))
+    try:
+        raw = call_openrouter(RANG_SYS, f"WORT: {wort}\n\n{liste}",
+                              model="anthropic/claude-sonnet-4.5", max_tokens=300)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        o = json.loads(m.group()) if m else {}
+        order = [int(i) for i in o.get("von_naheliegend_nach_ueberraschend", [])
+                 if isinstance(i, (int, float)) and 0 <= int(i) < len(ideen)]
+        order += [i for i in range(len(ideen)) if i not in order]
+        return order
+    except Exception as exc:
+        log.warning("[META] Rang-Call fehlgeschlagen: %s", exc)
+        return list(range(len(ideen)))
+
 
 def _few_shot_metaphern() -> str:
     """8 Positive + 3 Anti, rotierend. Die Seeds bleiben immer im Topf — fuettert
@@ -5236,9 +5296,12 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
         log.warning("[META] Anker-Pass fehlgeschlagen: %s", exc)
         return {"anker": [], "konzepte": [], "_diag": f"anker:{exc}"}
 
-    stark = [a for a in anker if str(a.get("traegt", "")).lower() == "hoch"][:max_anker]
+    # Ankerzahl skaliert mit der Textmenge: ein kurzes Transkript hat nicht
+    # vier Bilder in sich, egal wie willig das Modell ist.
+    budget = min(max_anker, max(0, len(words) // 150))
+    stark = [a for a in anker if str(a.get("traegt", "")).lower() == "hoch"][:budget]
     shots = _few_shot_metaphern()
-    konzepte, verworfen = [], []
+    konzepte, verworfen, blocks = [], [], []
     for a in stark:
         i = int(a.get("wort_index") or 0)
         satz = " ".join(str(w.get("word", "")) for w in words[max(0, i - 12):i + 12])
@@ -5253,13 +5316,32 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
             log.warning("[META] Entfaltung '%s' fehlgeschlagen: %s", a.get("wort"), exc)
             continue
         ideen = k.get("ideen") or []
-        best = max([int(i.get("score") or 0) for i in ideen], default=0)
         verb_ok = str(k.get("verb", "")).strip().lower() in VERB_LISTE
-        if k.get("kein_bild") is True or best < 4 or not verb_ok:
-            verworfen.append({"wort": a.get("wort"), "bester_score": best,
-                              "verb": k.get("verb"), "verb_bekannt": verb_ok,
+        if k.get("kein_bild") is True or not ideen or not verb_ok:
+            verworfen.append({"wort": a.get("wort"), "verb": k.get("verb"),
+                              "verb_bekannt": verb_ok,
                               "kein_bild": k.get("kein_bild") is True})
             continue
+        # Fremdbewertung: Rangfolge statt Selbstnote. Das naheliegendste fliegt.
+        order = _rang(a.get("wort", ""), ideen)
+        kandidaten = list(reversed(order))[:-1] if len(order) > 1 else order
+        gewaehlt = None
+        for ci in kandidaten:
+            treffer = _blockiert((ideen[ci] or {}).get("bild", ""))
+            if treffer:
+                blocks.append({"anker": a.get("wort"), "begriff": treffer,
+                               "bild": (ideen[ci] or {}).get("bild", "")})
+                _log_run("", "metaphern", "warn",
+                         {"grund": "anti_blocklist", "anker": a.get("wort"),
+                          "begriff": treffer, "bild": (ideen[ci] or {}).get("bild", "")})
+                continue
+            gewaehlt = ci
+            break
+        if gewaehlt is None:
+            verworfen.append({"wort": a.get("wort"), "grund": "alle Ideen geblockt"})
+            continue
+        k["gewaehlt"] = gewaehlt
+        k["rangfolge_naheliegend_zuerst"] = order
         k["wort"] = a.get("wort")
         k["wort_index"] = i
         k["zeit_s"] = round(float(words[i].get("start", 0.0)), 2) if i < len(words) else None
@@ -5267,8 +5349,10 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
         log.info("[META] '%s' → %s (%s, asset_typ=%s)", a.get("wort"),
                  (ideen[int(k.get('gewaehlt') or 0)] or {}).get("bild", "")[:60]
                  if ideen else "", k.get("verb"), k.get("asset_typ"))
-    return {"anker": anker, "stark": len(stark), "konzepte": konzepte,
-            "verworfen": verworfen, "_diag": f"ok:{len(konzepte)}"}
+    return {"anker": anker, "budget": budget, "stark": len(stark),
+            "konzepte": konzepte, "verworfen": verworfen,
+            "blocklist_treffer": blocks,
+            "_diag": f"ok:{len(konzepte)} blocked:{len(blocks)}"}
 
 
 class MetaphernRequest(BaseModel):

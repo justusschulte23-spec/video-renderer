@@ -5121,6 +5121,184 @@ VISUAL_SCRIPT_SYS = (
 )
 
 
+ANKER_SYS = """Du suchst in einem gesprochenen Transkript nach Wörtern, unter denen
+ein Bild liegt.
+
+WAS EIN ANKER IST
+Ein Wort oder eine Wendung, die abstrakt gemeint ist, aber eine
+körperliche Ursprungsbedeutung hat.
+  "Grind"            → mahlen, abtragen
+  "hängengeblieben"  → ein Haken, der etwas festhält
+  "durchgerutscht"   → eine Lücke im Sieb
+  "aufgebaut"        → Stein auf Stein
+  "verbrannt"        → Geld als Material, das nicht wiederkommt
+
+WAS KEIN ANKER IST
+- Konkrete Substantive. "Depot", "Handy", "Kunde" sind schon Dinge.
+  Ein Bild vom Ding ist keine Metapher, das ist Illustration.
+- Wörter ohne körperliche Wurzel: "Struktur", "Möglichkeit", "System"
+- Füllwörter und Verstärker
+
+WIE VIELE
+Ein 50-Sekunden-Video hat 2 bis 4 Anker. Nicht mehr.
+Wenn du zehn findest, hast du die Regel gebrochen.
+Lieber zwei starke als sechs mittelmäßige.
+
+AUSGABE — nur JSON:
+{ "anker": [ { "wort":"Grind", "wort_index":47,
+  "woertlich":"mahlen, Material abtragen", "traegt":"hoch|mittel" } ] }
+
+Alles mit "traegt":"mittel" fliegt später raus. Sei streng."""
+
+ENTFALTUNG_SYS = """Du entwickelst aus einem Anker eine visuelle Idee.
+
+VORGEHEN
+1. Nenne den physikalischen Vorgang hinter der wörtlichen Bedeutung.
+2. Entwickle DREI Umsetzungen in drei Registern:
+   NATUR      etwas aus der physischen Welt, ohne Technik
+   MENSCH     Werkzeug, Handwerk, Alltag
+   SCHIEF     unerwartet, humorvoll, oder aus einer ganz anderen Domäne
+3. Bewerte jede selbst.
+
+DIE BEWERTUNG IST DER PUNKT
+naheliegend = das Erste, was jedem einfällt. Bei "Grind" ist das eine
+Person am Schreibtisch nachts. Das ist wertlos.
+Du bewertest von 1 (jedem sofort klar) bis 5 (überraschend, aber
+sofort verständlich, sobald man es sieht).
+
+Alles unter 4 wird verworfen. Wenn alle drei unter 4 liegen, gib
+"kein_bild": true zurück. Kein Bild ist besser als ein plattes Bild.
+
+VERSTÄNDLICHKEITS-GRENZE
+Eine 5, die man erklären muss, ist eine 1. Der Zuschauer hat
+100 Millisekunden. Wenn der Sprung zu weit ist, ist er falsch.
+
+VERB
+Wähle für die beste Idee EIN Verb aus dieser Liste. Nur diese:
+rollen · abtragen · füllen · leerlaufen · spalten · verbinden ·
+trennen · stapeln · zerbrechen · verformen · wachsen · kippen
+
+Passt kein Verb, ist die Idee nicht renderbar. Nimm die nächstbeste.
+
+AUSGABE — nur JSON:
+{ "vorgang":"...", "ideen":[{"register":"natur","bild":"...","score":5,"warum":"..."}],
+  "gewaehlt":0, "verb":"abtragen", "objekt":"Polygon",
+  "zustand_von":"12 Ecken", "zustand_nach":"Kreis",
+  "asset_typ":"prozedural|stock|generiert", "kein_bild":false }"""
+
+VERB_LISTE = {"rollen", "abtragen", "füllen", "leerlaufen", "spalten", "verbinden",
+              "trennen", "stapeln", "zerbrechen", "verformen", "wachsen", "kippen"}
+
+
+def _few_shot_metaphern() -> str:
+    """8 Positive + 3 Anti, rotierend. Die Seeds bleiben immer im Topf — fuettert
+    man nur Akzeptiertes zurueck, lernt das System den eigenen Durchschnitt und
+    hoert auf zu ueberraschen."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return ""
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    try:
+        pos = requests.get(f"{SUPABASE_URL}/rest/v1/metaphern", timeout=20, headers=hdr,
+                           params={"select": "anker,bild,score,begruendung", "score": "gte.4",
+                                   "quelle": "in.(seed,akzeptiert)", "limit": "40"}).json()
+        neg = requests.get(f"{SUPABASE_URL}/rest/v1/metaphern", timeout=20, headers=hdr,
+                           params={"select": "anker,bild,score,begruendung",
+                                   "quelle": "in.(anti,verworfen)", "limit": "20"}).json()
+    except Exception as exc:
+        log.warning("[META] Few-Shot nicht lesbar: %s", exc)
+        return ""
+    import random as _r
+    pos = _r.sample(pos, min(8, len(pos))) if isinstance(pos, list) else []
+    neg = _r.sample(neg, min(3, len(neg))) if isinstance(neg, list) else []
+    out = ["BEISPIELE — so sieht ein Treffer aus:"]
+    for p in pos:
+        out.append(f"  [{p.get('score')}] {p.get('anker')} → {p.get('bild')} ({p.get('begruendung','')})")
+    if neg:
+        out.append("GEGENBEISPIELE — genau das ist naheliegend:")
+        for n in neg:
+            out.append(f"  [{n.get('score')}] {n.get('anker')} → {n.get('bild')} ({n.get('begruendung','')})")
+    return "\n".join(out)
+
+
+def _metaphern(words: list, max_anker: int = 4) -> dict:
+    """Anker finden, dann entfalten. Gibt nur JSON zurueck — die Verb-Bibliothek
+    und der Asset-Router kommen spaeter, asset_typ wird vorerst nur geloggt."""
+    text = " ".join(str(w.get("word", "")) for w in (words or [])).strip()
+    if len(text) < 40:
+        return {"anker": [], "konzepte": [], "_diag": "zu kurz"}
+    idx = "\n".join(f"{i}\t{w.get('word','')}" for i, w in enumerate(words))
+    try:
+        raw = call_openrouter(ANKER_SYS, idx[:6000], model="anthropic/claude-sonnet-4.5",
+                              max_tokens=900)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        anker = (json.loads(m.group()).get("anker", []) if m else [])
+    except Exception as exc:
+        log.warning("[META] Anker-Pass fehlgeschlagen: %s", exc)
+        return {"anker": [], "konzepte": [], "_diag": f"anker:{exc}"}
+
+    stark = [a for a in anker if str(a.get("traegt", "")).lower() == "hoch"][:max_anker]
+    shots = _few_shot_metaphern()
+    konzepte, verworfen = [], []
+    for a in stark:
+        i = int(a.get("wort_index") or 0)
+        satz = " ".join(str(w.get("word", "")) for w in words[max(0, i - 12):i + 12])
+        user = (f"{shots}\n\nANKER: {a.get('wort')} — wörtlich: {a.get('woertlich')}\n"
+                f"SATZ: {satz}")
+        try:
+            raw = call_openrouter(ENTFALTUNG_SYS, user, model="anthropic/claude-sonnet-4.5",
+                                  max_tokens=1200)
+            m = re.search(r"\{[\s\S]*\}", raw)
+            k = json.loads(m.group()) if m else {}
+        except Exception as exc:
+            log.warning("[META] Entfaltung '%s' fehlgeschlagen: %s", a.get("wort"), exc)
+            continue
+        ideen = k.get("ideen") or []
+        best = max([int(i.get("score") or 0) for i in ideen], default=0)
+        verb_ok = str(k.get("verb", "")).strip().lower() in VERB_LISTE
+        if k.get("kein_bild") is True or best < 4 or not verb_ok:
+            verworfen.append({"wort": a.get("wort"), "bester_score": best,
+                              "verb": k.get("verb"), "verb_bekannt": verb_ok,
+                              "kein_bild": k.get("kein_bild") is True})
+            continue
+        k["wort"] = a.get("wort")
+        k["wort_index"] = i
+        k["zeit_s"] = round(float(words[i].get("start", 0.0)), 2) if i < len(words) else None
+        konzepte.append(k)
+        log.info("[META] '%s' → %s (%s, asset_typ=%s)", a.get("wort"),
+                 (ideen[int(k.get('gewaehlt') or 0)] or {}).get("bild", "")[:60]
+                 if ideen else "", k.get("verb"), k.get("asset_typ"))
+    return {"anker": anker, "stark": len(stark), "konzepte": konzepte,
+            "verworfen": verworfen, "_diag": f"ok:{len(konzepte)}"}
+
+
+class MetaphernRequest(BaseModel):
+    text:     str = ""
+    audio:    str = ""      # alternativ: URL, wird transkribiert
+    max_anker: int = 4
+
+
+@app.post("/metaphern")
+def metaphern_debug(req: MetaphernRequest):
+    """Nur JSON, kein Render. Zeigt welche Anker gefunden, welche drei Ideen je
+    Anker, welche Scores, was verworfen wurde."""
+    words = []
+    if req.text:
+        words = [{"word": w, "start": i * 0.35, "end": i * 0.35 + 0.3}
+                 for i, w in enumerate(req.text.split())]
+    elif req.audio:
+        job = Path(f"/tmp/meta_{uuid.uuid4()}")
+        job.mkdir(parents=True, exist_ok=True)
+        try:
+            src = job / "in"
+            if download_file(req.audio, src):
+                words = transcribe_audio(src) or []
+        finally:
+            shutil.rmtree(job, ignore_errors=True)
+    if not words:
+        raise HTTPException(status_code=400, detail="weder text noch audio verwertbar")
+    return _metaphern(words, max_anker=req.max_anker)
+
+
 def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float) -> dict:
     """Stage 1 — the visual SCRIPT (rough intent, anchored to script phrases).
     Built from the briefing's argument structure. {} if no briefing to ground it."""

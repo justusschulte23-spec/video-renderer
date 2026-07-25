@@ -5934,7 +5934,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                     hook_override = dp.get("hookTitle")
                     _tc = {}
                     for _b in beats:
-                        _t = str(_b.get("type"))
+                        _t = str(_b.get("typ") or _b.get("type"))
                         _tc[_t] = _tc.get(_t, 0) + 1
                     visual_diag = {"path": "vscript", "beats": len(beats), "emitted": _tc,
                                    "scenes": len(dp.get("scenes") or []),

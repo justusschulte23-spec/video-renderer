@@ -5085,7 +5085,14 @@ VISUAL_SCRIPT_SYS = (
     "HALTUNG  Vollbild. NICHTS. Kein Overlay, keine Karte. Das ist eine Anweisung, "
     "keine Auslassung. Die Stille hier ist der Grund, warum die WENDUNG davor knallt.\n"
     "CTA      Ein Wort, gross, kurz. Sonst nichts.\n"
-    "RHYTHMUS: Zwischen zwei Zustaenden mindestens 4 Sekunden. Gleichmaessige "
+    "HANDWERK — PFLICHT: Weniger Elemente heisst NICHT weniger Aufwand. Was steht, "
+    "muss gebaut aussehen. MINDESTENS 2 der Zustaende sind full-screen 'scene'-Cutaways, "
+    "und MINDESTENS EINER davon hat scene_type 'image' (photoreale, gebrandete Szene, "
+    "concept = 3-6 Woerter Englisch, EIN Hero-Objekt, kein Text, kein Gesicht). "
+    "Eine nackte Textkarte ist die Ausnahme, nicht die Regel — sie ist erlaubt, wenn ein "
+    "Satz allein staerker ist als jedes Bild. Nutze 'flow' wenn ein Ablauf beschrieben "
+    "wird und 'stat' wenn eine echte Zahl faellt. 5-8 Beats insgesamt.\n"
+    "RHYTHMUS: Zwischen zwei Zustaenden mindestens 3 Sekunden. Gleichmaessige "
     "Verteilung ist verboten — Wechsel liegen dort, wo der Inhalt kippt, nicht im Takt.\n"
     "BEAT-TYPEN (typ):\n"
     "- hook_title: der Hook oben, anchor='__hook__', content = 3-7 Woerter.\n"
@@ -5167,7 +5174,7 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
 # Zustaenden. Der Prompt allein haelt das nicht — sobald ein Modell zwoelf gute
 # Ideen hat, legt es sie uebereinander.
 PCI_MAX_GLEICHZEITIG = 2
-PCI_MIN_ABSTAND_S = 4.0
+PCI_MIN_ABSTAND_S = 3.0   # 4s liess das Bild zu lange leer — Ruhe ja, Leere nein
 # Prioritaet nach Gewicht des Elements: was die Aussage traegt, bleibt.
 PCI_PRIO = {"scene": 5, "flow": 4, "lower_third": 3, "overlay": 2, "stat": 2}
 

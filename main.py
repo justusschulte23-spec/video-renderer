@@ -476,6 +476,12 @@ class TrimSilenceRequest(BaseModel):
     smart_cut: bool = True  # phase 0: LLM coherence cut (duplicate takes / false starts)
 
 
+class TranscribeRequest(BaseModel):
+    audio:    str          # any downloadable URL — Telegram voice notes are .oga
+    language: str = "de"
+    prompt:   str = ""     # optional vocabulary hint for Whisper
+
+
 class KeyFact(BaseModel):
     value: str
     label: str
@@ -6180,6 +6186,45 @@ async def trim_silence(req: TrimSilenceRequest):
         raise HTTPException(status_code=500, detail=f"trim-silence failed: {exc}")
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+@app.post("/transcribe")
+async def transcribe(req: TranscribeRequest):
+    """Plain speech-to-text for the Kalle interview loop. Takes any audio or video
+    URL (Telegram voice notes arrive as .oga) and returns the spoken text. No word
+    timestamps — the interview only needs the words, not the timeline."""
+    job_id  = str(uuid.uuid4())
+    job_dir = Path(f"/tmp/stt_{job_id}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        src = job_dir / "input"
+        if not download_file(req.audio, src):
+            raise HTTPException(status_code=500, detail="audio download failed")
+
+        mp3 = job_dir / "audio.mp3"
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(src),
+            "-vn", "-ar", "16000", "-ac", "1", "-b:a", "64k", str(mp3),
+        ], check=True, capture_output=True)
+
+        kwargs = {"model": "whisper-1", "response_format": "verbose_json",
+                  "language": req.language}
+        if req.prompt:
+            kwargs["prompt"] = req.prompt
+        with open(mp3, "rb") as af:
+            resp = openai_client.audio.transcriptions.create(file=af, **kwargs)
+
+        text = (getattr(resp, "text", "") or "").strip()
+        dur  = float(getattr(resp, "duration", 0.0) or 0.0)
+        log.info("[STT] %.1fs audio -> %d chars", dur, len(text))
+        return {"text": text, "duration": dur, "words": len(text.split())}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[STT] error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"transcribe failed: {exc}")
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
 
 @app.get("/debug/last-broll-scripts")
 def debug_last_broll_scripts():

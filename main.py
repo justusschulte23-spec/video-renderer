@@ -476,6 +476,13 @@ class TrimSilenceRequest(BaseModel):
     smart_cut: bool = True  # phase 0: LLM coherence cut (duplicate takes / false starts)
 
 
+class ImageRequest(BaseModel):
+    prompt:       str
+    aspect_ratio: str = "1:1"
+    reference:    list[str] = []   # image URLs -> nano-banana-pro/edit (keeps the character)
+    num_images:   int = 1
+
+
 class TranscribeRequest(BaseModel):
     audio:    str          # any downloadable URL — Telegram voice notes are .oga
     language: str = "de"
@@ -6186,6 +6193,54 @@ async def trim_silence(req: TrimSilenceRequest):
         raise HTTPException(status_code=500, detail=f"trim-silence failed: {exc}")
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+@app.post("/image")
+def generate_image(req: ImageRequest):
+    """Raw prompt -> fal.ai nano-banana-pro. No brand template, no crop — for
+    character sheets and other one-off assets (e.g. the Kalle interviewer skins).
+    Pass `reference` image URLs to run the /edit model instead, which keeps the
+    same face across variants."""
+    if not FAL_API_KEY:
+        raise HTTPException(status_code=500, detail="FAL_API_KEY not set")
+    endpoint = FAL_THUMBNAIL_ENDPOINT + ("/edit" if req.reference else "")
+    payload = {"prompt": req.prompt, "aspect_ratio": req.aspect_ratio,
+               "num_images": max(1, min(4, req.num_images))}
+    if req.reference:
+        payload["image_urls"] = req.reference
+    try:
+        r = requests.post(endpoint, timeout=180,
+                          headers={"Authorization": f"Key {FAL_API_KEY}",
+                                   "Content-Type": "application/json"},
+                          json=payload)
+        r.raise_for_status()
+        data = r.json()
+        urls = [i["url"] for i in (data.get("images") or [])]
+        if urls:
+            return {"images": urls}
+
+        status_url = (data.get("status_url") or data.get("response_url")
+                      or (f"https://queue.fal.run/fal-ai/nano-banana-pro/requests/{data['request_id']}"
+                          if data.get("request_id") else None))
+        if not status_url:
+            raise RuntimeError(f"fal.ai unexpected response: {data}")
+        for _ in range(90):
+            time.sleep(2)
+            poll = requests.get(status_url, headers={"Authorization": f"Key {FAL_API_KEY}"},
+                                timeout=30)
+            poll.raise_for_status()
+            res = poll.json()
+            if res.get("status") == "COMPLETED":
+                imgs = (res.get("output") or res).get("images", [])
+                return {"images": [i["url"] for i in imgs]}
+            if res.get("status") in ("FAILED", "ERROR"):
+                raise RuntimeError(f"fal.ai failed: {res}")
+        raise RuntimeError("fal.ai polling timed out")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("[IMAGE] %s", exc)
+        raise HTTPException(status_code=500, detail=f"image generation failed: {exc}")
+
 
 @app.post("/transcribe")
 async def transcribe(req: TranscribeRequest):

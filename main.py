@@ -5211,8 +5211,13 @@ Ein Bild, das man erklären muss, ist nicht überraschend — es ist daneben.
 Ein Bild, das man schon hundertmal gesehen hat, ist naheliegend, auch wenn
 es gut gemacht ist.
 
+Zusaetzlich: Ist das bestplatzierte Bild ueberraschend GENUG, oder sind
+alle drei naheliegend? Antworte binaer. Im Zweifel "alle_naheliegend": true —
+kein Bild ist besser als ein plattes.
+
 AUSGABE — nur JSON, Indizes der Eingabe:
 { "von_naheliegend_nach_ueberraschend": [0,2,1],
+  "alle_naheliegend": false,
   "begruendung": "ein Satz, warum das letzte das stärkste ist" }"""
 
 # Bilder, die jeder schon hundertmal gesehen hat. Der Prompt allein haelt sie
@@ -5234,7 +5239,7 @@ def _blockiert(bild: str) -> str:
 def _rang(wort: str, ideen: list) -> list:
     """Gibt die Reihenfolge von naheliegend nach ueberraschend zurueck."""
     if len(ideen) < 2:
-        return list(range(len(ideen)))
+        return list(range(len(ideen))), False
     liste = "\n".join(f"{i}: {x.get('bild','')}" for i, x in enumerate(ideen))
     try:
         raw = call_openrouter(RANG_SYS, f"WORT: {wort}\n\n{liste}",
@@ -5244,10 +5249,10 @@ def _rang(wort: str, ideen: list) -> list:
         order = [int(i) for i in o.get("von_naheliegend_nach_ueberraschend", [])
                  if isinstance(i, (int, float)) and 0 <= int(i) < len(ideen)]
         order += [i for i in range(len(ideen)) if i not in order]
-        return order
+        return order, o.get("alle_naheliegend") is True
     except Exception as exc:
         log.warning("[META] Rang-Call fehlgeschlagen: %s", exc)
-        return list(range(len(ideen)))
+        return list(range(len(ideen))), False
 
 
 def _few_shot_metaphern() -> str:
@@ -5280,6 +5285,111 @@ def _few_shot_metaphern() -> str:
     return "\n".join(out)
 
 
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+
+ROUTER_SYS = """Du entscheidest, wie ein visuelles Bild umgesetzt wird.
+
+"prozedural" NUR bei abstrakter Geometrie ohne benannten Gegenstand:
+Polygon, Linie, Balken, Kurve, Raster, Punktwolke.
+Sobald ein echtes Objekt vorkommt — Kerze, Seife, Wurzel, Sieb, Hammer,
+Wasser, Hand, Werkzeug — ist es "stock".
+
+Für "stock" baust du DREI englische Pexels-Suchanfragen:
+1. die genaueste: Objekt + Aktion (2-4 Wörter, z.B. "candle wax dripping")
+2. ein Fallback: nur das Objekt in Bewegung
+3. ein weiter gefasster Fallback: der Vorgang ohne das konkrete Objekt
+
+Keine Adjektive, keine Stimmung, keine Marken. Nur was zu sehen ist.
+
+AUSGABE — nur JSON:
+{ "asset_typ":"stock|prozedural", "anfragen":["...","...","..."] }"""
+
+
+def _pexels(query: str, n: int = 15) -> list:
+    if not PEXELS_API_KEY:
+        return []
+    try:
+        r = requests.get("https://api.pexels.com/videos/search", timeout=25,
+                         headers={"Authorization": PEXELS_API_KEY},
+                         params={"query": query, "per_page": n, "orientation": "portrait"})
+        r.raise_for_status()
+        out = []
+        for v in (r.json() or {}).get("videos", []):
+            files = sorted(v.get("video_files") or [],
+                           key=lambda f: abs((f.get("height") or 0) - 1280))
+            out.append({"id": v.get("id"), "dauer": v.get("duration"),
+                        "thumb": v.get("image"),
+                        "url": (files[0].get("link") if files else ""),
+                        "seite": v.get("url")})
+        return [c for c in out if c["url"] and c["thumb"]]
+    except Exception as exc:
+        log.warning("[STOCK] Pexels '%s': %s", query, exc)
+        return []
+
+
+def _vision_pick(beschreibung: str, kandidaten: list) -> dict:
+    """Prueft die VORSCHAUBILDER, nicht die ganzen Clips — ein Standbild sagt,
+    ob der Gegenstand da ist, nicht ob die Bewegung stimmt. Ehrliche Grenze."""
+    if not (OPENROUTER_API_KEY and kandidaten):
+        return {}
+    teil = kandidaten[:8]
+    content = [{"type": "text", "text": (
+        "Gesucht ist ein Clip, der DIESEN Vorgang zeigt: " + beschreibung +
+        "\nDu siehst Vorschaubilder von Stock-Clips, nummeriert ab 0. "
+        "Welches zeigt den beschriebenen Gegenstand und Vorgang tatsaechlich? "
+        "Deko, Menschen im Buero oder abstrakte Muster zaehlen NICHT. "
+        "Passt keines, gib index -1. Nur JSON: "
+        "{\"index\":0,\"begruendung\":\"ein Satz\"}")}]
+    for c in teil:
+        content.append({"type": "image_url", "image_url": {"url": c["thumb"]}})
+    try:
+        r = requests.post("https://openrouter.ai/api/v1/chat/completions", timeout=120,
+                          headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                                   "Content-Type": "application/json"},
+                          json={"model": "google/gemini-2.5-flash",
+                                "messages": [{"role": "user", "content": content}],
+                                "max_tokens": 300})
+        r.raise_for_status()
+        txt = r.json()["choices"][0]["message"]["content"]
+        m = re.search(r"\{[\s\S]*\}", txt)
+        o = json.loads(m.group()) if m else {}
+        i = int(o.get("index", -1))
+        if 0 <= i < len(teil):
+            return {"clip": teil[i], "begruendung": o.get("begruendung", "")}
+    except Exception as exc:
+        log.warning("[STOCK] Vision-Check: %s", exc)
+    return {}
+
+
+def _stock_fuer(bild: str) -> dict:
+    """Router + Suche + Vision-Check fuer EIN Bild."""
+    try:
+        raw = call_openrouter(ROUTER_SYS, bild, model="anthropic/claude-sonnet-4.5",
+                              max_tokens=300)
+        m = re.search(r"\{[\s\S]*\}", raw)
+        o = json.loads(m.group()) if m else {}
+    except Exception as exc:
+        log.warning("[STOCK] Router: %s", exc)
+        return {"asset_typ": "prozedural", "anfragen": [], "grund": f"router:{exc}"}
+    typ = str(o.get("asset_typ", "prozedural")).lower()
+    anfragen = [str(q) for q in (o.get("anfragen") or [])][:3]
+    if typ != "stock":
+        return {"asset_typ": "prozedural", "anfragen": anfragen}
+    for q in anfragen:
+        kand = _pexels(q)
+        if not kand:
+            continue
+        treffer = _vision_pick(bild, kand)
+        if treffer:
+            log.info("[STOCK] '%s' → Clip %s (%s)", q, treffer["clip"]["id"],
+                     treffer["begruendung"][:60])
+            return {"asset_typ": "stock", "anfragen": anfragen, "anfrage_treffer": q,
+                    "kandidaten": len(kand), "clip": treffer["clip"],
+                    "vision": treffer["begruendung"]}
+    return {"asset_typ": "stock", "anfragen": anfragen, "clip": None,
+            "grund": "kein Clip zeigt den Vorgang"}
+
+
 def _metaphern(words: list, max_anker: int = 4) -> dict:
     """Anker finden, dann entfalten. Gibt nur JSON zurueck — die Verb-Bibliothek
     und der Asset-Router kommen spaeter, asset_typ wird vorerst nur geloggt."""
@@ -5299,7 +5409,16 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
     # Ankerzahl skaliert mit der Textmenge: ein kurzes Transkript hat nicht
     # vier Bilder in sich, egal wie willig das Modell ist.
     budget = min(max_anker, max(0, len(words) // 150))
-    stark = [a for a in anker if str(a.get("traegt", "")).lower() == "hoch"][:budget]
+    # Dasselbe Wort an drei Stellen ist ein Anker, nicht drei.
+    rang_t = {"hoch": 2, "mittel": 1}
+    beste = {}
+    for a in anker:
+        w = str(a.get("wort", "")).strip().lower()
+        if not w:
+            continue
+        if w not in beste or rang_t.get(str(a.get("traegt", "")).lower(), 0) >            rang_t.get(str(beste[w].get("traegt", "")).lower(), 0):
+            beste[w] = a
+    stark = [a for a in beste.values() if str(a.get("traegt", "")).lower() == "hoch"][:budget]
     shots = _few_shot_metaphern()
     konzepte, verworfen, blocks = [], [], []
     for a in stark:
@@ -5323,7 +5442,10 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
                               "kein_bild": k.get("kein_bild") is True})
             continue
         # Fremdbewertung: Rangfolge statt Selbstnote. Das naheliegendste fliegt.
-        order = _rang(a.get("wort", ""), ideen)
+        order, alle_platt = _rang(a.get("wort", ""), ideen)
+        if alle_platt:
+            verworfen.append({"wort": a.get("wort"), "grund": "Ranker: alle drei naheliegend"})
+            continue
         kandidaten = list(reversed(order))[:-1] if len(order) > 1 else order
         gewaehlt = None
         for ci in kandidaten:
@@ -5340,6 +5462,22 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
         if gewaehlt is None:
             verworfen.append({"wort": a.get("wort"), "grund": "alle Ideen geblockt"})
             continue
+        # Stock-Router: kein Treffer -> naechstbeste Idee, sonst kein Bild
+        stock, ok_idx = {}, None
+        for ci in kandidaten:
+            if _blockiert((ideen[ci] or {}).get("bild", "")):
+                continue
+            st = _stock_fuer((ideen[ci] or {}).get("bild", ""))
+            if st.get("asset_typ") == "prozedural" or st.get("clip"):
+                stock, ok_idx = st, ci
+                break
+        if ok_idx is None:
+            verworfen.append({"wort": a.get("wort"),
+                              "grund": "kein Stock-Clip zeigt den Vorgang"})
+            continue
+        gewaehlt = ok_idx
+        k["stock"] = stock
+        k["asset_typ"] = stock.get("asset_typ")
         k["gewaehlt"] = gewaehlt
         k["rangfolge_naheliegend_zuerst"] = order
         k["wort"] = a.get("wort")

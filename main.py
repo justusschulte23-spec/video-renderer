@@ -5311,7 +5311,10 @@ def _pexels(query: str, n: int = 15) -> list:
     try:
         r = requests.get("https://api.pexels.com/videos/search", timeout=25,
                          headers={"Authorization": PEXELS_API_KEY},
-                         params={"query": query, "per_page": n, "orientation": "portrait"})
+                         # orientation-Filter raus: fuer Vorgaenge wie "Wurzel hebt
+                         # Asphalt" gibt es fast nur Querformat, damit kam nie ein
+                         # Kandidat zurueck und der Vision-Check lief nie.
+                         params={"query": query, "per_page": n})
         r.raise_for_status()
         out = []
         for v in (r.json() or {}).get("videos", []):
@@ -5375,8 +5378,10 @@ def _stock_fuer(bild: str) -> dict:
     anfragen = [str(q) for q in (o.get("anfragen") or [])][:3]
     if typ != "stock":
         return {"asset_typ": "prozedural", "anfragen": anfragen}
+    spuren = []
     for q in anfragen:
         kand = _pexels(q)
+        spuren.append({"anfrage": q, "kandidaten": len(kand)})
         if not kand:
             continue
         treffer = _vision_pick(bild, kand)
@@ -5384,10 +5389,17 @@ def _stock_fuer(bild: str) -> dict:
             log.info("[STOCK] '%s' → Clip %s (%s)", q, treffer["clip"]["id"],
                      treffer["begruendung"][:60])
             return {"asset_typ": "stock", "anfragen": anfragen, "anfrage_treffer": q,
-                    "kandidaten": len(kand), "clip": treffer["clip"],
+                    "spuren": spuren, "clip": treffer["clip"],
                     "vision": treffer["begruendung"]}
+    gefunden = sum(x["kandidaten"] for x in spuren)
+    grund = ("Pexels lieferte 0 Kandidaten" if gefunden == 0
+             else "Vision-Check: kein Clip zeigt den Vorgang")
+    if not PEXELS_API_KEY:
+        grund = "PEXELS_API_KEY fehlt im Renderer"
+    _log_run("", "stock-router", "warn", {"grund": grund, "anfragen": anfragen,
+                                          "spuren": spuren})
     return {"asset_typ": "stock", "anfragen": anfragen, "clip": None,
-            "grund": "kein Clip zeigt den Vorgang"}
+            "spuren": spuren, "key_da": bool(PEXELS_API_KEY), "grund": grund}
 
 
 def _metaphern(words: list, max_anker: int = 4) -> dict:

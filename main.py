@@ -424,6 +424,9 @@ class RemotionRenderRequest(BaseModel):
     trim:        bool = True             # auto-cut before rendering (skip if N8N already did)
     grade:       bool = True             # cinematic colour grade on the facecam
     briefing:    Optional[dict] = None   # production_briefing.segments → regie drives the render
+    regie_hints: Optional[dict] = None   # used_topics.regie_hints — punch_words/lower_thirds/
+                                         # cta_keyword/Blockgrenzen. Nie im Kunden-Chat; wird
+                                         # gegen das echte WhisperX-Transkript remappt.
     qa:          bool = True             # Gemini QA gate on the final render
     bg_mode:     str = "original"        # original | canvas — replace bg with a studio canvas + matte
     thumbnail:   bool = True             # append a 0.2s thumbnail end-card
@@ -4811,32 +4814,109 @@ def _find_word_time(words: list, target: str, after: float = 0.0) -> Optional[fl
     return None
 
 
-def _briefing_props(briefing: dict, words: list, hook_end_s: float, duration: float) -> tuple:
-    """Map production_briefing.regie onto the ACTUAL transcript timeline.
+def _block_grenzen(hints: dict, words: list, duration: float) -> dict:
+    """Blockgrenzen gegen das ECHTE Transkript remappen.
+
+    Die Dauern im Skript sind eine Schaetzung des Modells — was zaehlt, ist was
+    er wirklich gesagt hat. Jeder Block wird ueber seine laengsten, seltensten
+    Woerter im Wort-Transkript gesucht, in der Reihenfolge der Bloecke und immer
+    NACH dem Vorgaenger. Findet sich ein Block nicht wieder, bleibt er ohne
+    Zeit — er wird dann nicht geraten, sondern uebersprungen.
+    """
+    out, cursor = {}, 0.0
+    for b in (hints or {}).get("blocks", []) or []:
+        rolle = b.get("rolle")
+        text = str(b.get("text") or "")
+        # seltene Woerter zuerst: lange Tokens tragen mehr Information als "und"
+        kandidaten = sorted(
+            {_norm_token(w) for w in re.findall(r"\w+", text) if len(w) > 5},
+            key=len, reverse=True)[:6]
+        treffer = None
+        for k in kandidaten:
+            t = _find_word_time(words, k, after=cursor)
+            if t is not None and (treffer is None or t < treffer):
+                treffer = t
+        if treffer is not None:
+            out[rolle] = treffer
+            cursor = treffer
+    # Ende eines Blocks = Anfang des naechsten gefundenen
+    zeiten = sorted(out.items(), key=lambda kv: kv[1])
+    grenzen = {}
+    for i, (rolle, start) in enumerate(zeiten):
+        ende = zeiten[i + 1][1] if i + 1 < len(zeiten) else duration
+        grenzen[rolle] = (start, ende)
+    return grenzen
+
+
+def _briefing_props(briefing: dict, words: list, hook_end_s: float, duration: float,
+                    hints: dict = None) -> tuple:
+    """Map the regie onto the ACTUAL transcript timeline.
     Returns (punch_frames, lower_thirds). Script timings are ignored — the words
-    people actually spoke drive where punches/cards land."""
-    segs = (briefing or {}).get("segments", []) or []
+    people actually spoke drive where punches/cards land.
+
+    Quelle ist `used_topics.regie_hints` (getrennt vom Kunden-Spickzettel).
+    Aeltere Zeilen haben die Regie noch in production_briefing.segments[].regie —
+    die werden hier auf dieselbe Form gebracht.
+    """
+    hints = hints or {}
+    if not hints.get("punch_words") and not hints.get("lower_thirds"):
+        alt_p, alt_l, alt_cta = [], [], None
+        for s in (briefing or {}).get("segments", []) or []:
+            r = s.get("regie", {}) or {}
+            for pw in (r.get("punch_words") or []):
+                alt_p.append({"rolle": s.get("rolle"), "wort": pw})
+            lt = r.get("lower_third") or {}
+            if lt.get("title"):
+                alt_l.append({"rolle": s.get("rolle"), "title": lt["title"],
+                              "subtitle": lt.get("subtitle") or ""})
+            alt_cta = alt_cta or r.get("cta_keyword")
+        hints = {"blocks": [{"rolle": s.get("rolle"), "text": s.get("text")}
+                            for s in (briefing or {}).get("segments", []) or []],
+                 "punch_words": alt_p, "lower_thirds": alt_l, "cta_keyword": alt_cta}
+
+    grenzen = _block_grenzen(hints, words, duration)
     punch, lowers = [], []
-    for s in segs:
-        regie = s.get("regie", {}) or {}
-        for pw in (regie.get("punch_words") or []):
-            t = _find_word_time(words, str(pw))
-            if t is not None and hook_end_s < t < duration - 1.0:
-                punch.append(int(t * FPS))
-        cta = regie.get("cta_keyword")
-        if cta:
-            t = _find_word_time(words, str(cta))
-            if t is not None and t < duration - 0.3:
-                punch.append(int(t * FPS))
-        lt = regie.get("lower_third") or {}
-        if lt.get("title"):
-            st = _find_word_time(words, s.get("text", "")) or hook_end_s
-            lowers.append({
-                "startFrame": int(st * FPS),
-                "endFrame": int(min(st + 4.5, duration - 0.2) * FPS),
-                "title": str(lt.get("title"))[:42],
-                "subtitle": str(lt.get("subtitle") or "")[:70],
-            })
+    verworfen = 0
+
+    for p in hints.get("punch_words") or []:
+        # nur innerhalb des Blocks suchen, in dem das Wort laut Skript stand —
+        # sonst trifft ein haeufiges Wort irgendwo im Video
+        von, bis = grenzen.get(p.get("rolle"), (hook_end_s, duration))
+        t = _find_word_time(words, str(p.get("wort")), after=von)
+        if t is not None and t <= bis and hook_end_s < t < duration - 1.0:
+            punch.append(int(t * FPS))
+        else:
+            verworfen += 1
+
+    cta = hints.get("cta_keyword")
+    if cta:
+        t = _find_word_time(words, str(cta))
+        if t is not None and t < duration - 0.3:
+            punch.append(int(t * FPS))
+        else:
+            verworfen += 1
+
+    for l in hints.get("lower_thirds") or []:
+        von, bis = grenzen.get(l.get("rolle"), (None, None))
+        if von is None:
+            verworfen += 1      # Block nicht gesprochen -> keine Einblendung
+            continue
+        ende = min(von + 4.5, bis - 0.2 if bis else duration - 0.2, duration - 0.2)
+        if ende <= von:
+            verworfen += 1
+            continue
+        lowers.append({
+            "startFrame": int(von * FPS),
+            "endFrame": int(ende * FPS),
+            "title": str(l.get("title"))[:42],
+            "subtitle": str(l.get("subtitle") or "")[:70],
+        })
+
+    if verworfen:
+        log.info("[REGIE] %d Hinweise verworfen — im Skript, aber nicht gesprochen",
+                 verworfen)
+    log.info("[REGIE] %d/%d Bloecke im Transkript wiedergefunden",
+             len(grenzen), len(hints.get("blocks") or []))
     # dedupe + keep punches spaced apart
     punch = sorted(set(punch))
     spaced, last = [], -999
@@ -6377,8 +6457,9 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             lower_thirds = []
             if req.punch_ins:
                 punch_frames = [int(float(x) * FPS) for x in req.punch_ins]
-            elif req.briefing:
-                punch_frames, lower_thirds = _briefing_props(req.briefing, words, hook_end_s, duration)
+            elif req.briefing or req.regie_hints:
+                punch_frames, lower_thirds = _briefing_props(
+                    req.briefing, words, hook_end_s, duration, hints=req.regie_hints)
                 if not punch_frames:
                     punch_frames = _remotion_punch_frames(impacts, chunks, hook_end_s, duration)
             else:

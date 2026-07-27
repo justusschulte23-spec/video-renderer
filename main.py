@@ -3705,38 +3705,46 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
+def _broll_job(job_id: str, req: "BrollSyncedRequest"):
+    RENDER_JOBS[job_id] = {"status": "processing"}
+    try:
+        # eigener Event-Loop im Worker-Thread: der Impl ist async und nutzt
+        # run_in_executor fuer den LLM-Call
+        res = asyncio.run(_generate_broll_synced_impl(req))
+        RENDER_JOBS[job_id] = {"status": "done", **(res or {})}
+    except HTTPException as exc:
+        RENDER_JOBS[job_id] = {"status": "error", "error": str(exc.detail)}
+    except Exception as exc:
+        log.exception("[BROLL_SYNC] job %s failed", job_id)
+        RENDER_JOBS[job_id] = {"status": "error", "error": str(exc)}
+
+
 @app.post("/generate-broll-synced")
-async def generate_broll_synced(req: BrollSyncedRequest):
-    """Streaming wrapper — sends keepalive bytes every 20s to survive Railway proxy timeout."""
-    result_holder: dict = {}
-    done_event = asyncio.Event()
+async def generate_broll_synced(req: BrollSyncedRequest, wait: bool = False):
+    """Async by default: liefert {job_id, status} und arbeitet im Hintergrund.
+    Abruf ueber /render-status/{job_id} — dieselbe Registry wie /render-remotion.
+    ?wait=true blockiert (kurze Clips / Tests).
 
-    async def _worker():
+    Warum nicht mehr synchron: der Aufruf haelt die Verbindung ueber vier Minuten
+    ohne ein einziges Antwort-Byte (ein Sonnet-Call ueber 32k Token fuer neun
+    Szenen). Irgendein Hop dazwischen kappt sie bei exakt 180s — n8n meldet
+    `Error: aborted`, obwohl sein eigener Timeout auf 900s stand. Der Server
+    baute die B-Roll danach fertig und lud sie hoch; nur wusste das niemand mehr.
+    Der Keepalive-Stream davor war der Versuch, das zu ueberleben, und hat nicht
+    gehalten. Also gar keine lange Verbindung mehr — wie beim Render auch.
+    """
+    if wait:
         try:
-            result_holder["ok"] = await _generate_broll_synced_impl(req)
-        except HTTPException as exc:
-            result_holder["err"] = exc.detail
+            return await _generate_broll_synced_impl(req)
+        except HTTPException:
+            raise
         except Exception as exc:
-            result_holder["err"] = str(exc)
-        finally:
-            done_event.set()
-
-    asyncio.create_task(_worker())
-
-    async def _stream():
-        while not done_event.is_set():
-            try:
-                await asyncio.wait_for(done_event.wait(), timeout=20)
-            except asyncio.TimeoutError:
-                yield b" "  # keepalive — JSON.parse skips leading whitespace
-        payload = result_holder.get("ok") or {"error": result_holder.get("err", "unknown")}
-        yield json.dumps(payload).encode()
-
-    return StreamingResponse(
-        _stream(),
-        media_type="application/json",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
+            log.exception("[BROLL_SYNC] sync fail")
+            raise HTTPException(status_code=500, detail=str(exc))
+    job_id = str(uuid.uuid4())
+    RENDER_JOBS[job_id] = {"status": "queued"}
+    _broll_executor.submit(_broll_job, job_id, req)
+    return {"job_id": job_id, "status": "processing"}
 
 
 # ── POST /generate-broll ──────────────────────────────────────────────────────
@@ -6175,6 +6183,9 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
 # the caller polls /render-status/{job_id}.
 RENDER_JOBS: dict = {}
 _render_executor = ThreadPoolExecutor(max_workers=2)
+# eigener Worker fuer die B-Roll: sonst kann ein 5-Minuten-B-Roll-Job beide
+# Render-Slots blockieren und der eigentliche Render wartet hinter ihm
+_broll_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _make_thumbnail_image(concept: str, client_id: str, out_path: Path) -> bool:

@@ -5061,7 +5061,7 @@ def _find_phrase_time(words: list, phrase: str, after: float = 0.0) -> Optional[
 
 
 VISUAL_SCRIPT_SYS = (
-    "Du bist Bildregisseur fuer ein 9:16-Video. Du bekommst das Skript in fuenf "
+    "Du bist Bildregisseur fuer ein 9:16-Video. Du bekommst das Skript in sechs "
     "Bloecken und das wortgenaue Transkript der echten Aufnahme.\n"
     "EISERNE REGEL: Das Transkript ist die Wahrheit. Er hat nicht wortwoertlich das "
     "gesagt, was im Skript steht. Ordne die Bloecke den tatsaechlich gesprochenen "
@@ -5076,7 +5076,7 @@ VISUAL_SCRIPT_SYS = (
     "flow, lower_third, scene. Wenn dir nur ein illustratives Bild einfaellt: lass es weg.\n"
     "I Intuitive   Unter 100ms erfassbar. Wer eine Sekunde hinsehen muss, um es zu "
     "verstehen, sieht das Falsche.\n"
-    "DIE FUENF ZUSTAENDE\n"
+    "DIE SECHS ZUSTAENDE\n"
     "HOOK     Vollbild. Titel ein. Kein zweites Element. Der Satz muss allein tragen.\n"
     "SZENE    Vollbild. Hoechstens EIN Element, seitlich, nie ueber dem Gesicht. Nur "
     "wenn eine Zahl, ein Name oder ein Produkt faellt.\n"
@@ -5084,6 +5084,9 @@ VISUAL_SCRIPT_SYS = (
     "Das ist der teuerste Moment im Video — verschiess ihn nicht woanders.\n"
     "HALTUNG  Vollbild. NICHTS. Kein Overlay, keine Karte. Das ist eine Anweisung, "
     "keine Auslassung. Die Stille hier ist der Grund, warum die WENDUNG davor knallt.\n"
+    "MITNAHME Was der Zuschauer mitnimmt. HIER darf wieder ein Element stehen, genau "
+    "EINES: das Werkzeug beim Namen, die Zahl zum Nachrechnen, der Handgriff als "
+    "kurze Liste. Das ist der Block, den man abfotografiert — er darf sichtbar sein.\n"
     "CTA      Ein Wort, gross, kurz. Sonst nichts.\n"
     "HANDWERK — PFLICHT: Weniger Elemente heisst NICHT weniger Aufwand. Was steht, "
     "muss gebaut aussehen. MINDESTENS 2 der Zustaende sind full-screen 'scene'-Cutaways, "
@@ -5108,7 +5111,7 @@ VISUAL_SCRIPT_SYS = (
     "ANKER: jeder Beat braucht anchor = eine WOERTLICHE, seltene Phrase (2-5 Woerter) "
     "aus dem WORT-TRANSKRIPT, kopiert, kein Fuellwort wie 'und/das/ich'. Dort landet "
     "der Beat. Findest du keine passende Stelle: typ 'none'.\n"
-    "block = hook|szene|wendung|haltung|cta. prio 1-5 (5 = darf nie fliegen). "
+    "block = hook|szene|wendung|haltung|mitnahme|cta. prio 1-5 (5 = darf nie fliegen). "
     "hold_s = Standzeit 2-6.\n"
     "NUR JSON:\n"
     '{"beats":['
@@ -5116,6 +5119,7 @@ VISUAL_SCRIPT_SYS = (
     '{"block":"szene","typ":"stat","content":{"value":"40 EUR","label":"pro Monat"},"anchor":"Starter-Abo","prio":3,"hold_s":3},'
     '{"block":"wendung","typ":"scene","content":{"scene_type":"statement","title":"Selbst gebaut","subtitle":"in zwei Abenden"},"anchor":"selber bauen","prio":5,"hold_s":3.5},'
     '{"block":"haltung","typ":"none","content":null,"anchor":"","prio":1,"hold_s":0},'
+    '{"block":"mitnahme","typ":"scene","content":{"scene_type":"card","title":"Heute noch machen","lines":["Abos auflisten","Doppelte streichen"]},"anchor":"einmal durchgehen","prio":4,"hold_s":3.5},'
     '{"block":"cta","typ":"cta","content":"ABO","anchor":"Kommentare","prio":4,"hold_s":2.5}'
     '],"leer_gelassen":["haltung: bewusst still"]}'
 )
@@ -5542,11 +5546,13 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
     # transcript below, so they always resolve.
     transcript = " ".join(str(w.get("word", "")) for w in (words or [])).strip()
     b = briefing or {}
+    # MITNAHME ist ein eigener Block (Kalle Patch 8) und darf einen visuellen Beat
+    # bekommen — HALTUNG bleibt weiterhin bewusst leer.
     bloecke = [(k, str(b.get(k) or "").strip())
-               for k in ("hook", "szene", "wendung", "haltung", "cta")]
+               for k in ("hook", "szene", "wendung", "haltung", "mitnahme", "cta")]
     if any(t for _, t in bloecke):
         intent = "".join(f"[{k.upper()}] {t[:400]}\n" for k, t in bloecke if t)
-        src = ("SKRIPT IN FUENF BLOECKEN (das ist die visuelle Struktur — "
+        src = ("SKRIPT IN SECHS BLOECKEN (das ist die visuelle Struktur — "
                "ein Zustand pro Block):\n" + intent)
         if b.get("hook_formel"):
             src += f"HOOK-FORMEL: {b['hook_formel']}\n"

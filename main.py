@@ -5434,16 +5434,25 @@ def _pexels(query: str, n: int = 15) -> list:
         return []
 
 
-def _vision_pick(beschreibung: str, kandidaten: list) -> dict:
+def _vision_pick(beschreibung: str, kandidaten: list, streng: bool = True) -> dict:
     """Prueft die VORSCHAUBILDER, nicht die ganzen Clips — ein Standbild sagt,
-    ob der Gegenstand da ist, nicht ob die Bewegung stimmt. Ehrliche Grenze."""
+    ob der Gegenstand da ist, nicht ob die Bewegung stimmt. Ehrliche Grenze.
+
+    Genau deshalb gibt es zwei Durchgaenge: streng verlangt Gegenstand UND
+    Vorgang, locker nur noch den Gegenstand. Der strenge Pass hat in drei
+    Produktionslaeufen 45 Kandidaten gesehen und keinen genommen — ein Filter,
+    der nie etwas durchlaesst, filtert nicht, er blockiert."""
     if not (OPENROUTER_API_KEY and kandidaten):
         return {}
-    teil = kandidaten[:8]
+    teil = kandidaten[:12]
+    frage = ("Welches zeigt den beschriebenen Gegenstand und Vorgang tatsaechlich? "
+             if streng else
+             "Welches zeigt den beschriebenen GEGENSTAND oder ein sehr aehnliches "
+             "Material klar erkennbar? Die Bewegung muss nicht exakt stimmen — ein "
+             "Standbild zeigt sie ohnehin nicht. ")
     content = [{"type": "text", "text": (
         "Gesucht ist ein Clip, der DIESEN Vorgang zeigt: " + beschreibung +
-        "\nDu siehst Vorschaubilder von Stock-Clips, nummeriert ab 0. "
-        "Welches zeigt den beschriebenen Gegenstand und Vorgang tatsaechlich? "
+        "\nDu siehst Vorschaubilder von Stock-Clips, nummeriert ab 0. " + frage +
         "Deko, Menschen im Buero oder abstrakte Muster zaehlen NICHT. "
         "Passt keines, gib index -1. Nur JSON: "
         "{\"index\":0,\"begruendung\":\"ein Satz\"}")}]
@@ -5482,22 +5491,25 @@ def _stock_fuer(bild: str) -> dict:
     anfragen = [str(q) for q in (o.get("anfragen") or [])][:3]
     if typ != "stock":
         return {"asset_typ": "prozedural", "anfragen": anfragen}
-    spuren = []
-    for q in anfragen:
-        kand = _pexels(q)
-        spuren.append({"anfrage": q, "kandidaten": len(kand)})
-        if not kand:
-            continue
-        treffer = _vision_pick(bild, kand)
-        if treffer:
-            log.info("[STOCK] '%s' → Clip %s (%s)", q, treffer["clip"]["id"],
-                     treffer["begruendung"][:60])
-            return {"asset_typ": "stock", "anfragen": anfragen, "anfrage_treffer": q,
-                    "spuren": spuren, "clip": treffer["clip"],
-                    "vision": treffer["begruendung"]}
+    spuren, cache = [], {}
+    for streng in (True, False):
+        for q in anfragen:
+            if q not in cache:
+                cache[q] = _pexels(q)
+                spuren.append({"anfrage": q, "kandidaten": len(cache[q])})
+            kand = cache[q]
+            if not kand:
+                continue
+            treffer = _vision_pick(bild, kand, streng=streng)
+            if treffer:
+                log.info("[STOCK] '%s' → Clip %s (%s, %s)", q, treffer["clip"]["id"],
+                         "streng" if streng else "locker", treffer["begruendung"][:50])
+                return {"asset_typ": "stock", "anfragen": anfragen, "anfrage_treffer": q,
+                        "spuren": spuren, "clip": treffer["clip"],
+                        "streng": streng, "vision": treffer["begruendung"]}
     gefunden = sum(x["kandidaten"] for x in spuren)
     grund = ("Pexels lieferte 0 Kandidaten" if gefunden == 0
-             else "Vision-Check: kein Clip zeigt den Vorgang")
+             else "Vision-Check: kein Clip zeigt den Vorgang (streng UND locker)")
     if not PEXELS_API_KEY:
         grund = "PEXELS_API_KEY fehlt im Renderer"
     _log_run("", "stock-router", "warn", {"grund": grund, "anfragen": anfragen,
@@ -5524,7 +5536,10 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
 
     # Ankerzahl skaliert mit der Textmenge: ein kurzes Transkript hat nicht
     # vier Bilder in sich, egal wie willig das Modell ist.
-    budget = min(max_anker, max(0, len(words) // 150))
+    # 150 Woerter pro Anker war strenger als der Prompt selbst ("ein 50-Sekunden-
+    # Video hat 2 bis 4 Anker"): 239 Woerter ergaben genau EINEN Kandidaten, und
+    # faellt der durch den Stock-Router, ist die ganze Ebene leer.
+    budget = min(max_anker, max(1, round(len(words) / 90)))
     # Dasselbe Wort an drei Stellen ist ein Anker, nicht drei.
     rang_t = {"hoch": 2, "mittel": 1}
     beste = {}
@@ -5692,6 +5707,9 @@ def _contact_sheet(video: Path, words: list, face: dict, duration: float,
                 d.rectangle([x, PAD + int(ft * TH), x + TW - 1, PAD + int(fb * TH)],
                             outline=(255, 92, 92), width=3)
             d.text((x + 4, PAD + TH + 4), f"{t:.1f}s", font=f_xs, fill=(190, 190, 200))
+        if not (fb > ft > 0):
+            d.text((PAD + 60, PAD + TH + 4), "GESICHT NICHT GETRACKT — schaetz es aus den Bildern",
+                   font=f_sm, fill=(255, 92, 92))
         y = PAD + TH + 26
 
         # ── Wellenform (ffmpeg) + Transienten ────────────────────────────────
@@ -6215,7 +6233,14 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
         return track
     except Exception as exc:
         log.warning("[FACE] tracking failed: %s", exc)
-        return {}
+    # Ein toter Face-Track sieht aus wie ein funktionierender: alles rechnet mit
+    # den Default-Rails 0.15/0.66 weiter und niemand merkt, dass nie ein Gesicht
+    # gefunden wurde. Deshalb laut.
+    log.error("[FACE] KEIN Face-Track — Rails laufen auf Annahme 0.15/0.66")
+    _log_run("", "face-track", "error",
+             {"grund": "weder mediapipe noch OpenCV lieferten ein Gesicht",
+              "datei": str(video_path.name)})
+    return {}
 
 
 _REMBG_SESSION = None

@@ -10,6 +10,7 @@ playwright
 httpx
 auto-editor
 opencv-python-headless
-numpy
+numpy<2
+mediapipe
 rembg
 onnxruntime

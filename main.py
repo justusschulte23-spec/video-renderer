@@ -7230,6 +7230,22 @@ def _sess_gc() -> None:
         log.info("[SESSION] %s abgeraeumt", sid)
 
 
+def _layer_hints(lay: dict) -> list:
+    """Fussangeln, die kein Fehler sind, aber fast immer ungewollt. w und h sind
+    Anteile VERSCHIEDENER Kanten (1080 bzw. 1920) — wer beide gleich setzt und
+    einen Kreis erwartet, bekommt ein Ei."""
+    h = []
+    t = lay["transform"]
+    px_w, px_h = t["w"] * W, t["h"] * H
+    if lay["mask"] == "circle" and px_h > 0 and not (0.9 < px_w / px_h < 1.11):
+        h.append(f"mask 'circle' bei {px_w:.0f}x{px_h:.0f}px ergibt eine Ellipse. "
+                 f"Fuer einen Kreis h = w * {W}/{H} = {t['w'] * W / H:.3f} setzen.")
+    if t["w"] > 0.999 and t["h"] > 0.999 and lay["source"].get("kind") != "facecam":
+        h.append("vollflaechig — das deckt das Gesicht ab, also ein Cutaway. "
+                 "Wenn das nicht gewollt ist, kleiner machen.")
+    return h
+
+
 def _layer_defaults(raw: dict, frames: int) -> dict:
     """Fuellt eine Ebene auf die Form, die LayerStage erwartet. Der Agent soll
     nicht jedes Feld kennen muessen — was er nicht sagt, ist Vollbild, sichtbar,
@@ -7544,7 +7560,8 @@ def tool_place_layer(req: PlaceLayerRequest):
     s = _sess(req.session_id)
     lay = _layer_defaults(req.layer, s["frames"])
     s["layers"] = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
-    return {"ok": True, "layer": lay, "layers": len(s["layers"])}
+    return {"ok": True, "layer": lay, "layers": len(s["layers"]),
+            "hinweise": _layer_hints(lay)}
 
 
 class MoveLayerRequest(BaseModel):
@@ -7577,7 +7594,7 @@ def tool_move_layer(req: MoveLayerRequest):
         lay["to"] = min(s["frames"], int(req.to_frame))
     if req.mask in ("none", "circle", "rounded", "speaker"):
         lay["mask"] = req.mask
-    return {"ok": True, "layer": lay}
+    return {"ok": True, "layer": lay, "hinweise": _layer_hints(lay)}
 
 
 class RemoveLayerRequest(BaseModel):

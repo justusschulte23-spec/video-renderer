@@ -438,6 +438,8 @@ class RemotionRenderRequest(BaseModel):
     music_url:    Optional[str] = None   # background bed, sidechain-ducked under the voice (§4)
     metaphern:    bool = True            # Anker→Entfaltung→Rang→Stock-Router als echte Bildebene
     contact_sheet: bool = True           # Kontaktblatt (Filmstreifen+Wellenform+Wortraster) an die Regie
+    layer_stage:  bool = False           # R3 Teil 1: über die generische Ebenen-Composition rendern
+                                         # (identische Optik, neuer Weg — Adapter in src/layers/legacy.ts)
 
 
 class ThumbnailRequest(BaseModel):
@@ -6818,7 +6820,16 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # a 125s graphic ~62MB → Supabase 413). Short clips still get a high bitrate.
             vkbit = max(800, min(vkbit, 12000))
             gfx_scale = 0.75 if duration > 55 else 1.0   # 0.75 → exact 810x1440 (both even; H264 needs even dims)
-            _body = {"composition": comp, "inputProps": _props, "videoBitrate": f"{vkbit}k"}
+            # R3 Teil 1: dieselben Props, andere Composition. LayerStage baut die
+            # Ebenenliste aus `legacy` und fuehrt sie aus — identische Bausteine,
+            # identische Geometrie, nur ist die Reihenfolge jetzt Daten.
+            if req.layer_stage and comp == "JustusPunches":
+                _comp, _send = "LayerStage", {"legacy": _props,
+                                              "face_url": _props.get("face_url", ""),
+                                              "durationInSeconds": _props["durationInSeconds"]}
+            else:
+                _comp, _send = comp, _props
+            _body = {"composition": _comp, "inputProps": _send, "videoBitrate": f"{vkbit}k"}
             if gfx_scale < 1.0:
                 _body["scale"] = gfx_scale
             r = requests.post(f"{REMOTION_URL}/render",

@@ -7,6 +7,7 @@ import subprocess
 import math
 import asyncio
 import json
+import copy
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7230,6 +7231,66 @@ def _sess_gc() -> None:
         log.info("[SESSION] %s abgeraeumt", sid)
 
 
+# ── Teil 3: die harten Regeln ─────────────────────────────────────────────────
+# Nicht verhandelbar, weil messbar. Sie werden ERZWUNGEN, nicht gemeldet: eine
+# Regel, die nur im Bericht steht, ist eine Bitte. place-layer und move-layer
+# lehnen ab, statt den Fehler bis zum Render mitzuschleppen.
+SAFE_MARGIN = 0.06
+MAX_EXTRA_LAYERS = 3
+MIN_LAYER_S = 0.8
+MOTION_WINDOW_F = 15        # in den ersten 15 Frames muss eine Kurve laufen
+TURN_BUDGET = 30
+MIN_LAYERS_FERTIG = 3
+
+
+def _layer_rule_errors(lay: dict, face: dict) -> list:
+    """Regeln, die eine EINZELNE Ebene verletzen kann."""
+    t = lay["transform"]
+    ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
+    out = []
+    if lay["source"].get("kind") == "facecam":
+        return out                      # die Facecam darf ueberall stehen
+    if (t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6
+            or t["x"] + t["w"] > 1 - SAFE_MARGIN + 1e-6
+            or t["y"] + t["h"] > 1 - SAFE_MARGIN + 1e-6):
+        out.append({"ebene": lay["id"], "regel": "safe_area",
+                    "text": f"ragt in die aeusseren {int(SAFE_MARGIN * 100)}%"})
+    if (lay["to"] - lay["from"]) / FPS < MIN_LAYER_S:
+        out.append({"ebene": lay["id"], "regel": "mindestdauer",
+                    "text": f"{(lay['to'] - lay['from']) / FPS:.2f}s, mindestens {MIN_LAYER_S}s"})
+    vollflaechig = t["w"] > 0.95 and t["h"] > 0.95
+    if not vollflaechig and t["y"] < fb and t["y"] + t["h"] > ft:
+        out.append({"ebene": lay["id"], "regel": "gesicht",
+                    "text": f"liegt auf dem Gesicht ({ft:.2f}-{fb:.2f}). "
+                            f"Darueber: y+h <= {ft:.2f}. Darunter: y >= {fb:.2f}. "
+                            f"Vollflaechig (w und h > 0.95) waere ein Cutaway und erlaubt."})
+    return out
+
+
+def _budget_errors(layers: list) -> list:
+    """Hoechstens drei Ebenen ausser der Facecam gleichzeitig."""
+    deko = [l for l in layers if l["source"].get("kind") != "facecam"]
+    for f in sorted({x for l in deko for x in (l["from"], l["to"])}):
+        gleich = [l["id"] for l in deko if l["from"] <= f < l["to"]]
+        if len(gleich) > MAX_EXTRA_LAYERS:
+            return [{"ebene": ",".join(gleich), "regel": "budget",
+                     "text": f"{len(gleich)} Ebenen gleichzeitig ab Frame {f}, "
+                             f"erlaubt sind {MAX_EXTRA_LAYERS}"}]
+    return []
+
+
+def _motion_at_zero(layers: list) -> bool:
+    """Ab Frame 0 laeuft eine Bewegung. Handheld zaehlt NICHT — das ist
+    Subpixel-Atmen, kein Anfang."""
+    return any(int(a.get("start", 0)) < MOTION_WINDOW_F and int(a.get("end", 0)) > 0
+               for l in layers for a in (l.get("animate") or []))
+
+
+def _hard_check(layers: list, face: dict) -> list:
+    fehler = [e for l in layers for e in _layer_rule_errors(l, face)]
+    return fehler + _budget_errors(layers)
+
+
 def _layer_hints(lay: dict) -> list:
     """Fussangeln, die kein Fehler sind, aber fast immer ungewollt. w und h sind
     Anteile VERSCHIEDENER Kanten (1080 bzw. 1920) — wer beide gleich setzt und
@@ -7275,27 +7336,34 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
     }
 
 
-def _agent_prefix(s: dict) -> str:
-    """Der STATISCHE Teil, der in jedem Turn identisch waere: Stil, Transkript,
-    Gesicht, Transienten. Er gehoert vor den Cache-Punkt — ohne das bezahlt ein
-    Loop mit 30 Turns denselben Block dreissig Mal."""
-    face = s.get("face") or {}
-    peaks = ", ".join(f"{o:.2f}" for o in (s.get("onsets") or [])[:60])
+def _build_prefix(duration: float, frames_gesamt: int, face: dict, words: list,
+                  onsets: list, style: str) -> str:
+    """Der STATISCHE Block, der in jedem Turn identisch mitginge. Er wird EINMAL
+    beim Oeffnen der Sitzung gebaut und danach nie wieder berechnet.
+
+    Hier darf NICHTS stehen, was sich waehrend der Sitzung aendert. Die erste
+    Fassung enthielt die aktuelle Framezahl — und `set-duration` schreibt genau
+    die um. Der Praefix waere mitten im Loop ein anderer gewesen, der Cache
+    stillschweigend gefallen, und sichtbar geworden waere das erst auf der
+    Rechnung. Deshalb steht hier die Laenge des MATERIALS, nicht die des
+    aktuellen Schnitts."""
+    peaks = ", ".join(f"{o:.2f}" for o in (onsets or [])[:60])
     return (
-        "STIL DES KUNDEN\n" + (s.get("style_guide") or "-") + "\n\n"
-        f"CLIP: {s['duration']:.2f}s, {s['frames']} Frames bei {FPS} fps, 1080x1920.\n"
+        "STIL DES KUNDEN\n" + (style or "-") + "\n\n"
+        f"MATERIAL: {duration:.2f}s, {frames_gesamt} Frames bei {FPS} fps, 1080x1920.\n"
         f"GESICHT (Anteile der Hoehe): oben {face.get('top', '?')}, unten {face.get('bottom', '?')}, "
         f"Nase bei x={face.get('origin_x', '?')} y={face.get('origin_y', '?')}.\n\n"
-        "TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(s.get("words") or []) + "\n\n"
+        "TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(words or []) + "\n\n"
         "BETONUNGEN (Sekunden)\n" + (peaks or "-") + "\n"
     )
 
 
 class OpenSessionRequest(BaseModel):
-    facecam:   str
-    client_id: str = "justus"
-    briefing:  Optional[dict] = None
-    trim:      bool = True
+    facecam:      str
+    client_id:    str = "justus"
+    briefing:     Optional[dict] = None
+    trim:         bool = True
+    turn_budget:  int = TURN_BUDGET
 
 
 @app.post("/tool/session/open")
@@ -7334,7 +7402,12 @@ def tool_session_open(req: OpenSessionRequest):
         style = ""
 
     frames = int(round(duration * FPS))
+    # Einmal bauen, danach nie wieder anfassen — der Cache haengt an der
+    # Byte-Gleichheit dieses Strings.
+    prefix = _build_prefix(duration, frames, face, words, onsets, style)
     s = {
+        "prefix": prefix,
+        "prefix_sha": hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:16],
         "id": sid, "dir": job, "client_id": req.client_id,
         "facecam_path": cam, "face_url": face_url,
         "duration": duration, "frames": frames,
@@ -7343,6 +7416,7 @@ def tool_session_open(req: OpenSessionRequest):
         "style_guide": style, "colors": _tpl_colors(tpl),
         "briefing": req.briefing, "sfx": [], "music": None,
         "touched": time.time(),
+        "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
         # Die Facecam liegt von Anfang an als Ebene da — der Agent soll sie
         # verschieben koennen, nicht erst erfinden muessen.
         "layers": [_layer_defaults({
@@ -7370,11 +7444,67 @@ def tool_session_state(sid: str):
     s = _sess(sid)
     return {"ok": True, "session_id": sid, "frames": s["frames"],
             "duration": round(s["duration"], 3), "layers": s["layers"],
-            "sfx": s["sfx"], "music": s["music"]}
+            "sfx": s["sfx"], "music": s["music"],
+            "turns_used": s["turns_used"], "turn_budget": s["turn_budget"],
+            "abbruch_grund": s["abbruch_grund"]}
 
 
 class SessionRef(BaseModel):
     session_id: str
+
+
+def _budget_guard(s: dict) -> None:
+    """Harter Abbruch. Ein Agent, der nicht konvergiert, dreht sonst still
+    Runden — sichtbar wird das erst auf der Rechnung. Nach dem Budget nimmt die
+    Sitzung keine Aenderung mehr an; gerendert wird mit dem, was steht."""
+    if s["turns_used"] >= s["turn_budget"]:
+        raise HTTPException(status_code=409, detail={
+            "grund": "turn_budget",
+            "text": f"{s['turn_budget']} Turns verbraucht. Keine Aenderungen mehr — "
+                    f"jetzt /tool/session/render mit dem, was steht.",
+            "turns_used": s["turns_used"]})
+
+
+def _fertig(s: dict) -> dict:
+    """Objektive Fertig-Definition. NICHT der Agent entscheidet das: Modelle
+    hoeren entweder zu frueh auf oder polieren ewig. Drei messbare Bedingungen,
+    alle drei muessen stimmen."""
+    face = s.get("face") or {}
+    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    fehler = _hard_check(s["layers"], face)
+    bewegung = _motion_at_zero(s["layers"])
+    offen = []
+    if fehler:
+        offen.append(f"{len(fehler)} Regelverstoesse offen")
+    if len(deko) < MIN_LAYERS_FERTIG:
+        offen.append(f"{len(deko)} von {MIN_LAYERS_FERTIG} Ebenen (ohne Facecam)")
+    if not bewegung:
+        offen.append(f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames")
+    return {"fertig": not offen, "offen": offen, "fehler": fehler,
+            "ebenen_ohne_facecam": len(deko), "bewegung_ab_null": bewegung}
+
+
+@app.post("/tool/session/tick")
+def tool_session_tick(req: SessionRef):
+    """Einmal pro Turn vom Loop aufzurufen. Zaehlt den Turn, prueft die
+    Fertig-Definition und sagt, ob weitergebaut werden darf.
+
+    `weiter: false` heisst in beiden Faellen dasselbe fuer den Aufrufer —
+    rendern. Der Unterschied steht im Grund: `fertig` ist ein Ergebnis,
+    `turn_budget` ist ein Abbruch."""
+    s = _sess(req.session_id)
+    s["turns_used"] += 1
+    stand = _fertig(s)
+    rest = s["turn_budget"] - s["turns_used"]
+    if stand["fertig"]:
+        grund = "fertig"
+    elif rest <= 0:
+        grund = "turn_budget"
+    else:
+        grund = ""
+    s["abbruch_grund"] = grund or s.get("abbruch_grund", "")
+    return {"ok": True, "turns_used": s["turns_used"], "turns_left": max(0, rest),
+            "weiter": not (stand["fertig"] or rest <= 0), "grund": grund, **stand}
 
 
 # ── Lesen ─────────────────────────────────────────────────────────────────────
@@ -7415,10 +7545,13 @@ def tool_read_context(req: SessionRef):
     im Loop unveraendert vor den Cache-Punkt gelegt werden kann — veraendert man
     ihn zwischen zwei Turns auch nur um ein Zeichen, faellt der Cache."""
     s = _sess(req.session_id)
-    pre = _agent_prefix(s)
+    pre = s["prefix"]
     return {"ok": True, "prefix": pre, "zeichen": len(pre),
+            "sha": s["prefix_sha"],
             "contact_sheet": s.get("sheet_url", ""),
-            "hinweis": "unveraendert als cache_prefix senden, sonst greift der Cache nicht"}
+            "hinweis": "beim Oeffnen der Sitzung eingefroren. Unveraendert als "
+                       "cache_prefix senden; die sha ist dieselbe, solange der "
+                       "Block derselbe ist."}
 
 
 @app.post("/tool/read/face-track")
@@ -7558,8 +7691,15 @@ class PlaceLayerRequest(BaseModel):
 @app.post("/tool/place-layer")
 def tool_place_layer(req: PlaceLayerRequest):
     s = _sess(req.session_id)
+    _budget_guard(s)
     lay = _layer_defaults(req.layer, s["frames"])
-    s["layers"] = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
+    kandidat = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
+    fehler = _hard_check(kandidat, s.get("face") or {})
+    if fehler:
+        # Ablehnen, nicht mitschleppen. Eine Regel, die man erst im Bericht
+        # sieht, ist eine Bitte.
+        raise HTTPException(status_code=422, detail={"abgelehnt": lay["id"], "fehler": fehler})
+    s["layers"] = kandidat
     return {"ok": True, "layer": lay, "layers": len(s["layers"]),
             "hinweise": _layer_hints(lay)}
 
@@ -7581,6 +7721,8 @@ def tool_move_layer(req: MoveLayerRequest):
     lay = next((l for l in s["layers"] if l["id"] == req.id), None)
     if not lay:
         raise HTTPException(status_code=404, detail=f"Ebene '{req.id}' gibt es nicht")
+    _budget_guard(s)
+    vorher = copy.deepcopy(lay)
     if req.transform:
         lay["transform"].update({k: v for k, v in req.transform.items()
                                  if k in lay["transform"]})
@@ -7594,6 +7736,11 @@ def tool_move_layer(req: MoveLayerRequest):
         lay["to"] = min(s["frames"], int(req.to_frame))
     if req.mask in ("none", "circle", "rounded", "speaker"):
         lay["mask"] = req.mask
+    fehler = _hard_check(s["layers"], s.get("face") or {})
+    if fehler:
+        s["layers"] = [vorher if l["id"] == req.id else l for l in s["layers"]]
+        raise HTTPException(status_code=422, detail={"abgelehnt": req.id, "fehler": fehler,
+                                                     "zurueckgesetzt": True})
     return {"ok": True, "layer": lay, "hinweise": _layer_hints(lay)}
 
 
@@ -7605,6 +7752,7 @@ class RemoveLayerRequest(BaseModel):
 @app.post("/tool/remove-layer")
 def tool_remove_layer(req: RemoveLayerRequest):
     s = _sess(req.session_id)
+    _budget_guard(s)
     vorher = len(s["layers"])
     s["layers"] = [l for l in s["layers"] if l["id"] != req.id]
     if len(s["layers"]) == vorher:
@@ -7622,6 +7770,7 @@ def tool_cut(req: CutRequest):
     """Harter Schnitt auf der Facecam — Sprung auf die naechste Brennweite, nie
     geeased. Rastet auf die naechste Betonung, wenn eine in Reichweite liegt."""
     s = _sess(req.session_id)
+    _budget_guard(s)
     cam = next((l for l in s["layers"] if l["source"].get("kind") == "facecam"), None)
     if not cam or not cam["modifiers"].get("punch"):
         raise HTTPException(status_code=400, detail="keine Facecam-Ebene in der Sitzung")
@@ -7641,6 +7790,7 @@ def tool_set_duration(req: SetDurationRequest):
     """Der Agent bestimmt die Laenge. Laenger als das Material geht nicht — die
     Tonspur ist die Grenze, nicht der Wunsch."""
     s = _sess(req.session_id)
+    _budget_guard(s)
     hart = int(round(s["duration"] * FPS))
     f = max(FPS, min(int(req.frames), hart))
     s["frames"] = f
@@ -7661,6 +7811,7 @@ class AddSfxRequest(BaseModel):
 @app.post("/tool/add-sfx")
 def tool_add_sfx(req: AddSfxRequest):
     s = _sess(req.session_id)
+    _budget_guard(s)
     if req.asset not in SFX_LIBRARY:
         raise HTTPException(status_code=400,
                             detail=f"unbekannter Sound. Verfuegbar: {sorted(SFX_LIBRARY)[:30]}")
@@ -7684,59 +7835,28 @@ class SetMusicRequest(BaseModel):
 @app.post("/tool/set-music")
 def tool_set_music(req: SetMusicRequest):
     s = _sess(req.session_id)
+    _budget_guard(s)
     s["music"] = {"url": req.url, "ducking": req.ducking} if req.url else None
     return {"ok": True, "music": s["music"]}
 
 
 # ── Prüfen ────────────────────────────────────────────────────────────────────
-SAFE_MARGIN = 0.06
-MAX_EXTRA_LAYERS = 3
-MIN_LAYER_S = 0.8
-
-
 @app.post("/tool/validate")
 def tool_validate(req: SessionRef):
-    """Die harten Regeln. Nicht Geschmack — messbare Fehler, die niemand
-    absichtlich baut."""
+    """Die harten Regeln. Nicht Geschmack — messbare Fehler.
+
+    place-layer und move-layer lehnen dieselben Regeln schon beim Setzen ab; was
+    hier noch auftaucht, sind Verletzungen, die erst durch eine Aenderung
+    ANDERSWO entstanden sind (etwa set-duration, das Ebenen kuerzt)."""
     s = _sess(req.session_id)
     face = s.get("face") or {}
-    ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
-    fehler, hinweise = [], []
-    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
-    cam = next((l for l in s["layers"] if l["source"].get("kind") == "facecam"), None)
-
-    for l in deko:
-        t = l["transform"]
-        if t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6 \
-           or t["x"] + t["w"] > 1 - SAFE_MARGIN + 1e-6 or t["y"] + t["h"] > 1 - SAFE_MARGIN + 1e-6:
-            fehler.append({"ebene": l["id"], "regel": "safe_area",
-                           "text": f"ragt in die aeusseren {int(SAFE_MARGIN*100)}%"})
-        if (l["to"] - l["from"]) / FPS < MIN_LAYER_S:
-            fehler.append({"ebene": l["id"], "regel": "mindestdauer",
-                           "text": f"nur {(l['to']-l['from'])/FPS:.2f}s, mindestens {MIN_LAYER_S}s"})
-        # Vollflaechige Ebenen decken das Gesicht absichtlich — das ist ein Cutaway.
-        vollflaechig = t["w"] > 0.95 and t["h"] > 0.95
-        if not vollflaechig and t["y"] < fb and t["y"] + t["h"] > ft:
-            fehler.append({"ebene": l["id"], "regel": "gesicht",
-                           "text": f"liegt auf dem Gesicht ({ft:.2f}-{fb:.2f})"})
-
-    # Nie mehr als drei zusaetzliche Ebenen gleichzeitig.
-    grenzen = sorted({f for l in deko for f in (l["from"], l["to"])})
-    for f in grenzen:
-        gleichzeitig = [l["id"] for l in deko if l["from"] <= f < l["to"]]
-        if len(gleichzeitig) > MAX_EXTRA_LAYERS:
-            fehler.append({"ebene": ",".join(gleichzeitig), "regel": "budget",
-                           "text": f"{len(gleichzeitig)} Ebenen gleichzeitig bei Frame {f}, erlaubt {MAX_EXTRA_LAYERS}"})
-            break
-
-    # Ab Frame 0 muss sich etwas bewegen.
-    bewegt = any(a.get("start", 0) < 15 for l in s["layers"] for a in (l["animate"] or []))
-    if cam and (cam["modifiers"].get("handheld") or (cam["modifiers"].get("punch") or {}).get("frames")):
-        bewegt = True
-    if not bewegt:
+    fehler = _hard_check(s["layers"], face)
+    hinweise = []
+    if not _motion_at_zero(s["layers"]):
         fehler.append({"ebene": "-", "regel": "erster_frame",
-                       "text": "nichts bewegt sich in den ersten 15 Frames"})
-
+                       "text": f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames. "
+                               f"Handheld zaehlt nicht."})
+    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
     if not deko:
         hinweise.append("keine einzige Ebene ausser der Facecam")
     return {"ok": not fehler, "fehler": fehler, "hinweise": hinweise,
@@ -7750,6 +7870,12 @@ def tool_session_render(req: SessionRef):
     Schreibt danach jede Ebene nach render_layers — das ist die Quelle, aus der
     read_history spaeter liest."""
     s = _sess(req.session_id)
+    # KEIN Budget-Guard: rendern ist der Ausweg aus dem Abbruch, nicht noch
+    # eine Aenderung. Der Grund wandert in die Telemetrie.
+    stand = _fertig(s)
+    log.info("[SESSION] %s rendert nach %d/%d Turns — %s%s", s["id"], s["turns_used"],
+             s["turn_budget"], s.get("abbruch_grund") or "manuell",
+             "" if stand["fertig"] else f", offen: {stand['offen']}")
     job = s["dir"]
     props = {"layers": s["layers"], "legacy": None, "face_url": s["face_url"],
              "durationInSeconds": round(s["frames"] / FPS, 3)}
@@ -7803,8 +7929,14 @@ def tool_session_render(req: SessionRef):
                                "Content-Type": "application/json"})
     except Exception as exc:
         log.warning("[SESSION] render_layers nicht geschrieben: %s", exc)
+    _log_run(s["client_id"], "session-render", "ok" if stand["fertig"] else "warn",
+             {"render_id": rid, "turns": s["turns_used"], "budget": s["turn_budget"],
+              "grund": s.get("abbruch_grund") or "manuell", "offen": stand["offen"],
+              "ebenen": len(s["layers"])})
     log.info("[SESSION] %s gerendert: %d Ebenen → %s", s["id"], len(s["layers"]), url)
-    return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"])}
+    return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"]),
+            "turns_used": s["turns_used"], "grund": s.get("abbruch_grund") or "manuell",
+            "fertig": stand["fertig"], "offen": stand["offen"]}
 
 
 @app.get("/health")

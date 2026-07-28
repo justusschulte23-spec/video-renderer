@@ -7271,7 +7271,26 @@ MAX_EXTRA_LAYERS = 3
 MIN_LAYER_S = 0.8
 MOTION_WINDOW_F = 15        # in den ersten 15 Frames muss eine Kurve laufen
 TURN_BUDGET = 30
-MIN_LAYERS_FERTIG = 3
+SEKUNDEN_PRO_EBENE = 15.0   # grosszuegig — die Lueckenregel macht die Arbeit
+MIN_LAYERS_ABSOLUT = 3
+
+
+def _min_ebenen(duration: float) -> int:
+    """Boden, nicht Ziel. Fuenf Ebenen alle im ersten Drittel fallen trotzdem
+    durch, drei gleichmaessig verteilte kommen durch — das entscheidet die
+    Lueckenregel. Die Zahl hier verhindert nur, dass ein 80-Sekunden-Video mit
+    drei Elementen als fertig gilt."""
+    return max(MIN_LAYERS_ABSOLUT, int(duration // SEKUNDEN_PRO_EBENE))
+
+
+# Ebenen, die immer da sind und dem Agenten nicht gehoeren. Sie zaehlen weder
+# beim Ebenen-Boden noch beim Gleichzeitig-Budget mit — sonst waere das Budget
+# von Haus aus zur Haelfte verbraucht.
+PFLICHT_KINDS = ("facecam", "captions")
+
+
+def _ist_pflicht(l: dict) -> bool:
+    return l.get("source", {}).get("kind") in PFLICHT_KINDS
 
 
 def _layer_rule_errors(lay: dict, face: dict) -> list:
@@ -7279,8 +7298,8 @@ def _layer_rule_errors(lay: dict, face: dict) -> list:
     t = lay["transform"]
     ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
     out = []
-    if lay["source"].get("kind") == "facecam":
-        return out                      # die Facecam darf ueberall stehen
+    if _ist_pflicht(lay):
+        return out                      # Facecam und Captions duerfen ueberall stehen
     if (t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6
             or t["x"] + t["w"] > 1 - SAFE_MARGIN + 1e-6
             or t["y"] + t["h"] > 1 - SAFE_MARGIN + 1e-6):
@@ -7309,7 +7328,7 @@ def _layer_rule_errors(lay: dict, face: dict) -> list:
 
 def _budget_errors(layers: list) -> list:
     """Hoechstens drei Ebenen ausser der Facecam gleichzeitig."""
-    deko = [l for l in layers if l["source"].get("kind") != "facecam"]
+    deko = [l for l in layers if not _ist_pflicht(l)]
     for f in sorted({x for l in deko for x in (l["from"], l["to"])}):
         gleich = [l["id"] for l in deko if l["from"] <= f < l["to"]]
         if len(gleich) > MAX_EXTRA_LAYERS:
@@ -7328,8 +7347,7 @@ def _max_gap(layers: list, frames: int) -> tuple:
     nichts gezeigt, und wer bei 60 aufhoert, laesst zwanzig liegen.
 
     Gibt (Laenge in Frames, Startframe) zurueck."""
-    deko = sorted([(l["from"], l["to"]) for l in layers
-                   if l["source"].get("kind") != "facecam"])
+    deko = sorted([(l["from"], l["to"]) for l in layers if not _ist_pflicht(l)])
     luecke, wo, cursor = 0, 0, 0
     for a, b in deko:
         if a > cursor and a - cursor > luecke:
@@ -7554,6 +7572,8 @@ def tool_session_open(req: OpenSessionRequest):
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
         "gelesen": set(), "verlauf": [],
+        "tokens": {"ein": 0, "aus": 0, "cached": 0, "abgeschnitten": 0,
+                   "pro_werkzeug": {}},
         # Die Facecam liegt von Anfang an als Ebene da — der Agent soll sie
         # verschieben koennen, nicht erst erfinden muessen.
         "layers": [_layer_defaults({
@@ -7565,7 +7585,19 @@ def tool_session_open(req: OpenSessionRequest):
                           "punch": {"frames": [], "hookEndFrame": 0,
                                     "outroStartFrame": 0, "base": 1.04}},
             "herkunft": "facecam",
-        }, frames)],
+        }, frames),
+            # Captions sind keine Agentenentscheidung. Sie waren im alten
+            # Stapel immer da; ein Video ohne sie ist ein Rueckschritt, kein
+            # Stilmittel. Verschieben darf er sie, wegnehmen nicht.
+            _layer_defaults({
+                "id": "captions", "z": 29,
+                "source": {"kind": "captions", "chunks": _remotion_chunks(words),
+                           "y": round(min(0.68, float(face.get("bottom", 0.63)) + 0.05), 3),
+                           "fontSize": 66, "duckFor": [], "duckY": 0.62,
+                           "duckFontSize": 58, "hookEndFrame": 0, "hookY": 0.68,
+                           "hookFontSize": 62, "outroStartFrame": 0, "allAccent": False},
+                "from": 0, "to": frames, "herkunft": "captions",
+            }, frames)],
     }
     BUILD_SESSIONS[sid] = s
     log.info("[SESSION] %s offen: %.1fs, %d Woerter, Gesicht %s, %d Transienten",
@@ -7595,7 +7627,7 @@ class SessionRef(BaseModel):
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
                 "music", "layers", "turns_used", "turn_budget", "abbruch_grund",
-                "prefix", "prefix_sha", "gelesen", "verlauf")
+                "prefix", "prefix_sha", "gelesen", "verlauf", "tokens")
 
 
 def _checkpoint(s: dict, status: str = "offen") -> None:
@@ -7694,7 +7726,7 @@ def _fertig(s: dict) -> dict:
     hoeren entweder zu frueh auf oder polieren ewig. Drei messbare Bedingungen,
     alle drei muessen stimmen."""
     face = s.get("face") or {}
-    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    deko = [l for l in s["layers"] if not _ist_pflicht(l)]
     fehler = _hard_check(s["layers"], face)
     bewegung = _motion_at_zero(s["layers"])
     luecke_f, luecke_ab = _max_gap(s["layers"], s["frames"])
@@ -7702,8 +7734,9 @@ def _fertig(s: dict) -> dict:
     offen = []
     if fehler:
         offen.append(f"{len(fehler)} Regelverstoesse offen")
-    if len(deko) < MIN_LAYERS_FERTIG:
-        offen.append(f"{len(deko)} von {MIN_LAYERS_FERTIG} Ebenen (ohne Facecam)")
+    noetig = _min_ebenen(s["frames"] / FPS)
+    if len(deko) < noetig:
+        offen.append(f"{len(deko)} von {noetig} Ebenen (Facecam und Captions zaehlen nicht)")
     if not bewegung:
         offen.append(f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames")
     # Vierte Bedingung: drei Ebenen im ersten Drittel und danach eine Minute
@@ -7974,7 +8007,7 @@ def tool_place_layer(req: PlaceLayerRequest):
     hin = _layer_hints(lay)
     # Drei gleiche Formate hintereinander sind kein Regelverstoss, aber der
     # deutlichste Hinweis darauf, dass jemand nur noch ablegt statt zu setzen.
-    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    deko = [l for l in s["layers"] if not _ist_pflicht(l)]
     letzte = sorted(deko, key=lambda l: l["from"])[-3:]
     if len(letzte) == 3 and len({(round(l["transform"]["w"], 2),
                                   round(l["transform"]["h"], 2)) for l in letzte}) == 1:
@@ -8006,6 +8039,10 @@ def tool_move_layer(req: MoveLayerRequest):
     if req.transform:
         lay["transform"].update({k: v for k, v in req.transform.items()
                                  if k in lay["transform"]})
+        # Die Captions haengen ihre Hoehe an source.y, nicht am Transform-Kasten.
+        # Ohne diese Zeile waere ein move_layer darauf ein Aufruf, der nichts tut.
+        if lay["source"].get("kind") == "captions" and "y" in req.transform:
+            lay["source"]["y"] = float(req.transform["y"])
     if req.animate is not None:
         anim, anim_fehler = _clean_animate(req.animate, s["frames"])
         if anim_fehler:
@@ -8038,6 +8075,12 @@ class RemoveLayerRequest(BaseModel):
 def tool_remove_layer(req: RemoveLayerRequest):
     s = _sess(req.session_id)
     _budget_guard(s)
+    ziel = next((l for l in s["layers"] if l["id"] == req.id), None)
+    if ziel and _ist_pflicht(ziel):
+        raise HTTPException(status_code=422, detail={
+            "abgelehnt": req.id,
+            "text": f"'{req.id}' ist eine Pflichtebene. Verschieben, skalieren und "
+                    f"umzeiten geht (move_layer), wegnehmen nicht."})
     vorher = len(s["layers"])
     s["layers"] = [l for l in s["layers"] if l["id"] != req.id]
     if len(s["layers"]) == vorher:
@@ -8141,7 +8184,7 @@ def tool_validate(req: SessionRef):
         fehler.append({"ebene": "-", "regel": "erster_frame",
                        "text": f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames. "
                                f"Handheld zaehlt nicht."})
-    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    deko = [l for l in s["layers"] if not _ist_pflicht(l)]
     if not deko:
         hinweise.append("keine einzige Ebene ausser der Facecam")
     return {"ok": not fehler, "fehler": fehler, "hinweise": hinweise,
@@ -8326,6 +8369,28 @@ rechts von right ist frei, auch auf Augenhoehe.
 Nutze beides. Wenn drei Elemente hintereinander dieselbe Breite und dieselbe
 Hoehe haben, hast du aufgehoert zu komponieren.
 
+DIE BEISPIELE SIND EINE LATTE, KEINE VORLAGE
+Du siehst Beispiel-Overlays. Sie zeigen das NIVEAU, das erwartet wird — nicht
+das Layout, das du bauen sollst.
+
+Hat dein Element dieselbe Anordnung wie eines der Beispiele, hast du
+abgeschrieben statt gestaltet. Bau es um.
+
+Was du aus ihnen ziehst:
+  wie viel leere Flaeche ein Element braucht
+  wie stark Haupt- und Nebenzeile sich unterscheiden duerfen
+  wie zurueckhaltend Rahmen und Schatten sein muessen
+  dass eine Karte EINE Aussage traegt, nicht drei
+
+Was du NICHT uebernimmst:
+  Anordnung, Seitenverhaeltnis, Anzahl der Zeilen, Position
+
+NACH JEDEM render_html: EINMAL HINSEHEN
+Setz die Ebene, dann preview_frame auf einen Frame, an dem sie steht — BEVOR
+du die naechste baust. Ueberlappender Text, abgeschnittene Zeilen und
+Elemente, die sich gegenseitig verdecken, sieht man nur so. Du hast das
+Werkzeug; ein Cutter, der sein Bild nicht ansieht, ist keiner.
+
 WENN DU HTML SCHREIBST
 Die Leinwand ist genau so gross, wie du sie anforderst — was darueber
 hinausragt, wird abgeschnitten. Schmale Kaesten brauchen kurze Zeilen und
@@ -8360,6 +8425,33 @@ Ruf session_tick nach jedem Arbeitsschritt. Sagt es weiter=false, hoerst du auf.
 
 Du arbeitest still. Kein Bericht, keine Zwischenmeldung — ausser dem
 Dreisatz-Plan in Schritt 2."""
+
+
+OVERLAY_BEISPIELE = Path("design/overlay_beispiele.json")
+
+
+def _few_shot_overlays() -> str:
+    """Beispiel-Overlays als Latte. Sie liegen als Datei daneben, nicht im Code:
+    wer Beispiele nachlegt, soll dafuer nicht Python anfassen muessen.
+
+    Fehlt die Datei, bleibt die Beschreibung ohne Beispiele — dann baut der
+    Agent schlechter, aber er baut."""
+    try:
+        bsp = json.loads(OVERLAY_BEISPIELE.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not bsp:
+        return ""
+    kopf = ("\n\nBEISPIELE — das ist die LATTE, nicht die Vorlage. Uebernimm "
+            "das Niveau (Weissraum, Kontrast zwischen Haupt- und Nebenzeile, "
+            "zurueckhaltende Rahmen, EINE Aussage pro Karte), NICHT die Anordnung.")
+    teile = [kopf]
+    for b in bsp[:5]:
+        teile.append(
+            "\n--- {} ({}x{}px) — {}\n{}".format(
+                b.get("name", "?"), b.get("width", "?"), b.get("height", "?"),
+                b.get("warum", ""), b.get("markup", "")))
+    return "".join(teile)
 
 
 def _tool_specs() -> list:
@@ -8412,7 +8504,9 @@ def _tool_specs() -> list:
         T("generate_image", "Photoreales, gebrandetes Bild erzeugen.",
           {"prompt": {"type": "string", "description": "3-6 Woerter Englisch, EIN Hero-Objekt"}},
           ["prompt"]),
-        T("render_html", "Eigene Animation als HTML/CSS/GSAP; kommt als transparentes Video.",
+        T("render_html", "Eigene Animation als HTML/CSS/GSAP; kommt als transparentes "
+          "Video. Die Leinwand ist so gross wie width/height; was darueber hinausragt, "
+          "wird abgeschnitten (Feld 'ueberlauf' in der Antwort)." + _few_shot_overlays(),
           {"markup": {"type": "string"}, "width": {"type": "integer"},
            "height": {"type": "integer"}, "seconds": {"type": "number"}}, ["markup"]),
         T("place_layer", "Ebene setzen.", {"layer": L}, ["layer"]),
@@ -8494,14 +8588,23 @@ def _tool_call(name: str, args: dict, s: dict) -> dict:
         return {"ok": False, "fehler": str(exc)[:300]}
 
 
-def _openrouter_turn(messages: list, tools: list, model: str) -> dict:
-    body = {"model": model, "max_tokens": 3000, "tools": tools,
+# 3000 war zu knapp: EIN render_html mit reichhaltigem CSS liegt allein bei
+# 1500-3000 Ausgabe-Tokens, und ein Turn enthaelt oft mehrere Aufrufe. Bricht
+# der Turn an der Grenze ab, kommt ein halbes HTML zurueck — und das faellt
+# nirgends auf, weil ein abgeschnittener Tool-Call einfach fehlt.
+TURN_MAX_TOKENS = 8000
+
+
+def _openrouter_turn(messages: list, tools: list, model: str) -> tuple:
+    body = {"model": model, "max_tokens": TURN_MAX_TOKENS, "tools": tools,
             "messages": messages}
-    r = requests.post(OPENROUTER_URL, timeout=240, json=body, headers={
+    r = requests.post(OPENROUTER_URL, timeout=300, json=body, headers={
         "Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json",
         "HTTP-Referer": "https://schulten-ai.de", "X-Title": "Selfbrand Cutter"})
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]
+    d = r.json()
+    ch = d["choices"][0]
+    return ch["message"], (d.get("usage") or {}), ch.get("finish_reason", "")
 
 
 def _loop_impl(s: dict, model: str) -> dict:
@@ -8527,11 +8630,30 @@ def _loop_impl(s: dict, model: str) -> dict:
             s["abbruch_grund"] = "turn_budget"
             break
         try:
-            msg = _openrouter_turn(messages, tools, model)
+            msg, usage, finish = _openrouter_turn(messages, tools, model)
         except Exception as exc:
             log.error("[LOOP] %s Modellaufruf: %s", s["id"], exc)
             s["abbruch_grund"] = "modellfehler"
             break
+        ein = int(usage.get("prompt_tokens") or 0)
+        aus = int(usage.get("completion_tokens") or 0)
+        cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+        s["tokens"]["ein"] += ein
+        s["tokens"]["aus"] += aus
+        s["tokens"]["cached"] += cached
+        werkzeuge = [((c.get("function") or {}).get("name") or "?")
+                     for c in (msg.get("tool_calls") or [])]
+        # Ausgabe-Tokens dem Turn zuschreiben, nicht dem einzelnen Aufruf — feiner
+        # geht es nicht, die API rechnet pro Turn ab. Bei einem Turn mit genau
+        # einem render_html ist die Zahl exakt.
+        for wz in set(werkzeuge):
+            b = s["tokens"]["pro_werkzeug"].setdefault(wz, {"turns": 0, "aus": 0})
+            b["turns"] += 1
+            b["aus"] += aus // max(1, len(set(werkzeuge)))
+        if finish == "length":
+            s["tokens"]["abgeschnitten"] += 1
+            log.error("[LOOP] %s Turn an der Token-Grenze abgeschnitten (%d aus, Limit %d) "
+                      "— Werkzeuge: %s", s["id"], aus, TURN_MAX_TOKENS, werkzeuge)
         messages.append(msg)
         txt = (msg.get("content") or "")
         if isinstance(txt, str) and txt.strip() and not plan:
@@ -8567,8 +8689,14 @@ def _loop_impl(s: dict, model: str) -> dict:
     _checkpoint(s, "rendert")
     erg = tool_session_render(SessionRef(session_id=s["id"]))
     _checkpoint(s, "fertig")
+    t = s["tokens"]
+    log.info("[LOOP] %s Tokens: %d ein (%d aus Cache), %d aus, %d Turns abgeschnitten. "
+             "Pro Werkzeug: %s", s["id"], t["ein"], t["cached"], t["aus"],
+             t["abgeschnitten"], t["pro_werkzeug"])
+    _log_run(s["client_id"], "loop-tokens", "warn" if t["abgeschnitten"] else "ok",
+             {"session": s["id"], "turns": s["turns_used"], **t})
     return {**erg, "plan": plan, "turns": s["turns_used"],
-            "grund": s.get("abbruch_grund") or "fertig"}
+            "grund": s.get("abbruch_grund") or "fertig", "tokens": t}
 
 
 class LoopRequest(BaseModel):

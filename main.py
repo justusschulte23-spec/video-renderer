@@ -8,6 +8,7 @@ import math
 import asyncio
 import json
 import copy
+from datetime import datetime, timezone
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7218,6 +7219,10 @@ SESSION_TTL_S = 3 * 3600
 def _sess(sid: str) -> dict:
     s = BUILD_SESSIONS.get(sid)
     if not s:
+        # Container neu gestartet oder TTL abgelaufen: aus dem Checkpoint holen,
+        # statt den Aufrufer bei null anfangen zu lassen.
+        s = _rehydrate(sid)
+    if not s:
         raise HTTPException(status_code=404, detail=f"Sitzung {sid} unbekannt oder abgelaufen")
     s["touched"] = time.time()
     return s
@@ -7319,6 +7324,25 @@ def _hard_check(layers: list, face: dict) -> list:
     return fehler + _budget_errors(layers)
 
 
+def _herkunft(source: dict) -> str:
+    """Woher die Ebene stammt — aus der Quelle abgeleitet, nicht vom Agenten
+    erfragt. Ein Feld, das jemand ausfuellen MUSS, ist ein Feld, das irgendwann
+    'agent' enthaelt und damit nichts mehr sagt."""
+    kind = str(source.get("kind") or "")
+    if kind == "facecam":
+        return "facecam"
+    url = str(source.get("url") or "")
+    if "/htmltool/" in url:
+        return "html"
+    if "/scenes/" in url:
+        return "generiert"
+    if "pexels" in url or "pixabay" in url:
+        return "stock"
+    if kind in ("video", "image") and url:
+        return "extern"
+    return "baustein"
+
+
 def _layer_hints(lay: dict) -> list:
     """Fussangeln, die kein Fehler sind, aber fast immer ungewollt. w und h sind
     Anteile VERSCHIEDENER Kanten (1080 bzw. 1920) — wer beide gleich setzt und
@@ -7359,7 +7383,7 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
         "modifiers": mods,
         "mask": raw.get("mask") if raw.get("mask") in ("none", "circle", "rounded", "speaker") else "none",
         "blend": str(raw.get("blend") or "normal"),
-        "herkunft": str(raw.get("herkunft") or "agent"),
+        "herkunft": str(raw.get("herkunft") or _herkunft(raw.get("source") or {})),
         "konzept": str(raw.get("konzept") or ""),
     }
 
@@ -7445,6 +7469,7 @@ def tool_session_open(req: OpenSessionRequest):
         "briefing": req.briefing, "sfx": [], "music": None,
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
+        "gelesen": set(), "verlauf": [],
         # Die Facecam liegt von Anfang an als Ebene da — der Agent soll sie
         # verschieben koennen, nicht erst erfinden muessen.
         "layers": [_layer_defaults({
@@ -7479,6 +7504,93 @@ def tool_session_state(sid: str):
 
 class SessionRef(BaseModel):
     session_id: str
+
+
+# Felder, die in den Checkpoint gehoeren. Der Rest (Pfade, Timestamps) ist
+# entweder wiederherstellbar oder gehoert nicht in eine Datenbank.
+_CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
+                "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
+                "music", "layers", "turns_used", "turn_budget", "abbruch_grund",
+                "prefix", "prefix_sha", "gelesen", "verlauf")
+
+
+def _checkpoint(s: dict, status: str = "offen") -> None:
+    """Nach JEDEM Turn. Stuerzt der Loop bei Turn 22 ab, faengt ein Neustart
+    nicht bei null an. Die Sitzung hielt den Zustand schon — sie hat ihn nur
+    nirgends abgelegt, wo ein anderer Prozess ihn findet."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return
+    state = {k: (sorted(s[k]) if isinstance(s.get(k), set) else s.get(k))
+             for k in _CKPT_FIELDS}
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/agent_sessions", timeout=20,
+                      headers={"apikey": SUPABASE_SERVICE_KEY,
+                               "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                               "Content-Type": "application/json",
+                               "Prefer": "resolution=merge-duplicates"},
+                      json=[{"session_id": s["id"], "client_id": s["client_id"],
+                             "status": status, "turns_used": s["turns_used"],
+                             "turn_budget": s["turn_budget"], "state": state,
+                             "updated_at": datetime.now(timezone.utc).isoformat()}])
+    except Exception as exc:
+        log.warning("[CKPT] %s nicht geschrieben: %s", s["id"], exc)
+
+
+def _rehydrate(sid: str) -> Optional[dict]:
+    """Sitzung aus dem Checkpoint zurueckholen. Die Facecam liegt in Supabase,
+    also laesst sie sich neu laden — Transkript, Face-Track und Transienten
+    stehen im Zustand und werden NICHT neu berechnet."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return None
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/agent_sessions", timeout=25,
+                         params={"session_id": f"eq.{sid}", "select": "state,status"},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as exc:
+        log.warning("[CKPT] %s nicht lesbar: %s", sid, exc)
+        return None
+    if not rows:
+        return None
+    st = rows[0]["state"]
+    job = Path(f"/tmp/session_{sid}")
+    job.mkdir(parents=True, exist_ok=True)
+    cam = job / "facecam.mp4"
+    if not cam.exists() and not download_file(st["face_url"], cam):
+        log.error("[CKPT] %s: Facecam nicht wiederherstellbar", sid)
+        return None
+    s = dict(st)
+    s["dir"] = job
+    s["facecam_path"] = cam
+    s["sheet"] = None
+    s["gelesen"] = set(st.get("gelesen") or [])
+    s["touched"] = time.time()
+    BUILD_SESSIONS[sid] = s
+    log.info("[CKPT] %s wiederaufgenommen bei Turn %d/%d, %d Ebenen",
+             sid, s["turns_used"], s["turn_budget"], len(s["layers"]))
+    return s
+
+
+PFLICHTLEKTUERE = {"contact-sheet", "transcript"}
+
+
+def _lesen_guard(s: dict) -> None:
+    """Erst lesen, dann bauen. Ein Agent, der sofort place_layer ruft, ohne das
+    Kontaktblatt angesehen zu haben, produziert genau das, was diese ganze
+    Umbaureihe abstellen soll: Elemente, die irgendwo sitzen.
+
+    Geprueft wird, DASS er gelesen hat — ob er hingesehen hat, kann niemand
+    pruefen. Deshalb legt der Loop das Kontaktblatt zusaetzlich ungefragt in den
+    ersten Turn."""
+    fehlt = PFLICHTLEKTUERE - s.get("gelesen", set())
+    if fehlt:
+        raise HTTPException(status_code=428, detail={
+            "grund": "nicht_gelesen",
+            "text": "Erst lesen, dann bauen. Noch nicht aufgerufen: "
+                    + ", ".join(f"/tool/read/{x}" for x in sorted(fehlt)),
+            "fehlt": sorted(fehlt)})
 
 
 def _budget_guard(s: dict) -> None:
@@ -7543,6 +7655,10 @@ def tool_session_tick(req: SessionRef):
     else:
         grund = ""
     s["abbruch_grund"] = grund or s.get("abbruch_grund", "")
+    s["verlauf"].append({"turn": s["turns_used"], "ebenen": len(s["layers"]),
+                         "offen": stand["offen"]})
+    _checkpoint(s, "fertig" if grund == "fertig" else
+                ("abgebrochen" if grund == "turn_budget" else "offen"))
     return {"ok": True, "turns_used": s["turns_used"], "turns_left": max(0, rest),
             "weiter": not (stand["fertig"] or rest <= 0), "grund": grund, **stand}
 
@@ -7551,6 +7667,7 @@ def tool_session_tick(req: SessionRef):
 @app.post("/tool/read/transcript")
 def tool_read_transcript(req: SessionRef):
     s = _sess(req.session_id)
+    s["gelesen"].add("transcript")
     return {"ok": True, "text": _timed_transcript(s["words"], max_chars=20000),
             "words": [{"w": w["word"], "t": round(float(w["start"]), 2),
                        "e": round(float(w.get("end") or w["start"]), 2)} for w in s["words"]]}
@@ -7567,6 +7684,7 @@ def tool_read_contact_sheet(req: ContactSheetRequest):
     """Kontaktblatt fuer einen Ausschnitt — acht Standbilder, Wellenform,
     Sprechbalken. Ohne Ausschnitt das ganze Video (dann das aus der Sitzung)."""
     s = _sess(req.session_id)
+    s["gelesen"].add("contact-sheet")
     bis = req.bis if req.bis > req.von else s["duration"]
     if req.von <= 0 and bis >= s["duration"] and s.get("sheet_url"):
         return {"ok": True, "url": s["sheet_url"], "von": 0.0, "bis": round(s["duration"], 2)}
@@ -7597,6 +7715,7 @@ def tool_read_context(req: SessionRef):
 @app.post("/tool/read/face-track")
 def tool_read_face_track(req: SessionRef):
     s = _sess(req.session_id)
+    s["gelesen"].add("face-track")
     if not s["face"]:
         return {"ok": False, "grund": "kein Face-Track — Rails laufen auf Annahme 0.15/0.66",
                 "face": {"top": 0.15, "bottom": 0.66, "origin_x": 0.5, "origin_y": 0.42}}
@@ -7607,6 +7726,7 @@ def tool_read_face_track(req: SessionRef):
 @app.post("/tool/read/audio-peaks")
 def tool_read_audio_peaks(req: SessionRef):
     s = _sess(req.session_id)
+    s["gelesen"].add("audio-peaks")
     return {"ok": True, "peaks": s["onsets"], "anzahl": len(s["onsets"]),
             "hinweis": "Sekunden. Ein Einsatz auf einem Peak sitzt auf der Betonung."}
 
@@ -7625,7 +7745,7 @@ def tool_read_history(req: HistoryRequest):
     try:
         r = requests.get(f"{SUPABASE_URL}/rest/v1/render_layers", timeout=25,
                          params={"client_id": f"eq.{req.client_id}",
-                                 "select": "render_id,source_kind,konzept,z,from_frame,to_frame,created_at",
+                                 "select": "render_id,source_kind,konzept,z,from_frame,to_frame,transform,herkunft,created_at",
                                  "order": "created_at.desc", "limit": str(max(1, req.n) * 40)},
                          headers={"apikey": SUPABASE_SERVICE_KEY,
                                   "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
@@ -7643,10 +7763,30 @@ def tool_read_history(req: HistoryRequest):
             seen[rid] = {"render_id": rid, "wann": row["created_at"], "elemente": []}
             renders.append(seen[rid])
         seen[rid]["elemente"].append({"art": row["source_kind"], "konzept": row["konzept"],
-                                      "von": row["from_frame"], "bis": row["to_frame"]})
+                                      "von": row["from_frame"], "bis": row["to_frame"],
+                                      "transform": row.get("transform") or {},
+                                      "herkunft": row.get("herkunft")})
     konzepte = [e["konzept"] for r_ in renders for e in r_["elemente"] if e["konzept"]]
+    # Die drei Fragen, fuer die diese Tabelle gebaut wurde. Rohdaten
+    # zurueckzugeben und den Agenten rechnen zu lassen waere billiger und
+    # schlechter — er soll die Antwort sehen, nicht die Zahlen.
+    alle = [e for r_ in renders for e in r_["elemente"]]
+    cam = [e for e in alle if e["art"] == "facecam"]
+    in_der_ecke = sum(1 for e in cam
+                      if (e.get("transform") or {}).get("w", 1) < 0.9)
+    cutaways = [e for e in alle if e["art"] != "facecam"
+                and (e.get("transform") or {}).get("w", 0) > 0.95
+                and (e.get("transform") or {}).get("h", 0) > 0.95]
+    letzter_cut = max((e["bis"] - e["von"] for e in cutaways), default=0)
+    herkunft: dict = {}
+    for e in alle:
+        if e["art"] != "facecam":
+            herkunft[e.get("herkunft") or "?"] = herkunft.get(e.get("herkunft") or "?", 0) + 1
     return {"ok": True, "renders": renders,
             "schon_benutzt": sorted(set(konzepte)),
+            "facecam_in_der_ecke": f"{in_der_ecke} von {len(cam)} Videos",
+            "laengster_cutaway_s": round(letzter_cut / FPS, 1),
+            "herkunft_verteilung": herkunft,
             "hinweis": "Was hier steht, war schon dran. Wiederholung nur, wenn sie gewollt ist."}
 
 
@@ -7732,6 +7872,7 @@ class PlaceLayerRequest(BaseModel):
 def tool_place_layer(req: PlaceLayerRequest):
     s = _sess(req.session_id)
     _budget_guard(s)
+    _lesen_guard(s)
     lay = _layer_defaults(req.layer, s["frames"])
     kandidat = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
     fehler = _hard_check(kandidat, s.get("face") or {})
@@ -8034,6 +8175,299 @@ def tool_stats_turns(req: TurnStatsRequest):
             "turns_min": min(turns), "turns_max": max(turns),
             "ins_budget": ins_budget, "unter_sieben": genuegsam,
             "befund": befund, "laeufe": laeufe[:20]}
+
+
+# ── Teil 4: der Loop ──────────────────────────────────────────────────────────
+# Werkzeuge, Grenzen und Abbruch stehen. Was hier dazukommt, ist die Anleitung,
+# wie ein Editor denkt — und die Schleife, die sie ausfuehrt.
+EDITOR_SYS = """Du bist Cutter. Du schneidest ein 9:16-Video aus einer Aufnahme,
+die schon existiert.
+
+WIE DU ARBEITEST — IN DIESER REIHENFOLGE
+1 LESEN      Kontaktblatt ansehen, Transkript lesen, Gesicht und Betonungen
+             holen, Historie pruefen. Du baust nichts, bevor du das Material
+             kennst. Das Kontaktblatt ist ein Bild: acht Standbilder, das rote
+             Rechteck ist das getrackte Gesicht, darunter die Wellenform mit den
+             Betonungen und der Sprechbalken, dessen Luecken die Pausen sind.
+2 PLANEN     Sag in drei Saetzen, was das Video zeigt und wo die Wendepunkte
+             liegen. Grob. Keine Frames.
+3 BESCHAFFEN Erst jetzt Material holen: Stock suchen und pruefen, ein Bild
+             erzeugen, oder eine Animation selbst schreiben.
+4 BAUEN      Ebenen setzen, Schnitte, Dauer, Ton.
+5 PRUEFEN    preview_frame an den kritischen Stellen. Sieh dir an, was du gebaut
+             hast, bevor du es fuer fertig haeltst.
+
+Diese Reihenfolge ist keine Empfehlung. place_layer verweigert, solange du
+Kontaktblatt und Transkript nicht gelesen hast.
+
+WAS EIN GUTER SCHNITT IST
+- Ein Element steht, weil es die Aussage traegt. Nicht, weil an der Stelle
+  gerade nichts war.
+- Elemente sitzen dort, wo der Inhalt kippt, nicht im gleichmaessigen Takt.
+- Ein Einsatz auf einer Betonung sitzt. Nimm die Zahlen aus read_audio_peaks.
+- Verteil die Elemente ueber die GANZE Laufzeit. Drei Karten in den ersten
+  fuenfzehn Sekunden und danach eine Minute nichts ist kein fertiges Video.
+- Wiederhol nicht, was in den letzten Videos schon dran war. read_history sagt
+  dir, was das ist.
+
+DEINE MITTEL
+Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die
+Ecke ruecken ist derselbe Layer mit anderem x/y/w/h und mask 'circle'. Du kannst
+Text, Bilder, Videos, Stock-Clips und selbstgeschriebene HTML-Animationen als
+Ebenen setzen, jede mit freier Position, Groesse, Ebene und Dauer.
+
+Reicht dir kein vorhandener Baustein, schreib die Animation selbst
+(render_html, HTML+CSS+GSAP, kommt als transparentes Video zurueck).
+
+DIE HARTEN GRENZEN
+Sie werden erzwungen, nicht erbeten. Ein Verstoss wird abgelehnt, die Aenderung
+zaehlt nicht:
+- nichts in den aeusseren 6 Prozent
+- nichts auf dem Gesicht, ausser die Ebene ist vollflaechig (dann ist es ein
+  Cutaway und das Gesicht ist bewusst weg)
+- jede Ebene mindestens 0.8 Sekunden
+- hoechstens drei Ebenen gleichzeitig ausser der Facecam
+Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
+
+WANN DU FERTIG BIST
+Das entscheidest nicht du. session_tick sagt es dir: keine offenen Verstoesse,
+mindestens drei Ebenen ausser der Facecam, eine Bewegung in den ersten 15
+Frames, und keine Strecke ohne sichtbares Ereignis ueber der Grenze.
+Ruf session_tick nach jedem Arbeitsschritt. Sagt es weiter=false, hoerst du auf.
+
+Du arbeitest still. Kein Bericht, keine Zwischenmeldung — ausser dem
+Dreisatz-Plan in Schritt 2."""
+
+
+def _tool_specs() -> list:
+    """Was der Agent greifen darf. Bewusst knapp gehalten: jedes Werkzeug mehr
+    ist ein Weg mehr, den er falsch nehmen kann."""
+    def T(name, desc, props, req):
+        return {"type": "function", "function": {
+            "name": name, "description": desc,
+            "parameters": {"type": "object", "properties": props, "required": req}}}
+    L = {"type": "object", "description": "Ebene: id, source{kind,...}, from, to, z, "
+         "transform{x,y,w,h,scale,rotate,opacity,origin}, animate[], mask, konzept"}
+    return [
+        T("read_transcript", "Wort-Transkript mit Zeiten.", {}, []),
+        T("read_contact_sheet", "Kontaktblatt als Bild-URL. Ohne Grenzen das ganze Video.",
+          {"von": {"type": "number"}, "bis": {"type": "number"}}, []),
+        T("read_face_track", "Gesichtsposition als Anteile der Bildhoehe.", {}, []),
+        T("read_audio_peaks", "Betonungen in Sekunden.", {}, []),
+        T("read_history", "Was in den letzten Videos schon dran war.",
+          {"n": {"type": "integer"}}, []),
+        T("read_style_guide", "Stil und Farben des Kunden.", {}, []),
+        T("search_stock", "Stock-Clip zu einer Bildbeschreibung suchen und pruefen.",
+          {"beschreibung": {"type": "string"}}, ["beschreibung"]),
+        T("generate_image", "Photoreales, gebrandetes Bild erzeugen.",
+          {"prompt": {"type": "string", "description": "3-6 Woerter Englisch, EIN Hero-Objekt"}},
+          ["prompt"]),
+        T("render_html", "Eigene Animation als HTML/CSS/GSAP; kommt als transparentes Video.",
+          {"markup": {"type": "string"}, "width": {"type": "integer"},
+           "height": {"type": "integer"}, "seconds": {"type": "number"}}, ["markup"]),
+        T("place_layer", "Ebene setzen.", {"layer": L}, ["layer"]),
+        T("move_layer", "Ebene verschieben, skalieren, maskieren, umzeiten.",
+          {"id": {"type": "string"}, "transform": {"type": "object"},
+           "animate": {"type": "array", "items": {"type": "object"}},
+           "z": {"type": "integer"}, "from_frame": {"type": "integer"},
+           "to_frame": {"type": "integer"}, "mask": {"type": "string"}}, ["id"]),
+        T("remove_layer", "Ebene entfernen.", {"id": {"type": "string"}}, ["id"]),
+        T("cut", "Harter Schnitt auf der Facecam.", {"at_frame": {"type": "integer"}},
+          ["at_frame"]),
+        T("set_duration", "Laenge des Videos in Frames.", {"frames": {"type": "integer"}},
+          ["frames"]),
+        T("add_sfx", "Sound setzen.", {"asset": {"type": "string"},
+                                       "at_frame": {"type": "integer"}}, ["asset", "at_frame"]),
+        T("preview_frame", "EINEN Frame ansehen.", {"frame": {"type": "integer"}}, ["frame"]),
+        T("session_tick", "Turn zaehlen und fragen, ob weitergebaut werden darf.", {}, []),
+    ]
+
+
+def _tool_call(name: str, args: dict, s: dict) -> dict:
+    """Werkzeugaufruf auf die vorhandenen Endpoints abbilden. Fehler werden
+    ZURUeCKGEGEBEN, nicht geworfen — eine abgelehnte Ebene ist eine Information
+    fuer den Agenten, kein Absturz des Loops."""
+    sid = s["id"]
+    try:
+        if name == "read_transcript":
+            return tool_read_transcript(SessionRef(session_id=sid))
+        if name == "read_contact_sheet":
+            return tool_read_contact_sheet(ContactSheetRequest(
+                session_id=sid, von=args.get("von", 0.0), bis=args.get("bis", 0.0)))
+        if name == "read_face_track":
+            return tool_read_face_track(SessionRef(session_id=sid))
+        if name == "read_audio_peaks":
+            r = tool_read_audio_peaks(SessionRef(session_id=sid))
+            return {**r, "peaks": r["peaks"][:80]}
+        if name == "read_history":
+            return tool_read_history(HistoryRequest(client_id=s["client_id"],
+                                                    n=args.get("n", 5)))
+        if name == "read_style_guide":
+            return tool_read_style_guide(StyleGuideRequest(client_id=s["client_id"]))
+        if name == "search_stock":
+            r = tool_search_stock(SearchStockRequest(beschreibung=args["beschreibung"]))
+            return {k: v for k, v in r.items() if k in ("ok", "layer_source", "grund", "vision")}
+        if name == "generate_image":
+            return tool_generate_image(GenerateImageRequest(prompt=args["prompt"],
+                                                            client_id=s["client_id"]))
+        if name == "render_html":
+            return asyncio.run(tool_render_html(RenderHtmlRequest(
+                markup=args["markup"], width=args.get("width", W),
+                height=args.get("height", 420), seconds=args.get("seconds", 3.0))))
+        if name == "place_layer":
+            return tool_place_layer(PlaceLayerRequest(session_id=sid, layer=args["layer"]))
+        if name == "move_layer":
+            return tool_move_layer(MoveLayerRequest(session_id=sid, **{
+                k: v for k, v in args.items()
+                if k in ("id", "transform", "animate", "z", "from_frame", "to_frame", "mask")}))
+        if name == "remove_layer":
+            return tool_remove_layer(RemoveLayerRequest(session_id=sid, id=args["id"]))
+        if name == "cut":
+            return tool_cut(CutRequest(session_id=sid, at_frame=args["at_frame"]))
+        if name == "set_duration":
+            return tool_set_duration(SetDurationRequest(session_id=sid, frames=args["frames"]))
+        if name == "add_sfx":
+            return tool_add_sfx(AddSfxRequest(session_id=sid, asset=args["asset"],
+                                              at_frame=args["at_frame"]))
+        if name == "preview_frame":
+            return tool_preview_frame(PreviewFrameRequest(session_id=sid,
+                                                          frame=args.get("frame", 0)))
+        if name == "session_tick":
+            return tool_session_tick(SessionRef(session_id=sid))
+        return {"ok": False, "fehler": f"unbekanntes Werkzeug {name}"}
+    except HTTPException as exc:
+        d = exc.detail
+        return {"ok": False, "abgelehnt": True,
+                "fehler": d if isinstance(d, dict) else str(d)}
+    except Exception as exc:
+        log.warning("[LOOP] %s fehlgeschlagen: %s", name, exc)
+        return {"ok": False, "fehler": str(exc)[:300]}
+
+
+def _openrouter_turn(messages: list, tools: list, model: str) -> dict:
+    body = {"model": model, "max_tokens": 3000, "tools": tools,
+            "messages": messages}
+    r = requests.post(OPENROUTER_URL, timeout=240, json=body, headers={
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json",
+        "HTTP-Referer": "https://schulten-ai.de", "X-Title": "Selfbrand Cutter"})
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]
+
+
+def _loop_impl(s: dict, model: str) -> dict:
+    """Die Schleife. Sie ruft keine Regeln auf und trifft keine Geschmacks-
+    entscheidung — beides steckt in den Werkzeugen. Sie sorgt nur dafuer, dass
+    nach jedem Turn gezaehlt, gesichert und gefragt wird."""
+    tools = _tool_specs()
+    # Der statische Block liegt EINMAL im ersten User-Turn und ist ab da Praefix
+    # der gesamten Historie — genau das cached Anthropic.
+    erst = [{"type": "text", "text": s["prefix"], **CACHE_MARK}]
+    if s.get("sheet") and Path(s["sheet"]).exists():
+        import base64
+        erst.append({"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + base64.b64encode(Path(s["sheet"]).read_bytes()).decode()}})
+    erst.append({"type": "text", "text":
+                 "Das Kontaktblatt liegt bei. Fang mit Schritt 1 an."})
+    messages = [{"role": "system", "content": [{"type": "text", "text": EDITOR_SYS, **CACHE_MARK}]},
+                {"role": "user", "content": erst}]
+
+    plan, letzter = "", {}
+    while True:
+        if s["turns_used"] >= s["turn_budget"]:
+            s["abbruch_grund"] = "turn_budget"
+            break
+        try:
+            msg = _openrouter_turn(messages, tools, model)
+        except Exception as exc:
+            log.error("[LOOP] %s Modellaufruf: %s", s["id"], exc)
+            s["abbruch_grund"] = "modellfehler"
+            break
+        messages.append(msg)
+        txt = (msg.get("content") or "")
+        if isinstance(txt, str) and txt.strip() and not plan:
+            plan = txt.strip()[:600]
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            # Kein Werkzeug, nur Text: einen Turn zaehlen, sonst dreht er leer.
+            letzter = _tool_call("session_tick", {}, s)
+            messages.append({"role": "user", "content":
+                             "Kein Werkzeugaufruf. Stand: " + json.dumps(letzter, ensure_ascii=False)[:900]})
+            if not letzter.get("weiter", True):
+                break
+            continue
+        for c in calls:
+            fn = c.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            res = _tool_call(fn.get("name", ""), args, s)
+            if fn.get("name") == "session_tick":
+                letzter = res
+            messages.append({"role": "tool", "tool_call_id": c.get("id"),
+                             "content": json.dumps(res, ensure_ascii=False)[:2500]})
+        if letzter and not letzter.get("weiter", True):
+            break
+        # Turn ist vorbei: zaehlen und sichern, auch wenn der Agent nicht
+        # getickt hat. Sonst laeuft das Budget nie ab.
+        if not any((c.get("function") or {}).get("name") == "session_tick" for c in calls):
+            letzter = _tool_call("session_tick", {}, s)
+            if not letzter.get("weiter", True):
+                break
+    _checkpoint(s, "rendert")
+    erg = tool_session_render(SessionRef(session_id=s["id"]))
+    _checkpoint(s, "fertig")
+    return {**erg, "plan": plan, "turns": s["turns_used"],
+            "grund": s.get("abbruch_grund") or "fertig"}
+
+
+class LoopRequest(BaseModel):
+    facecam:     str = ""
+    session_id:  str = ""       # vorhandene Sitzung fortsetzen
+    client_id:   str = "justus"
+    briefing:    Optional[dict] = None
+    trim:        bool = True
+    turn_budget: int = TURN_BUDGET
+    model:       str = "anthropic/claude-sonnet-4.5"
+
+
+LOOP_JOBS: dict = {}
+_loop_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _loop_job(job_id: str, req: LoopRequest):
+    try:
+        if req.session_id:
+            s = _sess(req.session_id)
+        else:
+            opened = tool_session_open(OpenSessionRequest(
+                facecam=req.facecam, client_id=req.client_id,
+                briefing=req.briefing, trim=req.trim, turn_budget=req.turn_budget))
+            s = _sess(opened["session_id"])
+        LOOP_JOBS[job_id] = {"status": "processing", "session_id": s["id"]}
+        LOOP_JOBS[job_id] = {"status": "done", "session_id": s["id"],
+                             **_loop_impl(s, req.model)}
+    except Exception as exc:
+        log.exception("[LOOP] %s", job_id)
+        LOOP_JOBS[job_id] = {"status": "error", "error": str(exc)[:400]}
+
+
+@app.post("/tool/loop/run")
+def tool_loop_run(req: LoopRequest):
+    if not (req.facecam or req.session_id):
+        raise HTTPException(status_code=400, detail="facecam oder session_id noetig")
+    job_id = str(uuid.uuid4())
+    LOOP_JOBS[job_id] = {"status": "processing"}
+    _loop_executor.submit(_loop_job, job_id, req)
+    return {"ok": True, "job_id": job_id, "status": "processing"}
+
+
+@app.get("/tool/loop/status/{job_id}")
+def tool_loop_status(job_id: str):
+    j = LOOP_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="unbekannter Job")
+    return j
 
 
 @app.get("/health")

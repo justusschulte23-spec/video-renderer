@@ -5779,7 +5779,8 @@ def _metaphern_overlays(words: list, duration: float, hook_end_s: float,
         overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
                          "asset_url": clip["url"], "kind": "video", "size": "half",
                          "position": "lower_third", "topRatio": lower_rail,
-                         "from": "left" if i % 2 == 0 else "right", "text": ""})
+                         "from": "left" if i % 2 == 0 else "right", "text": "",
+                         "quelle": "metapher"})
     log.info("[META] %s → %d Bildebenen (%d prozedural verworfen, %d Anker geprueft)",
              meta.get("_diag"), len(overlays), prozedural, len(meta.get("anker") or []))
     if not overlays:
@@ -5856,7 +5857,7 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
 PCI_MAX_GLEICHZEITIG = 2
 PCI_MIN_ABSTAND_S = 3.0   # 4s liess das Bild zu lange leer — Ruhe ja, Leere nein
 # Prioritaet nach Gewicht des Elements: was die Aussage traegt, bleibt.
-PCI_PRIO = {"scene": 5, "flow": 4, "lower_third": 3, "overlay": 2, "stat": 2}
+PCI_PRIO = {"scene": 5, "metapher": 4, "flow": 4, "lower_third": 3, "overlay": 2, "stat": 2}
 
 
 def _pci_gate(dp: dict, duration: float) -> dict:
@@ -5876,9 +5877,12 @@ def _pci_gate(dp: dict, duration: float) -> dict:
             if start is None:
                 continue
             end = el.get("endFrame", start + int(2.0 * FPS))
-            items.append({"key": key, "kind": kind, "el": el,
+            # Eine Metapher ist ein echtes Bild, keine Textkarte — sie faellt
+            # nicht in dieselbe Klasse wie ein generisches Overlay.
+            k = "metapher" if el.get("quelle") == "metapher" else kind
+            items.append({"key": key, "kind": k, "el": el,
                           "start": int(start), "end": int(end),
-                          "prio": PCI_PRIO.get(kind, 1)})
+                          "prio": PCI_PRIO.get(k, 1)})
     if not items:
         return dp
     rein = len(items)

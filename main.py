@@ -438,8 +438,10 @@ class RemotionRenderRequest(BaseModel):
     music_url:    Optional[str] = None   # background bed, sidechain-ducked under the voice (§4)
     metaphern:    bool = True            # Anker→Entfaltung→Rang→Stock-Router als echte Bildebene
     contact_sheet: bool = True           # Kontaktblatt (Filmstreifen+Wellenform+Wortraster) an die Regie
-    layer_stage:  bool = False           # R3 Teil 1: über die generische Ebenen-Composition rendern
-                                         # (identische Optik, neuer Weg — Adapter in src/layers/legacy.ts)
+    layer_stage:  bool = True            # R3 Teil 1: über die generische Ebenen-Composition rendern.
+                                         # Pixelgleich zum alten Weg (SSIM-Kontrolle 2026-07-28),
+                                         # Adapter in remotion-renderer/src/layers/legacy.ts.
+                                         # false = zurück auf JustusPunches, falls etwas klemmt.
 
 
 class ThumbnailRequest(BaseModel):

@@ -5814,13 +5814,21 @@ def _timed_transcript(words: list, max_chars: int = 4200) -> str:
 
 
 def _contact_sheet(video: Path, words: list, face: dict, duration: float,
-                   onsets: list, job_dir: Path) -> Optional[Path]:
+                   onsets: list, job_dir: Path,
+                   von: float = 0.0, bis: float = 0.0) -> Optional[Path]:
     """EIN Kontaktblatt fuer die Regie: Filmstreifen mit eingezeichneter
     Gesichtsbox, Wellenform mit Transienten, Sprechbalken mit Pausen.
     Loest die drei Dinge, die der Director bisher blind geraten hat — wo das
     Gesicht ist, wo Luft ist, wie eng die Betonungen liegen. None bei Fehler:
     die Regie laeuft dann wie vorher, nur ohne Augen."""
     try:
+        # Fenster: ohne Angabe das ganze Video. Der Agent kann sich eine
+        # Passage groesser ansehen, ohne den ganzen Clip auf acht Kacheln zu
+        # quetschen.
+        t0_s = max(0.0, float(von))
+        t1_s = float(bis) if bis and bis > t0_s else duration
+        t1_s = min(t1_s, duration)
+        span = max(0.01, t1_s - t0_s)
         SHOTS, TW = 8, 150
         TH = int(TW * 16 / 9)                      # 9:16 Kachel
         W_SHEET = SHOTS * TW + (SHOTS + 1) * 8
@@ -5838,7 +5846,7 @@ def _contact_sheet(video: Path, words: list, face: dict, duration: float,
         # ── Filmstreifen + Gesichtsbox ───────────────────────────────────────
         ft, fb = float(face.get("top", 0.0) or 0.0), float(face.get("bottom", 0.0) or 0.0)
         for i in range(SHOTS):
-            t = duration * (i + 0.5) / SHOTS
+            t = t0_s + span * (i + 0.5) / SHOTS
             fp = job_dir / f"sheet_{i}.jpg"
             subprocess.run(["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(video),
                             "-frames:v", "1", "-vf", f"scale={TW}:{TH}", str(fp)],
@@ -5857,13 +5865,14 @@ def _contact_sheet(video: Path, words: list, face: dict, duration: float,
         # ── Wellenform (ffmpeg) + Transienten ────────────────────────────────
         wav_png = job_dir / "sheet_wave.png"
         inner_w = W_SHEET - 2 * PAD
-        subprocess.run(["ffmpeg", "-y", "-i", str(video), "-filter_complex",
+        subprocess.run(["ffmpeg", "-y", "-ss", f"{t0_s:.2f}", "-t", f"{span:.2f}",
+                        "-i", str(video), "-filter_complex",
                         f"showwavespic=s={inner_w}x{WAVE_H}:colors=0x8B5CF6",
                         "-frames:v", "1", str(wav_png)], check=True, capture_output=True)
         img.paste(Image.open(str(wav_png)).convert("RGB"), (PAD, y))
         for o in (onsets or []):
-            if 0 <= o <= duration:
-                ox = PAD + int(inner_w * o / max(duration, 0.01))
+            if t0_s <= o <= t1_s:
+                ox = PAD + int(inner_w * (o - t0_s) / span)
                 d.line([ox, y + WAVE_H - 16, ox, y + WAVE_H], fill=(255, 200, 60), width=2)
         d.text((PAD + 6, y + 3), "WELLENFORM · gelb = Betonung", font=f_xs, fill=(150, 150, 165))
         y += WAVE_H + 12
@@ -5875,19 +5884,22 @@ def _contact_sheet(video: Path, words: list, face: dict, duration: float,
                 a, b = float(w["start"]), float(w.get("end") or w["start"])
             except (KeyError, TypeError, ValueError):
                 continue
-            x0 = PAD + int(inner_w * a / max(duration, 0.01))
-            x1 = max(x0 + 1, PAD + int(inner_w * b / max(duration, 0.01)))
+            if b < t0_s or a > t1_s:
+                continue
+            x0 = PAD + int(inner_w * (max(a, t0_s) - t0_s) / span)
+            x1 = max(x0 + 1, PAD + int(inner_w * (min(b, t1_s) - t0_s) / span))
             d.rectangle([x0, y + 20, x1, y + BAR_H - 20], fill=(139, 92, 246))
-        for s in range(0, int(duration) + 1, 5):
-            sx = PAD + int(inner_w * s / max(duration, 0.01))
+        schritt = 5 if span > 20 else (2 if span > 8 else 1)
+        for s in range(int(t0_s), int(t1_s) + 1, schritt):
+            sx = PAD + int(inner_w * (s - t0_s) / span)
             d.line([sx, y, sx, y + BAR_H], fill=(70, 70, 88), width=1)
             d.text((sx + 3, y + BAR_H - 18), f"{s}s", font=f_xs, fill=(130, 130, 150))
         d.text((PAD + 6, y + 2), "SPRECHBALKEN · Luecke = Pause", font=f_xs, fill=(150, 150, 165))
 
         out = job_dir / "contact_sheet.jpg"
         img.save(str(out), "JPEG", quality=78)
-        log.info("[SHEET] Kontaktblatt %dx%d, %d Kacheln, Gesicht %.2f-%.2f",
-                 W_SHEET, H_SHEET, SHOTS, ft, fb)
+        log.info("[SHEET] Kontaktblatt %dx%d, %d Kacheln, %.1f-%.1fs, Gesicht %.2f-%.2f",
+                 W_SHEET, H_SHEET, SHOTS, t0_s, t1_s, ft, fb)
         return out
     except Exception as exc:
         log.warning("[SHEET] Kontaktblatt fehlgeschlagen: %s", exc)
@@ -5962,10 +5974,14 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
         src = "TRANSKRIPT (was der Sprecher sagt, plane die Visuals dazu):\n" + transcript[:2600]
     else:
         return {"beats": [], "_diag": "no-input"}
-    user = (f"Dauer ~{duration:.0f}s.\n{src}\n\n"
-            "WORT-TRANSKRIPT MIT ZEITEN (nimm die anchor-Phrasen WOERTLICH hieraus — "
-            "die Zeit in eckigen Klammern ist NUR Orientierung und gehoert NIE in den "
-            "anchor):\n" + _timed_transcript(words))
+    # Der statische Praefix: Skript-Absicht und Wort-Transkript aendern sich
+    # innerhalb eines Videos nie. Er steht getrennt, damit er VOR dem Cache-Punkt
+    # liegt — heute ein Call, ab dem Loop dreissig.
+    prefix = (f"Dauer ~{duration:.0f}s.\n{src}\n\n"
+              "WORT-TRANSKRIPT MIT ZEITEN (nimm die anchor-Phrasen WOERTLICH hieraus — "
+              "die Zeit in eckigen Klammern ist NUR Orientierung und gehoert NIE in den "
+              "anchor):\n" + _timed_transcript(words))
+    user = "Plane jetzt die Bildregie fuer genau diesen Clip."
     if sheet:
         user += ("\n\nKONTAKTBLATT (Bild): oben acht Standbilder ueber die Laufzeit, das "
                  "rote Rechteck ist das getrackte Gesicht — was du darueber oder darunter "
@@ -5977,7 +5993,8 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
         # Call, also ohne Wirkung — ab dem Tool-Loop ist genau das der Praefix,
         # der sonst bei jedem Turn neu bezahlt wird.
         raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5",
-                              max_tokens=2500, image_path=sheet, cache_system=True)
+                              max_tokens=2500, image_path=sheet, cache_system=True,
+                              cache_prefix=prefix)
     except Exception as exc:
         log.warning("[VSCRIPT] gen call failed: %s", exc)
         return {"beats": [], "_diag": f"call:{exc}"}
@@ -7133,6 +7150,7 @@ async def tool_render_html(req: RenderHtmlRequest):
 
 
 class PreviewFrameRequest(BaseModel):
+    session_id:        str = ""     # bevorzugt: rendert den Stand der Sitzung
     layers:            list = []
     legacy:            Optional[dict] = None
     face_url:          str = ""
@@ -7145,10 +7163,16 @@ class PreviewFrameRequest(BaseModel):
 def tool_preview_frame(req: PreviewFrameRequest):
     """EIN Frame als PNG. Ohne das plant der Agent weiter blind, nur mit mehr
     Freiheitsgraden — und mehr Freiheit ohne Kontrolle wird schlechter."""
+    layers, legacy = req.layers, req.legacy
+    face_url, secs = req.face_url, req.durationInSeconds
+    if req.session_id:
+        s = _sess(req.session_id)
+        layers, legacy = s["layers"], None
+        face_url, secs = s["face_url"], s["frames"] / FPS
     body = {"composition": "LayerStage", "frame": req.frame, "scale": req.scale,
-            "inputProps": {"layers": req.layers, "legacy": req.legacy,
-                           "face_url": req.face_url,
-                           "durationInSeconds": req.durationInSeconds},
+            "inputProps": {"layers": layers, "legacy": legacy,
+                           "face_url": face_url,
+                           "durationInSeconds": secs},
             "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
                          "bucket": SUPABASE_BUCKET}}
     try:
@@ -7179,6 +7203,591 @@ def tool_search_stock(req: SearchStockRequest):
     return {"ok": bool(clip.get("url")), **res,
             "layer_source": ({"kind": "video", "url": clip["url"], "transparent": False}
                              if clip.get("url") else None)}
+
+
+# ── Bau-Sitzung ───────────────────────────────────────────────────────────────
+# Die Bau-Werkzeuge brauchen etwas, worauf sie wirken. Eine Sitzung haelt den
+# teuren Teil (Transkript, Face-Track, Transienten, Kontaktblatt) EINMAL und die
+# Ebenenliste, die dazwischen waechst. Ohne sie waere jedes place_layer ein
+# eigener Render mit eigenem Whisper-Lauf.
+BUILD_SESSIONS: dict = {}
+SESSION_TTL_S = 3 * 3600
+
+
+def _sess(sid: str) -> dict:
+    s = BUILD_SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(status_code=404, detail=f"Sitzung {sid} unbekannt oder abgelaufen")
+    s["touched"] = time.time()
+    return s
+
+
+def _sess_gc() -> None:
+    now = time.time()
+    for sid in [k for k, v in BUILD_SESSIONS.items() if now - v.get("touched", 0) > SESSION_TTL_S]:
+        shutil.rmtree(BUILD_SESSIONS[sid]["dir"], ignore_errors=True)
+        BUILD_SESSIONS.pop(sid, None)
+        log.info("[SESSION] %s abgeraeumt", sid)
+
+
+def _layer_defaults(raw: dict, frames: int) -> dict:
+    """Fuellt eine Ebene auf die Form, die LayerStage erwartet. Der Agent soll
+    nicht jedes Feld kennen muessen — was er nicht sagt, ist Vollbild, sichtbar,
+    ohne Maske."""
+    t = dict(raw.get("transform") or {})
+    tr = {"x": float(t.get("x", 0)), "y": float(t.get("y", 0)),
+          "w": float(t.get("w", 1)), "h": float(t.get("h", 1)),
+          "scale": float(t.get("scale", 1)), "rotate": float(t.get("rotate", 0)),
+          "opacity": float(t.get("opacity", 1)),
+          "origin": list(t.get("origin", [0.5, 0.5]))[:2] or [0.5, 0.5]}
+    m = dict(raw.get("modifiers") or {})
+    mods = {"handheld": bool(m.get("handheld", False)),
+            "grade": bool(m.get("grade", False)),
+            "punch": m.get("punch")}
+    return {
+        "id": str(raw.get("id") or f"L{uuid.uuid4().hex[:6]}"),
+        "source": raw.get("source") or {"kind": "text", "content": ""},
+        "from": max(0, int(raw.get("from", 0))),
+        "to": min(frames, int(raw.get("to", frames))),
+        "z": int(raw.get("z", 20)),
+        "transform": tr, "animate": list(raw.get("animate") or []),
+        "modifiers": mods,
+        "mask": raw.get("mask") if raw.get("mask") in ("none", "circle", "rounded", "speaker") else "none",
+        "blend": str(raw.get("blend") or "normal"),
+        "herkunft": str(raw.get("herkunft") or "agent"),
+        "konzept": str(raw.get("konzept") or ""),
+    }
+
+
+def _agent_prefix(s: dict) -> str:
+    """Der STATISCHE Teil, der in jedem Turn identisch waere: Stil, Transkript,
+    Gesicht, Transienten. Er gehoert vor den Cache-Punkt — ohne das bezahlt ein
+    Loop mit 30 Turns denselben Block dreissig Mal."""
+    face = s.get("face") or {}
+    peaks = ", ".join(f"{o:.2f}" for o in (s.get("onsets") or [])[:60])
+    return (
+        "STIL DES KUNDEN\n" + (s.get("style_guide") or "-") + "\n\n"
+        f"CLIP: {s['duration']:.2f}s, {s['frames']} Frames bei {FPS} fps, 1080x1920.\n"
+        f"GESICHT (Anteile der Hoehe): oben {face.get('top', '?')}, unten {face.get('bottom', '?')}, "
+        f"Nase bei x={face.get('origin_x', '?')} y={face.get('origin_y', '?')}.\n\n"
+        "TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(s.get("words") or []) + "\n\n"
+        "BETONUNGEN (Sekunden)\n" + (peaks or "-") + "\n"
+    )
+
+
+class OpenSessionRequest(BaseModel):
+    facecam:   str
+    client_id: str = "justus"
+    briefing:  Optional[dict] = None
+    trim:      bool = True
+
+
+@app.post("/tool/session/open")
+def tool_session_open(req: OpenSessionRequest):
+    """Einmal lesen, dann bauen. Alles Teure passiert hier."""
+    _sess_gc()
+    sid = uuid.uuid4().hex[:12]
+    job = Path(f"/tmp/session_{sid}")
+    job.mkdir(parents=True, exist_ok=True)
+    cam = job / "facecam.mp4"
+    if not download_file(req.facecam, cam):
+        shutil.rmtree(job, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="facecam nicht ladbar")
+    if req.trim:
+        trimmed, _ = _trim_pipeline(cam, job)
+        if trimmed != cam:
+            cam = trimmed
+    cam = _fit_size(cam, job, target_mb=46, name="facecam_fit.mp4")
+    face_url = upload_supabase(cam, f"facecam_{sid}", folder="uploads")
+
+    duration = probe_duration(cam)
+    words = transcribe_audio(cam) or []
+    face = _face_track(cam, duration)
+    onsets = _audio_onsets(cam, job)
+    sheet = _contact_sheet(cam, words, face, duration, onsets, job)
+    sheet_url = upload_supabase(sheet, f"sheet_{sid}", folder="preview") if sheet else ""
+
+    tpl = _load_template(req.client_id, None)
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients",
+                         params={"client_id": f"eq.{req.client_id}", "select": "edit_style"},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}, timeout=20)
+        style = ((r.json() or [{}])[0] or {}).get("edit_style") or ""
+    except Exception:
+        style = ""
+
+    frames = int(round(duration * FPS))
+    s = {
+        "id": sid, "dir": job, "client_id": req.client_id,
+        "facecam_path": cam, "face_url": face_url,
+        "duration": duration, "frames": frames,
+        "words": words, "face": face, "onsets": onsets,
+        "sheet": sheet, "sheet_url": sheet_url,
+        "style_guide": style, "colors": _tpl_colors(tpl),
+        "briefing": req.briefing, "sfx": [], "music": None,
+        "touched": time.time(),
+        # Die Facecam liegt von Anfang an als Ebene da — der Agent soll sie
+        # verschieben koennen, nicht erst erfinden muessen.
+        "layers": [_layer_defaults({
+            "id": "facecam", "z": 10,
+            "source": {"kind": "facecam", "url": face_url},
+            "from": 0, "to": frames,
+            "transform": {"origin": [face.get("origin_x", 0.5), face.get("origin_y", 0.42)]},
+            "modifiers": {"handheld": True, "grade": True,
+                          "punch": {"frames": [], "hookEndFrame": 0,
+                                    "outroStartFrame": 0, "base": 1.04}},
+            "herkunft": "facecam",
+        }, frames)],
+    }
+    BUILD_SESSIONS[sid] = s
+    log.info("[SESSION] %s offen: %.1fs, %d Woerter, Gesicht %s, %d Transienten",
+             sid, duration, len(words), bool(face), len(onsets))
+    return {"ok": True, "session_id": sid, "duration": round(duration, 3), "frames": frames,
+            "fps": FPS, "face_url": face_url, "contact_sheet": sheet_url,
+            "words": len(words), "face": face, "onsets": len(onsets),
+            "layers": [l["id"] for l in s["layers"]]}
+
+
+@app.get("/tool/session/{sid}")
+def tool_session_state(sid: str):
+    s = _sess(sid)
+    return {"ok": True, "session_id": sid, "frames": s["frames"],
+            "duration": round(s["duration"], 3), "layers": s["layers"],
+            "sfx": s["sfx"], "music": s["music"]}
+
+
+class SessionRef(BaseModel):
+    session_id: str
+
+
+# ── Lesen ─────────────────────────────────────────────────────────────────────
+@app.post("/tool/read/transcript")
+def tool_read_transcript(req: SessionRef):
+    s = _sess(req.session_id)
+    return {"ok": True, "text": _timed_transcript(s["words"], max_chars=20000),
+            "words": [{"w": w["word"], "t": round(float(w["start"]), 2),
+                       "e": round(float(w.get("end") or w["start"]), 2)} for w in s["words"]]}
+
+
+class ContactSheetRequest(BaseModel):
+    session_id: str
+    von: float = 0.0
+    bis: float = 0.0   # 0 = bis zum Ende
+
+
+@app.post("/tool/read/contact-sheet")
+def tool_read_contact_sheet(req: ContactSheetRequest):
+    """Kontaktblatt fuer einen Ausschnitt — acht Standbilder, Wellenform,
+    Sprechbalken. Ohne Ausschnitt das ganze Video (dann das aus der Sitzung)."""
+    s = _sess(req.session_id)
+    bis = req.bis if req.bis > req.von else s["duration"]
+    if req.von <= 0 and bis >= s["duration"] and s.get("sheet_url"):
+        return {"ok": True, "url": s["sheet_url"], "von": 0.0, "bis": round(s["duration"], 2)}
+    sub = _contact_sheet(s["facecam_path"], s["words"], s["face"], s["duration"],
+                         s["onsets"], s["dir"], von=req.von, bis=bis)
+    if not sub:
+        raise HTTPException(status_code=500, detail="Kontaktblatt fehlgeschlagen")
+    url = upload_supabase(sub, f"sheet_{s['id']}_{int(req.von)}_{int(bis)}", folder="preview")
+    return {"ok": True, "url": url, "von": round(req.von, 2), "bis": round(bis, 2)}
+
+
+@app.post("/tool/read/context")
+def tool_read_context(req: SessionRef):
+    """Der statische Block, den ein Loop in JEDEM Turn mitschicken wuerde: Stil,
+    Masse, Gesicht, Transkript, Betonungen. Er kommt hier fertig heraus, damit er
+    im Loop unveraendert vor den Cache-Punkt gelegt werden kann — veraendert man
+    ihn zwischen zwei Turns auch nur um ein Zeichen, faellt der Cache."""
+    s = _sess(req.session_id)
+    pre = _agent_prefix(s)
+    return {"ok": True, "prefix": pre, "zeichen": len(pre),
+            "contact_sheet": s.get("sheet_url", ""),
+            "hinweis": "unveraendert als cache_prefix senden, sonst greift der Cache nicht"}
+
+
+@app.post("/tool/read/face-track")
+def tool_read_face_track(req: SessionRef):
+    s = _sess(req.session_id)
+    if not s["face"]:
+        return {"ok": False, "grund": "kein Face-Track — Rails laufen auf Annahme 0.15/0.66",
+                "face": {"top": 0.15, "bottom": 0.66, "origin_x": 0.5, "origin_y": 0.42}}
+    return {"ok": True, "face": s["face"],
+            "hinweis": "Anteile der Bildhoehe. Alles zwischen top und bottom verdeckt das Gesicht."}
+
+
+@app.post("/tool/read/audio-peaks")
+def tool_read_audio_peaks(req: SessionRef):
+    s = _sess(req.session_id)
+    return {"ok": True, "peaks": s["onsets"], "anzahl": len(s["onsets"]),
+            "hinweis": "Sekunden. Ein Einsatz auf einem Peak sitzt auf der Betonung."}
+
+
+class HistoryRequest(BaseModel):
+    client_id: str = "justus"
+    n:         int = 5
+
+
+@app.post("/tool/read/history")
+def tool_read_history(req: HistoryRequest):
+    """Was in den letzten Videos schon dran war. Ohne das kann eine Regie nicht
+    variieren wollen — sie weiss ja nicht, was sie schon gemacht hat."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return {"ok": False, "grund": "Supabase nicht konfiguriert", "renders": []}
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/render_layers", timeout=25,
+                         params={"client_id": f"eq.{req.client_id}",
+                                 "select": "render_id,source_kind,konzept,z,from_frame,to_frame,created_at",
+                                 "order": "created_at.desc", "limit": str(max(1, req.n) * 40)},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as exc:
+        return {"ok": False, "grund": str(exc)[:200], "renders": []}
+    renders: list = []
+    seen: dict = {}
+    for row in rows:
+        rid = row["render_id"]
+        if rid not in seen:
+            if len(renders) >= req.n:
+                continue
+            seen[rid] = {"render_id": rid, "wann": row["created_at"], "elemente": []}
+            renders.append(seen[rid])
+        seen[rid]["elemente"].append({"art": row["source_kind"], "konzept": row["konzept"],
+                                      "von": row["from_frame"], "bis": row["to_frame"]})
+    konzepte = [e["konzept"] for r_ in renders for e in r_["elemente"] if e["konzept"]]
+    return {"ok": True, "renders": renders,
+            "schon_benutzt": sorted(set(konzepte)),
+            "hinweis": "Was hier steht, war schon dran. Wiederholung nur, wenn sie gewollt ist."}
+
+
+class StyleGuideRequest(BaseModel):
+    client_id: str = "justus"
+
+
+@app.post("/tool/read/style-guide")
+def tool_read_style_guide(req: StyleGuideRequest):
+    tpl = _load_template(req.client_id, None)
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients", timeout=20,
+                         params={"client_id": f"eq.{req.client_id}", "select": "edit_style,name"},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        row = (r.json() or [{}])[0] or {}
+    except Exception:
+        row = {}
+    return {"ok": True, "client_id": req.client_id, "name": row.get("name") or req.client_id,
+            "edit_style": row.get("edit_style") or "", "farben": _tpl_colors(tpl)}
+
+
+# ── Beschaffen ────────────────────────────────────────────────────────────────
+class InspectClipRequest(BaseModel):
+    url:          str
+    beschreibung: str
+
+
+@app.post("/tool/inspect-clip")
+def tool_inspect_clip(req: InspectClipRequest):
+    """Zeigt der Clip wirklich, was er soll? Prueft ein Standbild — was er ueber
+    die BEWEGUNG sagt, ist geraten. Das ist die ehrliche Grenze des Verfahrens."""
+    job = Path(f"/tmp/inspect_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        src = job / "clip"
+        if not download_file(req.url, src):
+            raise HTTPException(status_code=400, detail="Clip nicht ladbar")
+        shot = job / "shot.jpg"
+        subprocess.run(["ffmpeg", "-y", "-ss", "0.5", "-i", str(src), "-frames:v", "1",
+                        "-vf", "scale=640:-1", str(shot)], check=True, capture_output=True)
+        import base64
+        b64 = base64.b64encode(shot.read_bytes()).decode()
+        treffer = _vision_pick(req.beschreibung, [{"thumb": "data:image/jpeg;base64," + b64,
+                                                   "id": "clip", "url": req.url}])
+        return {"ok": bool(treffer), "zeigt_es": bool(treffer),
+                "begruendung": (treffer or {}).get("begruendung", "kein Treffer"),
+                "grenze": "geprueft wurde EIN Standbild, nicht die Bewegung"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)[:200])
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
+class GenerateImageRequest(BaseModel):
+    prompt:    str
+    client_id: str = "justus"
+
+
+@app.post("/tool/generate-image")
+def tool_generate_image(req: GenerateImageRequest):
+    job = Path(f"/tmp/img_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        url = _gen_scene_image(req.prompt, req.client_id, job)
+        if not url:
+            raise HTTPException(status_code=502, detail="Bildgenerierung fehlgeschlagen")
+        return {"ok": True, "url": url,
+                "layer_source": {"kind": "image", "url": url}}
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
+# ── Bauen ─────────────────────────────────────────────────────────────────────
+class PlaceLayerRequest(BaseModel):
+    session_id: str
+    layer:      dict
+
+
+@app.post("/tool/place-layer")
+def tool_place_layer(req: PlaceLayerRequest):
+    s = _sess(req.session_id)
+    lay = _layer_defaults(req.layer, s["frames"])
+    s["layers"] = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
+    return {"ok": True, "layer": lay, "layers": len(s["layers"])}
+
+
+class MoveLayerRequest(BaseModel):
+    session_id: str
+    id:         str
+    transform:  Optional[dict] = None
+    animate:    Optional[list] = None
+    z:          Optional[int] = None
+    from_frame: Optional[int] = None
+    to_frame:   Optional[int] = None
+    mask:       Optional[str] = None
+
+
+@app.post("/tool/move-layer")
+def tool_move_layer(req: MoveLayerRequest):
+    s = _sess(req.session_id)
+    lay = next((l for l in s["layers"] if l["id"] == req.id), None)
+    if not lay:
+        raise HTTPException(status_code=404, detail=f"Ebene '{req.id}' gibt es nicht")
+    if req.transform:
+        lay["transform"].update({k: v for k, v in req.transform.items()
+                                 if k in lay["transform"]})
+    if req.animate is not None:
+        lay["animate"] = req.animate
+    if req.z is not None:
+        lay["z"] = int(req.z)
+    if req.from_frame is not None:
+        lay["from"] = max(0, int(req.from_frame))
+    if req.to_frame is not None:
+        lay["to"] = min(s["frames"], int(req.to_frame))
+    if req.mask in ("none", "circle", "rounded", "speaker"):
+        lay["mask"] = req.mask
+    return {"ok": True, "layer": lay}
+
+
+class RemoveLayerRequest(BaseModel):
+    session_id: str
+    id:         str
+
+
+@app.post("/tool/remove-layer")
+def tool_remove_layer(req: RemoveLayerRequest):
+    s = _sess(req.session_id)
+    vorher = len(s["layers"])
+    s["layers"] = [l for l in s["layers"] if l["id"] != req.id]
+    if len(s["layers"]) == vorher:
+        raise HTTPException(status_code=404, detail=f"Ebene '{req.id}' gibt es nicht")
+    return {"ok": True, "layers": len(s["layers"])}
+
+
+class CutRequest(BaseModel):
+    session_id: str
+    at_frame:   int
+
+
+@app.post("/tool/cut")
+def tool_cut(req: CutRequest):
+    """Harter Schnitt auf der Facecam — Sprung auf die naechste Brennweite, nie
+    geeased. Rastet auf die naechste Betonung, wenn eine in Reichweite liegt."""
+    s = _sess(req.session_id)
+    cam = next((l for l in s["layers"] if l["source"].get("kind") == "facecam"), None)
+    if not cam or not cam["modifiers"].get("punch"):
+        raise HTTPException(status_code=400, detail="keine Facecam-Ebene in der Sitzung")
+    f = _snap_frame(max(0, min(int(req.at_frame), s["frames"] - 1)), s["onsets"], FPS)
+    frames = sorted(set(cam["modifiers"]["punch"]["frames"] + [f]))
+    cam["modifiers"]["punch"]["frames"] = frames
+    return {"ok": True, "at_frame": f, "gesnappt": f != int(req.at_frame), "schnitte": frames}
+
+
+class SetDurationRequest(BaseModel):
+    session_id: str
+    frames:     int
+
+
+@app.post("/tool/set-duration")
+def tool_set_duration(req: SetDurationRequest):
+    """Der Agent bestimmt die Laenge. Laenger als das Material geht nicht — die
+    Tonspur ist die Grenze, nicht der Wunsch."""
+    s = _sess(req.session_id)
+    hart = int(round(s["duration"] * FPS))
+    f = max(FPS, min(int(req.frames), hart))
+    s["frames"] = f
+    for l in s["layers"]:
+        l["to"] = min(l["to"], f)
+        l["from"] = min(l["from"], max(0, f - 1))
+    return {"ok": True, "frames": f, "sekunden": round(f / FPS, 2),
+            "gekappt_bei": hart if req.frames > hart else None}
+
+
+class AddSfxRequest(BaseModel):
+    session_id: str
+    asset:      str          # asset_id aus der Bibliothek
+    at_frame:   int
+    gain:       float = 1.0
+
+
+@app.post("/tool/add-sfx")
+def tool_add_sfx(req: AddSfxRequest):
+    s = _sess(req.session_id)
+    if req.asset not in SFX_LIBRARY:
+        raise HTTPException(status_code=400,
+                            detail=f"unbekannter Sound. Verfuegbar: {sorted(SFX_LIBRARY)[:30]}")
+    ev = {"asset": req.asset, "time": round(max(0, req.at_frame) / FPS, 3),
+          "gain": float(req.gain)}
+    s["sfx"].append(ev)
+    return {"ok": True, "sfx": s["sfx"]}
+
+
+@app.get("/tool/sfx-library")
+def tool_sfx_library():
+    return {"ok": True, "assets": sorted(SFX_LIBRARY)}
+
+
+class SetMusicRequest(BaseModel):
+    session_id: str
+    url:        str = ""
+    ducking:    bool = True
+
+
+@app.post("/tool/set-music")
+def tool_set_music(req: SetMusicRequest):
+    s = _sess(req.session_id)
+    s["music"] = {"url": req.url, "ducking": req.ducking} if req.url else None
+    return {"ok": True, "music": s["music"]}
+
+
+# ── Prüfen ────────────────────────────────────────────────────────────────────
+SAFE_MARGIN = 0.06
+MAX_EXTRA_LAYERS = 3
+MIN_LAYER_S = 0.8
+
+
+@app.post("/tool/validate")
+def tool_validate(req: SessionRef):
+    """Die harten Regeln. Nicht Geschmack — messbare Fehler, die niemand
+    absichtlich baut."""
+    s = _sess(req.session_id)
+    face = s.get("face") or {}
+    ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
+    fehler, hinweise = [], []
+    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    cam = next((l for l in s["layers"] if l["source"].get("kind") == "facecam"), None)
+
+    for l in deko:
+        t = l["transform"]
+        if t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6 \
+           or t["x"] + t["w"] > 1 - SAFE_MARGIN + 1e-6 or t["y"] + t["h"] > 1 - SAFE_MARGIN + 1e-6:
+            fehler.append({"ebene": l["id"], "regel": "safe_area",
+                           "text": f"ragt in die aeusseren {int(SAFE_MARGIN*100)}%"})
+        if (l["to"] - l["from"]) / FPS < MIN_LAYER_S:
+            fehler.append({"ebene": l["id"], "regel": "mindestdauer",
+                           "text": f"nur {(l['to']-l['from'])/FPS:.2f}s, mindestens {MIN_LAYER_S}s"})
+        # Vollflaechige Ebenen decken das Gesicht absichtlich — das ist ein Cutaway.
+        vollflaechig = t["w"] > 0.95 and t["h"] > 0.95
+        if not vollflaechig and t["y"] < fb and t["y"] + t["h"] > ft:
+            fehler.append({"ebene": l["id"], "regel": "gesicht",
+                           "text": f"liegt auf dem Gesicht ({ft:.2f}-{fb:.2f})"})
+
+    # Nie mehr als drei zusaetzliche Ebenen gleichzeitig.
+    grenzen = sorted({f for l in deko for f in (l["from"], l["to"])})
+    for f in grenzen:
+        gleichzeitig = [l["id"] for l in deko if l["from"] <= f < l["to"]]
+        if len(gleichzeitig) > MAX_EXTRA_LAYERS:
+            fehler.append({"ebene": ",".join(gleichzeitig), "regel": "budget",
+                           "text": f"{len(gleichzeitig)} Ebenen gleichzeitig bei Frame {f}, erlaubt {MAX_EXTRA_LAYERS}"})
+            break
+
+    # Ab Frame 0 muss sich etwas bewegen.
+    bewegt = any(a.get("start", 0) < 15 for l in s["layers"] for a in (l["animate"] or []))
+    if cam and (cam["modifiers"].get("handheld") or (cam["modifiers"].get("punch") or {}).get("frames")):
+        bewegt = True
+    if not bewegt:
+        fehler.append({"ebene": "-", "regel": "erster_frame",
+                       "text": "nichts bewegt sich in den ersten 15 Frames"})
+
+    if not deko:
+        hinweise.append("keine einzige Ebene ausser der Facecam")
+    return {"ok": not fehler, "fehler": fehler, "hinweise": hinweise,
+            "ebenen": len(s["layers"])}
+
+
+# ── Rendern ───────────────────────────────────────────────────────────────────
+@app.post("/tool/session/render")
+def tool_session_render(req: SessionRef):
+    """Die Sitzung zu Ende bringen: Ebenen → Remotion, Ton drunter, SFX, Musik.
+    Schreibt danach jede Ebene nach render_layers — das ist die Quelle, aus der
+    read_history spaeter liest."""
+    s = _sess(req.session_id)
+    job = s["dir"]
+    props = {"layers": s["layers"], "legacy": None, "face_url": s["face_url"],
+             "durationInSeconds": round(s["frames"] / FPS, 3)}
+    vkbit = max(800, min(int(42 * 8 * 1000 / max(s["frames"] / FPS, 1.0)), 12000))
+    body = {"composition": "LayerStage", "inputProps": props, "videoBitrate": f"{vkbit}k",
+            "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
+                         "bucket": SUPABASE_BUCKET}}
+    if s["frames"] / FPS > 55:
+        body["scale"] = 0.75
+    try:
+        r = requests.post(f"{REMOTION_URL}/render", json=body, timeout=900)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"remotion: {exc}")
+    if not data.get("ok"):
+        raise HTTPException(status_code=502, detail=str(data.get("error"))[:300])
+
+    gfx = job / "gfx_session.mp4"
+    if not download_file(data["url"], gfx):
+        raise HTTPException(status_code=500, detail="Grafik nicht ladbar")
+    out = job / "final_session.mp4"
+    LUT = "lut/cinematic.cube"
+    sharp = "unsharp=3:3:0.35:3:3:0.0,eq=contrast=1.03:saturation=1.05:brightness=0.012"
+    vf = f"lut3d={LUT},{sharp}" if os.path.exists(LUT) else sharp
+    run(["ffmpeg", "-y", "-i", str(gfx), "-i", str(s["facecam_path"]),
+         "-map", "0:v:0", "-map", "1:a:0?", "-vf", vf,
+         "-c:v", "libx264", "-crf", "19", "-preset", "medium", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(out)],
+        "session_mux")
+    if s["sfx"]:
+        mixed = mix_sfx_into_video(out, s["sfx"], job, s["frames"] / FPS)
+        if mixed:
+            out = mixed
+    if s.get("music") and s["music"].get("url"):
+        out = _add_music_ducked(out, s["music"]["url"], job)
+    out = _fit_size(out, job)
+    url = upload_supabase(out, f"session_{s['id']}", folder="renders")
+
+    # Telemetrie: was TATSAECHLICH gerendert wurde, nicht was geplant war.
+    rid = f"{s['id']}"
+    rows = [{"client_id": s["client_id"], "render_id": rid, "layer_id": l["id"],
+             "source_kind": l["source"].get("kind"), "z": l["z"],
+             "from_frame": l["from"], "to_frame": l["to"],
+             "transform": l["transform"], "herkunft": l["herkunft"],
+             "konzept": l["konzept"]} for l in s["layers"]]
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/render_layers", timeout=25, json=rows,
+                      headers={"apikey": SUPABASE_SERVICE_KEY,
+                               "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                               "Content-Type": "application/json"})
+    except Exception as exc:
+        log.warning("[SESSION] render_layers nicht geschrieben: %s", exc)
+    log.info("[SESSION] %s gerendert: %d Ebenen → %s", s["id"], len(s["layers"]), url)
+    return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"])}
 
 
 @app.get("/health")

@@ -384,7 +384,10 @@ class RenderRequest(BaseModel):
 
 # ── Remotion renderer integration (primary motion-graphics; ffmpeg = audio mux) ──
 REMOTION_URL = os.environ.get(
-    "REMOTION_URL", "https://remotion-renderer-production-4e7d.up.railway.app"
+    # Der alte Standalone-Dienst (…-4e7d) schläft mit altem Code und antwortet
+    # nicht mehr. Der Default zeigte trotzdem noch dorthin — eine Mine für den
+    # Tag, an dem die Env-Variable mal fehlt.
+    "REMOTION_URL", "https://remotion-production-6381.up.railway.app"
 ).rstrip("/")
 FORMAT_COMPOSITION = {
     "broll_automated":      "JustusBroll",
@@ -523,12 +526,25 @@ class InfosheetRequest(BaseModel):
 CHEAP_MODEL = "z-ai/glm-4.6"   # mechanical/derivative tasks (detectors, repurposing) — ~25x cheaper than sonnet
 
 
+CACHE_MARK = {"cache_control": {"type": "ephemeral"}}
+
+
 def call_openrouter(system_prompt: str, user_message: str,
                     model: str = "anthropic/claude-haiku-4.5",
                     max_tokens: int = 6000,
-                    image_path: Optional[Path] = None) -> str:
+                    image_path: Optional[Path] = None,
+                    cache_system: bool = False,
+                    cache_prefix: Optional[str] = None) -> str:
     """image_path haengt EIN Bild an die User-Nachricht. Ohne Bild bleibt der
-    Content ein String — Modelle, die keine Bilder koennen, sehen keinen Unterschied."""
+    Content ein String — Modelle, die keine Bilder koennen, sehen keinen Unterschied.
+
+    cache_system / cache_prefix setzen einen Cache-Punkt auf den STATISCHEN Teil
+    (Systemprompt, Few-Shots, Kontaktblatt, Transkript). Das zahlt sich erst aus,
+    wenn derselbe Praefix mehrfach geschickt wird — heute bei den wiederholten
+    Aufrufen der Anker-Maschine, ab dem Tool-Loop bei jedem einzelnen Turn.
+    Anthropic ignoriert einen Cache-Punkt unter ~1024 Token stillschweigend; das
+    ist kein Fehler, es passiert dann nur nichts.
+    """
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY not set")
     headers = {
@@ -537,18 +553,24 @@ def call_openrouter(system_prompt: str, user_message: str,
         "HTTP-Referer": "https://schultensolutions.app.n8n.cloud",
         "X-Title": "Schulten Solutions Video Renderer",
     }
-    user_content = user_message
+    parts: list = []
+    if cache_prefix:
+        parts.append({"type": "text", "text": cache_prefix, **CACHE_MARK})
+    parts.append({"type": "text", "text": user_message})
     if image_path and Path(image_path).exists():
         import base64
         b64 = base64.b64encode(Path(image_path).read_bytes()).decode()
-        user_content = [{"type": "text", "text": user_message},
-                        {"type": "image_url",
-                         "image_url": {"url": "data:image/jpeg;base64," + b64}}]
+        parts.append({"type": "image_url",
+                      "image_url": {"url": "data:image/jpeg;base64," + b64}})
+    # Ohne Bild und ohne Praefix bleibt es ein schlichter String — so wie vorher.
+    user_content = parts[0]["text"] if len(parts) == 1 and not cache_prefix else parts
+    system_content = ([{"type": "text", "text": system_prompt, **CACHE_MARK}]
+                      if cache_system else system_prompt)
     payload = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": system_content},
             {"role": "user",   "content": user_content},
         ],
     }
@@ -561,6 +583,88 @@ def call_openrouter(system_prompt: str, user_message: str,
     except Exception as exc:
         log.error("OpenRouter parse error. status=%d body=%s", resp.status_code, resp.text[:400])
         raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
+
+
+HTML_TOOL_MAX_S = 8.0        # ein vom Agenten gebautes Element, kein Film
+HTML_TOOL_MAX_PX = 1080 * 1920
+
+
+async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
+                             job_dir: Path, fps: int = FPS) -> Optional[Path]:
+    """HTML/CSS/GSAP → transparentes WebM (vp9, yuva420p).
+
+    NICHT der Aufnahme-Weg von `render_html_to_video`: der nimmt mit der Wanduhr
+    auf, liefert kein Alpha und muss hinterher graue Startframes wegschneiden.
+    Hier wird Frame fuer Frame gestellt — GSAP und die CSS-Animationen werden auf
+    t = f/fps gesetzt, dann ein Screenshot mit `omit_background`. Deterministisch:
+    derselbe Markup ergibt zweimal dieselben Pixel.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        log.error("[HTMLTOOL] Playwright fehlt")
+        return None
+
+    seconds = max(0.3, min(float(seconds), HTML_TOOL_MAX_S))
+    if width * height > HTML_TOOL_MAX_PX:
+        log.warning("[HTMLTOOL] %dx%d ueber der Grenze — auf Leinwandmass gekappt", width, height)
+        width, height = W, H
+    frames = int(round(seconds * fps))
+    shots = job_dir / "htmlshots"
+    shots.mkdir(parents=True, exist_ok=True)
+
+    page_html = (
+        "<!doctype html><html><head><meta charset='utf-8'><style>"
+        "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
+        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}</style></head>"
+        f"<body>{markup}</body></html>"
+    )
+    src = job_dir / "tool.html"
+    src.write_text(page_html, encoding="utf-8")
+
+    t0 = time.time()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        )
+        ctx = await browser.new_context(viewport={"width": width, "height": height},
+                                        device_scale_factor=1)
+        if GSAP_LOCAL.exists():
+            await ctx.add_init_script(path=str(GSAP_LOCAL))
+        page = await ctx.new_page()
+        errs: list = []
+        page.on("pageerror", lambda e: errs.append(str(e)[:160]))
+        await page.goto(f"file://{src.absolute()}", wait_until="load", timeout=20000)
+        # Beide Uhren anhalten, damit NICHTS von der Wanduhr abhaengt.
+        await page.evaluate("""() => {
+            if (window.gsap) { gsap.globalTimeline.pause(); }
+            document.getAnimations().forEach(a => { a.pause(); });
+        }""")
+        for f in range(frames):
+            t = f / fps
+            await page.evaluate(
+                """(t) => {
+                    if (window.gsap) gsap.globalTimeline.seek(t);
+                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+                }""", t)
+            await page.screenshot(path=str(shots / f"{f:05d}.png"), omit_background=True)
+        await ctx.close()
+        await browser.close()
+    if errs:
+        log.warning("[HTMLTOOL] %d JS-Fehler, erster: %s", len(errs), errs[0])
+
+    out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
+    try:
+        run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
+             "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
+             "-auto-alt-ref", "0", str(out)], "htmltool_webm")
+    except Exception as exc:
+        log.error("[HTMLTOOL] ffmpeg: %s", exc)
+        return None
+    log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB",
+             frames, width, height, time.time() - t0, out.stat().st_size / 1024)
+    return out
 
 
 # ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────
@@ -5351,7 +5455,8 @@ def _rang(wort: str, ideen: list) -> list:
     liste = "\n".join(f"{i}: {x.get('bild','')}" for i, x in enumerate(ideen))
     try:
         raw = call_openrouter(RANG_SYS, f"WORT: {wort}\n\n{liste}",
-                              model="anthropic/claude-sonnet-4.5", max_tokens=300)
+                              model="anthropic/claude-sonnet-4.5", max_tokens=300,
+                              cache_system=True)
         m = re.search(r"\{[\s\S]*\}", raw)
         o = json.loads(m.group()) if m else {}
         order = [int(i) for i in o.get("von_naheliegend_nach_ueberraschend", [])
@@ -5485,7 +5590,7 @@ def _stock_fuer(bild: str) -> dict:
     """Router + Suche + Vision-Check fuer EIN Bild."""
     try:
         raw = call_openrouter(ROUTER_SYS, bild, model="anthropic/claude-sonnet-4.5",
-                              max_tokens=300)
+                              max_tokens=300, cache_system=True)
         m = re.search(r"\{[\s\S]*\}", raw)
         o = json.loads(m.group()) if m else {}
     except Exception as exc:
@@ -5559,11 +5664,14 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
     for a in stark:
         i = int(a.get("wort_index") or 0)
         satz = " ".join(str(w.get("word", "")) for w in words[max(0, i - 12):i + 12])
-        user = (f"{shots}\n\nANKER: {a.get('wort')} — wörtlich: {a.get('woertlich')}\n"
+        # Die Few-Shots sind bei jedem Anker identisch — sie gehoeren vor den
+        # Cache-Punkt, der wechselnde Anker dahinter.
+        user = (f"ANKER: {a.get('wort')} — wörtlich: {a.get('woertlich')}\n"
                 f"SATZ: {satz}")
         try:
             raw = call_openrouter(ENTFALTUNG_SYS, user, model="anthropic/claude-sonnet-4.5",
-                                  max_tokens=1200)
+                                  max_tokens=1200, cache_system=True,
+                                  cache_prefix=shots)
             m = re.search(r"\{[\s\S]*\}", raw)
             k = json.loads(m.group()) if m else {}
         except Exception as exc:
@@ -5835,8 +5943,11 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
                  "Unten der Sprechbalken: Luecken sind Pausen. Setz deine Zustaende dorthin, "
                  "wo Luft ist, nicht mitten in einen Satz.")
     try:
+        # Der Regie-Systemprompt ist bei jedem Video derselbe. Heute ein einziger
+        # Call, also ohne Wirkung — ab dem Tool-Loop ist genau das der Praefix,
+        # der sonst bei jedem Turn neu bezahlt wird.
         raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5",
-                              max_tokens=2500, image_path=sheet)
+                              max_tokens=2500, image_path=sheet, cache_system=True)
     except Exception as exc:
         log.warning("[VSCRIPT] gen call failed: %s", exc)
         return {"beats": [], "_diag": f"call:{exc}"}
@@ -6954,6 +7065,90 @@ def render_status(job_id: str):
     if not j:
         raise HTTPException(status_code=404, detail="unknown job_id")
     return {"job_id": job_id, **j}
+
+
+# ── Werkzeuge für den Agenten ─────────────────────────────────────────────────
+# Noch kein Loop — erst die Werkzeuge, die er später greifen soll. Jedes ist ein
+# eigener Endpoint, damit es einzeln testbar bleibt und nicht erst im Agenten
+# das erste Mal läuft.
+
+class RenderHtmlRequest(BaseModel):
+    markup:  str
+    width:   int = W
+    height:  int = 420
+    seconds: float = 3.0
+
+
+@app.post("/tool/render-html")
+async def tool_render_html(req: RenderHtmlRequest):
+    """Der Agent schreibt die Animation selbst und bekommt sie als transparentes
+    Video zurück. Das ist der Unterschied zwischen Auswählen und Schneiden: er ist
+    nicht mehr auf die Bausteine beschränkt, die zufällig schon existieren."""
+    if not req.markup.strip():
+        raise HTTPException(status_code=400, detail="markup ist leer")
+    job_dir = Path(f"/tmp/htmltool_{uuid.uuid4()}")
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out = await _render_html_alpha(req.markup, req.width, req.height, req.seconds, job_dir)
+        if not out:
+            raise HTTPException(status_code=500, detail="HTML-Render fehlgeschlagen")
+        url = upload_supabase(out, out.stem, folder="htmltool", content_type="video/webm")
+        return {"ok": True, "url": url,
+                "seconds": min(req.seconds, HTML_TOOL_MAX_S),
+                # direkt als Ebene verwendbar — transparent muss gesetzt sein,
+                # sonst rendert Chromium den Alpha-Kanal schwarz
+                "layer_source": {"kind": "video", "url": url, "transparent": True}}
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+class PreviewFrameRequest(BaseModel):
+    layers:            list = []
+    legacy:            Optional[dict] = None
+    face_url:          str = ""
+    durationInSeconds: float = 15.0
+    frame:             int = 0
+    scale:             float = 0.5
+
+
+@app.post("/tool/preview-frame")
+def tool_preview_frame(req: PreviewFrameRequest):
+    """EIN Frame als PNG. Ohne das plant der Agent weiter blind, nur mit mehr
+    Freiheitsgraden — und mehr Freiheit ohne Kontrolle wird schlechter."""
+    body = {"composition": "LayerStage", "frame": req.frame, "scale": req.scale,
+            "inputProps": {"layers": req.layers, "legacy": req.legacy,
+                           "face_url": req.face_url,
+                           "durationInSeconds": req.durationInSeconds},
+            "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
+                         "bucket": SUPABASE_BUCKET}}
+    try:
+        r = requests.post(f"{REMOTION_URL}/still", json=body, timeout=180)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"remotion /still: {exc}")
+    if not data.get("ok"):
+        raise HTTPException(status_code=502, detail=str(data.get("error"))[:300])
+    return data
+
+
+class SearchStockRequest(BaseModel):
+    beschreibung: str
+
+
+@app.post("/tool/search-stock")
+def tool_search_stock(req: SearchStockRequest):
+    """Suche + Vision-Prüfung in einem. Die Maschine dahinter (_stock_fuer) gab es
+    längst, sie hing nur am Debug-Endpoint. Der Agent bekommt hier auch die
+    Begründung und die Fehlschläge — ein Werkzeug, das nur 'nichts gefunden'
+    sagt, kann er nicht anders bedienen."""
+    if not req.beschreibung.strip():
+        raise HTTPException(status_code=400, detail="beschreibung ist leer")
+    res = _stock_fuer(req.beschreibung)
+    clip = res.get("clip") or {}
+    return {"ok": bool(clip.get("url")), **res,
+            "layer_source": ({"kind": "video", "url": clip["url"], "transparent": False}
+                             if clip.get("url") else None)}
 
 
 @app.get("/health")

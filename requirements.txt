@@ -11,6 +11,11 @@ httpx
 auto-editor
 opencv-python-headless
 numpy<2
-mediapipe
+# 1.0.0 hat die Legacy-Solutions-API ENTFERNT — daher lief nur noch der
+# Haar-Fallback ("module 'mediapipe' has no attribute 'solutions'"). 0.10.14 ist
+# die letzte Fassung mit mp.solutions.face_mesh, auf die _face_track_mediapipe
+# baut. Beim Anheben muss der Face-Track auf die Tasks-API (FaceLandmarker)
+# portiert werden, nicht nur die Version geaendert.
+mediapipe==0.10.14
 rembg
 onnxruntime

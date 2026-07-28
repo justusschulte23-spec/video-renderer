@@ -677,12 +677,18 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
 
     # VP9 mit Alpha kann nicht jeder ffmpeg-Build; welcher hier liegt, entscheidet
     # das Bild. VP8 kann Alpha seit jeher, Chromium spielt beides.
+    # Zwei Zutaten, ohne die ffmpeg das Alpha still fallen laesst, obwohl der
+    # Encoder yuva420p koennte: `-vf format=yuva420p` haelt die Filterkette davon
+    # ab, vorher auf yuv420p zu skalieren, und `alpha_mode=1` sagt dem
+    # Matroska-Muxer, dass er die Alpha-Spur ueberhaupt schreiben soll.
     for enc, extra in (("libvpx-vp9", ["-auto-alt-ref", "0", "-lag-in-frames", "0"]),
                        ("libvpx", ["-auto-alt-ref", "0"])):
         out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
         try:
             run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
+                 "-vf", "format=yuva420p",
                  "-c:v", enc, "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
+                 "-metadata:s:v:0", "alpha_mode=1",
                  *extra, str(out)], f"htmltool_{enc}")
         except Exception as exc:
             log.warning("[HTMLTOOL] %s fehlgeschlagen: %s", enc, str(exc)[:160])

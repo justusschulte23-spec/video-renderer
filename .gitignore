@@ -1,0 +1,15 @@
+# Generatoren und Patch-Skripte tragen Live-Secrets im Klartext.
+# Sie bleiben lokal — GitHub blockiert sie sonst zu Recht.
+build_*.py
+patch_*.py
+fix_*.py
+diag_*.py
+drift_check_slims.py
+dryrun_kalle.py
+test_*.py
+seed_*.py
+clean_engine.py
+add_trim_node.py
+upload_sfx.py
+__pycache__/
+*.pyc

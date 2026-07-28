@@ -7196,14 +7196,17 @@ def tool_preview_frame(req: PreviewFrameRequest):
     Freiheitsgraden — und mehr Freiheit ohne Kontrolle wird schlechter."""
     layers, legacy = req.layers, req.legacy
     face_url, secs = req.face_url, req.durationInSeconds
+    brand = None
     if req.session_id:
         s = _sess(req.session_id)
         layers, legacy = s["layers"], None
         face_url, secs = s["face_url"], s["frames"] / FPS
+        brand = s.get("brand")
     body = {"composition": "LayerStage", "frame": req.frame, "scale": req.scale,
             "inputProps": {"layers": layers, "legacy": legacy,
                            "face_url": face_url,
-                           "durationInSeconds": secs},
+                           "durationInSeconds": secs,
+                           **({"brand": brand} if brand else {})},
             "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
                          "bucket": SUPABASE_BUCKET}}
     try:
@@ -7397,6 +7400,34 @@ def _hard_check(layers: list, face: dict) -> list:
     return fehler + _budget_errors(layers) + _doppelte_pflicht(layers)
 
 
+# Spiegel von remotion-renderer/src/theme.ts. Die Ebenen-Composition hat den
+# Justus-Brand als Default — wer nichts schickt, bekommt Amethyst. Fuer Tim ist
+# das kein Detail, sondern das falsche Video.
+BRAND_PRESETS = {
+    "justus": {"bg": "#09090B", "bgGlow": "#140F22", "accent": "#8B5CF6",
+               "accent2": "#06B6D4", "text": "#FFFFFF", "muted": "#A1A1AA"},
+    "tim":    {"bg": "#0A1F19", "bgGlow": "#0F2A22", "accent": "#C9A24B",
+               "accent2": "#3FB89B", "text": "#F5F2EC", "muted": "#9DB3AC"},
+}
+# Justus: harte Wortkarten, drei gleichzeitig, das gesprochene ploppt.
+# Tim: ruhige Editorial-Zeile. Vertrauen vor Reiz, ausdruecklich sein Stil.
+CAPTION_STIL = {"justus": "hormozi", "tim": "editorial"}
+
+
+def _brand_fuer(client_id: str, tpl: dict) -> dict:
+    """Markenfarben des Kunden. Das Template darf die Akzente ueberschreiben,
+    der Rest kommt aus dem Preset."""
+    b = dict(BRAND_PRESETS.get((client_id or "justus").lower(), BRAND_PRESETS["justus"]))
+    c = _tpl_colors(tpl) or {}
+    if c.get("primary"):
+        b["accent"] = c["primary"]
+    if c.get("secondary"):
+        b["accent2"] = c["secondary"]
+    if c.get("bg"):
+        b["bg"] = c["bg"]
+    return b
+
+
 def _herkunft(source: dict) -> str:
     """Woher die Ebene stammt — aus der Quelle abgeleitet, nicht vom Agenten
     erfragt. Ein Feld, das jemand ausfuellen MUSS, ist ein Feld, das irgendwann
@@ -7588,6 +7619,8 @@ def tool_session_open(req: OpenSessionRequest):
         "words": words, "face": face, "onsets": onsets,
         "sheet": sheet, "sheet_url": sheet_url,
         "style_guide": style, "colors": _tpl_colors(tpl),
+        "brand": _brand_fuer(req.client_id, tpl),
+        "caption_stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
         "briefing": req.briefing, "sfx": [], "music": None,
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
@@ -7612,6 +7645,7 @@ def tool_session_open(req: OpenSessionRequest):
             _layer_defaults({
                 "id": "captions", "z": 29,
                 "source": {"kind": "captions", "chunks": _remotion_chunks(words),
+                           "stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
                            "y": round(min(0.68, float(face.get("bottom", 0.63)) + 0.05), 3),
                            "fontSize": 66, "duckFor": [], "duckY": 0.62,
                            "duckFontSize": 58, "hookEndFrame": 0, "hookY": 0.68,
@@ -7647,7 +7681,8 @@ class SessionRef(BaseModel):
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
                 "music", "layers", "turns_used", "turn_budget", "abbruch_grund",
-                "prefix", "prefix_sha", "gelesen", "verlauf", "tokens")
+                "prefix", "prefix_sha", "gelesen", "verlauf", "tokens",
+                "brand", "caption_stil")
 
 
 def _checkpoint(s: dict, status: str = "offen") -> None:
@@ -8226,7 +8261,10 @@ def tool_session_render(req: SessionRef):
              "" if stand["fertig"] else f", offen: {stand['offen']}")
     job = s["dir"]
     props = {"layers": s["layers"], "legacy": None, "face_url": s["face_url"],
-             "durationInSeconds": round(s["frames"] / FPS, 3)}
+             "durationInSeconds": round(s["frames"] / FPS, 3),
+             # OHNE das rendert jeder Kunde in Justus' Amethyst — die Composition
+             # hat den Justus-Brand als Default.
+             "brand": s.get("brand") or BRAND_PRESETS["justus"]}
     vkbit = max(800, min(int(42 * 8 * 1000 / max(s["frames"] / FPS, 1.0)), 12000))
     body = {"composition": "LayerStage", "inputProps": props, "videoBitrate": f"{vkbit}k",
             "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,

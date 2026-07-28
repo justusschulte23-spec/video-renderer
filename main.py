@@ -654,16 +654,41 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
     if errs:
         log.warning("[HTMLTOOL] %d JS-Fehler, erster: %s", len(errs), errs[0])
 
+    # Prüfen, ob die Screenshots ueberhaupt Alpha tragen. Ohne diese Zeile sieht
+    # ein verlorener Alpha-Kanal aus wie ein gelungener Render — dieselbe
+    # Fehlerklasse wie der tote Face-Track.
+    probe = shots / "00000.png"
+    try:
+        _a = Image.open(str(probe)).convert("RGBA").getchannel("A")
+        alpha_min, alpha_max = _a.getextrema()
+    except Exception:
+        alpha_min = alpha_max = 255
+    if alpha_min == 255:
+        log.warning("[HTMLTOOL] Screenshots sind deckend (Alpha %d-%d) — "
+                    "das Markup malt einen eigenen Hintergrund", alpha_min, alpha_max)
+
     out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
     try:
         run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
              "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
-             "-auto-alt-ref", "0", str(out)], "htmltool_webm")
+             "-auto-alt-ref", "0", "-lag-in-frames", "0", str(out)], "htmltool_webm")
     except Exception as exc:
         log.error("[HTMLTOOL] ffmpeg: %s", exc)
         return None
-    log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB",
-             frames, width, height, time.time() - t0, out.stat().st_size / 1024)
+    # ffmpeg faellt auf ein anderes Pixelformat zurueck, wenn der Encoder das
+    # verlangte nicht kann — mit einer Warnung, die niemand liest. Also nachsehen.
+    try:
+        pf = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(out)],
+                            capture_output=True, text=True).stdout.strip()
+    except Exception:
+        pf = "?"
+    if pf != "yuva420p":
+        log.error("[HTMLTOOL] Alpha verloren — Ausgabe ist %s statt yuva420p", pf)
+        return None
+    log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB, %s (Alpha %d-%d)",
+             frames, width, height, time.time() - t0, out.stat().st_size / 1024,
+             pf, alpha_min, alpha_max)
     return out
 
 

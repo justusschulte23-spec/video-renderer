@@ -6330,7 +6330,7 @@ def _face_track_mediapipe(video_path: Path, duration: float, samples: int = 24) 
         mesh = mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1,
                                                refine_landmarks=True, min_detection_confidence=0.5)
         cap = cv2.VideoCapture(str(video_path))
-        cxs, cys, tops, bots = [], [], [], []
+        cxs, cys, tops, bots, lefts, rights = [], [], [], [], [], []
         for i in range(samples):
             cap.set(cv2.CAP_PROP_POS_MSEC, (duration * 1000) * (i + 0.5) / samples)
             ok, frame = cap.read()
@@ -6341,17 +6341,21 @@ def _face_track_mediapipe(video_path: Path, duration: float, samples: int = 24) 
                 continue
             lm = res.multi_face_landmarks[0].landmark
             ys = [p.y for p in lm]
+            xs = [p.x for p in lm]
             cxs.append(lm[168].x)   # nose bridge
             cys.append(lm[168].y)
             tops.append(max(0.0, min(ys)))
             bots.append(min(1.0, max(ys)))
+            lefts.append(max(0.0, min(xs)))
+            rights.append(min(1.0, max(xs)))
         cap.release()
         mesh.close()
         if len(cxs) < 3:
             return {}
         med = lambda a: float(np.median(a))
         track = {"origin_x": round(med(cxs), 3), "origin_y": round(med(cys), 3),
-                 "top": round(med(tops), 3), "bottom": round(med(bots), 3)}
+                 "top": round(med(tops), 3), "bottom": round(med(bots), 3),
+                 "left": round(med(lefts), 3), "right": round(med(rights), 3)}
         log.info("[FACE] mediapipe tracked %d/%d, nose=(%.2f,%.2f) bottom=%.2f",
                  len(cxs), samples, track["origin_x"], track["origin_y"], track["bottom"])
         return track
@@ -6375,7 +6379,7 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
         cap = cv2.VideoCapture(str(video_path))
         vw = cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1080
         vh = cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1920
-        cxs, cys, tops, bots = [], [], [], []
+        cxs, cys, tops, bots, lefts, rights = [], [], [], [], [], []
         for i in range(samples):
             cap.set(cv2.CAP_PROP_POS_MSEC, (duration * 1000) * (i + 0.5) / samples)
             ok, frame = cap.read()
@@ -6390,12 +6394,15 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
             cys.append((y + h / 2) / vh)
             tops.append(y / vh)
             bots.append((y + h) / vh)
+            lefts.append(x / vw)
+            rights.append((x + w) / vw)
         cap.release()
         if len(cxs) < 3:
             return {}
         med = lambda a: float(np.median(a))
         track = {"origin_x": round(med(cxs), 3), "origin_y": round(med(cys), 3),
-                 "top": round(med(tops), 3), "bottom": round(med(bots), 3)}
+                 "top": round(med(tops), 3), "bottom": round(med(bots), 3),
+                 "left": round(med(lefts), 3), "right": round(med(rights), 3)}
         log.info("[FACE] tracked %d/%d frames, centre=(%.2f,%.2f) bottom=%.2f",
                  len(cxs), samples, track["origin_x"], track["origin_y"], track["bottom"])
         return track
@@ -7263,12 +7270,21 @@ def _layer_rule_errors(lay: dict, face: dict) -> list:
     if (lay["to"] - lay["from"]) / FPS < MIN_LAYER_S:
         out.append({"ebene": lay["id"], "regel": "mindestdauer",
                     "text": f"{(lay['to'] - lay['from']) / FPS:.2f}s, mindestens {MIN_LAYER_S}s"})
+    # Das Gesicht ist eine FLAECHE, keine Zeile. Die erste Fassung dieser Regel
+    # verglich nur die Hoehe — damit war jedes schmale Element NEBEN dem Gesicht
+    # verboten, obwohl links und rechts Platz ist. Verdeckt ist nur, was sich in
+    # BEIDEN Achsen mit dem Gesicht schneidet.
+    fl, fr = float(face.get("left", 0.28)), float(face.get("right", 0.72))
     vollflaechig = t["w"] > 0.95 and t["h"] > 0.95
-    if not vollflaechig and t["y"] < fb and t["y"] + t["h"] > ft:
+    senkrecht = t["y"] < fb and t["y"] + t["h"] > ft
+    waagrecht = t["x"] < fr and t["x"] + t["w"] > fl
+    if not vollflaechig and senkrecht and waagrecht:
         out.append({"ebene": lay["id"], "regel": "gesicht",
-                    "text": f"liegt auf dem Gesicht ({ft:.2f}-{fb:.2f}). "
-                            f"Darueber: y+h <= {ft:.2f}. Darunter: y >= {fb:.2f}. "
-                            f"Vollflaechig (w und h > 0.95) waere ein Cutaway und erlaubt."})
+                    "text": f"verdeckt das Gesicht (x {fl:.2f}-{fr:.2f}, y {ft:.2f}-{fb:.2f}). "
+                            f"Vier Auswege: darueber (y+h <= {ft:.2f}), darunter "
+                            f"(y >= {fb:.2f}), links (x+w <= {fl:.2f}) oder rechts "
+                            f"(x >= {fr:.2f}). Vollflaechig (w und h > 0.95) waere ein "
+                            f"Cutaway und ist erlaubt."})
     return out
 
 
@@ -7768,8 +7784,14 @@ def tool_read_face_track(req: SessionRef):
     if not s["face"]:
         return {"ok": False, "grund": "kein Face-Track — Rails laufen auf Annahme 0.15/0.66",
                 "face": {"top": 0.15, "bottom": 0.66, "origin_x": 0.5, "origin_y": 0.42}}
-    return {"ok": True, "face": s["face"],
-            "hinweis": "Anteile der Bildhoehe. Alles zwischen top und bottom verdeckt das Gesicht."}
+    f = s["face"]
+    return {"ok": True, "face": f,
+            "frei_links": round(float(f.get("left", 0.28)), 3),
+            "frei_rechts": round(float(f.get("right", 0.72)), 3),
+            "hinweis": "Anteile der Kanten (x von 1080, y von 1920). Verdeckt ist nur, "
+                       "was sich in BEIDEN Achsen mit der Box schneidet — ein schmales "
+                       f"Element links von {float(f.get('left', 0.28)):.2f} oder rechts von "
+                       f"{float(f.get('right', 0.72)):.2f} darf auf Augenhoehe stehen."}
 
 
 @app.post("/tool/read/audio-peaks")
@@ -7930,8 +7952,17 @@ def tool_place_layer(req: PlaceLayerRequest):
         # sieht, ist eine Bitte.
         raise HTTPException(status_code=422, detail={"abgelehnt": lay["id"], "fehler": fehler})
     s["layers"] = kandidat
-    return {"ok": True, "layer": lay, "layers": len(s["layers"]),
-            "hinweise": _layer_hints(lay)}
+    hin = _layer_hints(lay)
+    # Drei gleiche Formate hintereinander sind kein Regelverstoss, aber der
+    # deutlichste Hinweis darauf, dass jemand nur noch ablegt statt zu setzen.
+    deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
+    letzte = sorted(deko, key=lambda l: l["from"])[-3:]
+    if len(letzte) == 3 and len({(round(l["transform"]["w"], 2),
+                                  round(l["transform"]["h"], 2)) for l in letzte}) == 1:
+        hin.append(f"drei Ebenen in Folge mit derselben Breite und Hoehe "
+                   f"({letzte[-1]['transform']['w']:.2f} x {letzte[-1]['transform']['h']:.2f}). "
+                   f"Ein schmales Element (w 0.25-0.40) passt neben das Gesicht.")
+    return {"ok": True, "layer": lay, "layers": len(s["layers"]), "hinweise": hin}
 
 
 class MoveLayerRequest(BaseModel):
@@ -8263,6 +8294,18 @@ WAS EIN GUTER SCHNITT IST
   fuenfzehn Sekunden und danach eine Minute nichts ist kein fertiges Video.
 - Wiederhol nicht, was in den letzten Videos schon dran war. read_history sagt
   dir, was das ist.
+
+BREITE BESTIMMT, WO DU STEHEN KANNST
+Ein Element ueber 0.6 Breite passt nur ueber oder unter das Gesicht. Darunter
+wird es eng, und alle deine Elemente landen im selben Band.
+
+Ein schmales Element (0.25-0.40) passt NEBEN das Gesicht. Das Gesicht belegt
+nur einen Streifen in der Mitte — links und rechts ist Flaeche, ueber die ganze
+Hoehe. read_face_track gibt dir left und right; alles links von left oder
+rechts von right ist frei, auch auf Augenhoehe.
+
+Nutze beides. Wenn drei Elemente hintereinander dieselbe Breite und dieselbe
+Hoehe haben, hast du aufgehoert zu komponieren.
 
 DEINE MITTEL
 Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die

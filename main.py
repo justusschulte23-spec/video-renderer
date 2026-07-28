@@ -4954,7 +4954,10 @@ def _remotion_chunks(words: list, max_words: int = 3) -> list:
             "end":   round(float(w["end"]), 3),
             "hot":   bool(_HOT_WORD_RE.match(clean.strip(".,!?;:"))),
         })
-        if len(cur) >= max_words or re.search(r"[.,!?;:]$", clean):
+        # Frueher wurde zusaetzlich an Satzzeichen umgebrochen — dann standen
+        # zwischendurch ein oder zwei Woerter statt drei. Justus' Caption-Stil
+        # verlangt IMMER drei gleichzeitig, also entscheidet allein die Zahl.
+        if len(cur) >= max_words:
             chunks.append({"start": cur[0]["start"], "end": cur[-1]["end"], "words": cur})
             cur = []
     if cur:

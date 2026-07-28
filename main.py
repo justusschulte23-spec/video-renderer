@@ -592,7 +592,7 @@ HTML_TOOL_MAX_PX = 1080 * 1920
 
 
 async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
-                             job_dir: Path, fps: int = FPS) -> Optional[Path]:
+                             job_dir: Path, fps: int = FPS) -> tuple:
     """HTML/CSS/GSAP → transparentes WebM (vp9, yuva420p).
 
     NICHT der Aufnahme-Weg von `render_html_to_video`: der nimmt mit der Wanduhr
@@ -605,7 +605,7 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         from playwright.async_api import async_playwright
     except ImportError:
         log.error("[HTMLTOOL] Playwright fehlt")
-        return None
+        return None, ["Playwright fehlt"]
 
     seconds = max(0.3, min(float(seconds), HTML_TOOL_MAX_S))
     if width * height > HTML_TOOL_MAX_PX:
@@ -643,6 +643,11 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
             if (window.gsap) { gsap.globalTimeline.pause(); }
             document.getAnimations().forEach(a => { a.pause(); });
         }""")
+        # Passt der Inhalt ueberhaupt in die angeforderte Flaeche? Der Wrapper
+        # setzt overflow:hidden — was darueber hinausragt, wird still
+        # abgeschnitten und faellt erst im fertigen Video auf.
+        ueberlauf = await page.evaluate(
+            """() => ({ b: document.body.scrollWidth, h: document.body.scrollHeight })""")
         for f in range(frames):
             t = f / fps
             await page.evaluate(
@@ -655,6 +660,15 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         await browser.close()
     if errs:
         log.warning("[HTMLTOOL] %d JS-Fehler, erster: %s", len(errs), errs[0])
+    ueber = []
+    if ueberlauf.get("b", 0) > width + 2:
+        ueber.append(f"Inhalt ist {ueberlauf['b']}px breit, die Leinwand nur {width}px — "
+                     f"links/rechts wird abgeschnitten")
+    if ueberlauf.get("h", 0) > height + 2:
+        ueber.append(f"Inhalt ist {ueberlauf['h']}px hoch, die Leinwand nur {height}px — "
+                     f"unten wird abgeschnitten")
+    if ueber:
+        log.warning("[HTMLTOOL] Ueberlauf: %s", "; ".join(ueber))
 
     # Prüfen, ob die Screenshots ueberhaupt Alpha tragen. Ohne diese Zeile sieht
     # ein verlorener Alpha-Kanal aus wie ein gelungener Render — dieselbe
@@ -676,7 +690,7 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
              "-auto-alt-ref", "0", str(out)], "htmltool_webm")
     except Exception as exc:
         log.error("[HTMLTOOL] ffmpeg: %s", exc)
-        return None
+        return None, ueber
 
     # WebM legt Alpha NICHT im Pixelformat des Hauptstroms ab, sondern als
     # Nebenspur. ffprobe meldet fuer den Hauptstrom deshalb weiter yuv420p, auch
@@ -692,11 +706,11 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         tag = ""
     if tag != "1":
         log.error("[HTMLTOOL] keine Alpha-Spur (alpha_mode=%r)", tag)
-        return None
+        return None, ueber
     log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs -> %.1f KB, alpha_mode=1 (Screenshot-Alpha %d-%d)",
              frames, width, height, time.time() - t0, out.stat().st_size / 1024,
              alpha_min, alpha_max)
-    return out
+    return out, ueber
 
 
 # ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────
@@ -7145,11 +7159,16 @@ async def tool_render_html(req: RenderHtmlRequest):
     job_dir = Path(f"/tmp/htmltool_{uuid.uuid4()}")
     job_dir.mkdir(parents=True, exist_ok=True)
     try:
-        out = await _render_html_alpha(req.markup, req.width, req.height, req.seconds, job_dir)
+        out, ueber = await _render_html_alpha(req.markup, req.width, req.height,
+                                              req.seconds, job_dir)
         if not out:
-            raise HTTPException(status_code=500, detail="HTML-Render fehlgeschlagen")
+            raise HTTPException(status_code=500,
+                                detail={"text": "HTML-Render fehlgeschlagen", "ueberlauf": ueber})
         url = upload_supabase(out, out.stem, folder="htmltool", content_type="video/webm")
-        return {"ok": True, "url": url,
+        return {"ok": True, "url": url, "ueberlauf": ueber,
+                "hinweis": ("Inhalt passt in die Leinwand" if not ueber else
+                            "ABGESCHNITTEN — schreib den Inhalt schmaler oder fordere "
+                            "eine groessere Leinwand an"),
                 "seconds": min(req.seconds, HTML_TOOL_MAX_S),
                 # direkt als Ebene verwendbar — transparent muss gesetzt sein,
                 # sonst rendert Chromium den Alpha-Kanal schwarz
@@ -8306,6 +8325,13 @@ rechts von right ist frei, auch auf Augenhoehe.
 
 Nutze beides. Wenn drei Elemente hintereinander dieselbe Breite und dieselbe
 Hoehe haben, hast du aufgehoert zu komponieren.
+
+WENN DU HTML SCHREIBST
+Die Leinwand ist genau so gross, wie du sie anforderst — was darueber
+hinausragt, wird abgeschnitten. Schmale Kaesten brauchen kurze Zeilen und
+kleinere Schrift, keine Tabelle mit festen Pixelbreiten. Das Werkzeug sagt dir
+im Feld "ueberlauf", ob es gepasst hat. Passt es nicht, schreib den Inhalt
+schmaler statt ihn stehen zu lassen.
 
 DEINE MITTEL
 Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die

@@ -7279,6 +7279,34 @@ def _budget_errors(layers: list) -> list:
     return []
 
 
+MAX_GAP_S = 20.0            # Obergrenze fuer eine Strecke ohne sichtbares Ereignis
+
+
+def _max_gap(layers: list, frames: int) -> tuple:
+    """Laengste Strecke ohne EINE Ebene ausser der Facecam. Kopf- und
+    Schlussstueck zaehlen mit: wer bei Sekunde 15 anfaengt, hat 15 Sekunden
+    nichts gezeigt, und wer bei 60 aufhoert, laesst zwanzig liegen.
+
+    Gibt (Laenge in Frames, Startframe) zurueck."""
+    deko = sorted([(l["from"], l["to"]) for l in layers
+                   if l["source"].get("kind") != "facecam"])
+    luecke, wo, cursor = 0, 0, 0
+    for a, b in deko:
+        if a > cursor and a - cursor > luecke:
+            luecke, wo = a - cursor, cursor
+        cursor = max(cursor, b)
+    if frames - cursor > luecke:
+        luecke, wo = frames - cursor, cursor
+    return luecke, wo
+
+
+def _gap_grenze(duration: float) -> float:
+    """Zwanzig Sekunden Stille sind bei 80 Sekunden Material ein Signal. Bei
+    einem 30-Sekunden-Clip waeren zwanzig Sekunden fast alles — deshalb greift
+    dort ein Viertel der Laufzeit, mit sechs Sekunden als Boden."""
+    return min(MAX_GAP_S, max(6.0, duration * 0.25))
+
+
 def _motion_at_zero(layers: list) -> bool:
     """Ab Frame 0 laeuft eine Bewegung. Handheld zaehlt NICHT — das ist
     Subpixel-Atmen, kein Anfang."""
@@ -7473,6 +7501,8 @@ def _fertig(s: dict) -> dict:
     deko = [l for l in s["layers"] if l["source"].get("kind") != "facecam"]
     fehler = _hard_check(s["layers"], face)
     bewegung = _motion_at_zero(s["layers"])
+    luecke_f, luecke_ab = _max_gap(s["layers"], s["frames"])
+    grenze = _gap_grenze(s["frames"] / FPS)
     offen = []
     if fehler:
         offen.append(f"{len(fehler)} Regelverstoesse offen")
@@ -7480,8 +7510,18 @@ def _fertig(s: dict) -> dict:
         offen.append(f"{len(deko)} von {MIN_LAYERS_FERTIG} Ebenen (ohne Facecam)")
     if not bewegung:
         offen.append(f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames")
+    # Vierte Bedingung: drei Ebenen im ersten Drittel und danach eine Minute
+    # nichts erfuellen die ersten drei Bedingungen — und sind trotzdem kein
+    # fertiges Video. Das ist der Unterschied zwischen "aufgehoert zu arbeiten"
+    # und "fertig".
+    if luecke_f / FPS > grenze:
+        offen.append(f"{luecke_f / FPS:.1f}s ohne sichtbares Ereignis ab "
+                     f"{luecke_ab / FPS:.1f}s (erlaubt {grenze:.1f}s)")
     return {"fertig": not offen, "offen": offen, "fehler": fehler,
-            "ebenen_ohne_facecam": len(deko), "bewegung_ab_null": bewegung}
+            "ebenen_ohne_facecam": len(deko), "bewegung_ab_null": bewegung,
+            "groesste_luecke_s": round(luecke_f / FPS, 1),
+            "luecke_ab_s": round(luecke_ab / FPS, 1),
+            "luecke_grenze_s": round(grenze, 1)}
 
 
 @app.post("/tool/session/tick")
@@ -7937,6 +7977,63 @@ def tool_session_render(req: SessionRef):
     return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"]),
             "turns_used": s["turns_used"], "grund": s.get("abbruch_grund") or "manuell",
             "fertig": stand["fertig"], "offen": stand["offen"]}
+
+
+class TurnStatsRequest(BaseModel):
+    client_id: str = ""
+    n:         int = 30
+
+
+@app.post("/tool/stats/turns")
+def tool_stats_turns(req: TurnStatsRequest):
+    """Wie viele Turns ein Video gekostet hat, ueber die letzten Laeufe.
+
+    Zwei Befunde, die man nur sieht, wenn man sie misst:
+    laeuft der Agent regelmaessig ins Budget, konvergiert er nicht — dann fehlt
+    ihm Information, nicht Zeit. Meldet er nach sechs Turns fertig, ist er zu
+    genuegsam. Beides ist eine Aussage ueber den Prompt, nicht ueber das Budget."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return {"ok": False, "grund": "Supabase nicht konfiguriert"}
+    params = {"tool": "eq.session-render", "select": "client_id,status,detail,created_at",
+              "order": "created_at.desc", "limit": str(max(1, min(req.n, 200)))}
+    if req.client_id:
+        params["client_id"] = f"eq.{req.client_id}"
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/run_log", params=params, timeout=25,
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as exc:
+        return {"ok": False, "grund": str(exc)[:200]}
+    laeufe = [{"wann": x["created_at"], "client": x["client_id"],
+               "turns": (x.get("detail") or {}).get("turns"),
+               "budget": (x.get("detail") or {}).get("budget"),
+               "grund": (x.get("detail") or {}).get("grund"),
+               "ebenen": (x.get("detail") or {}).get("ebenen"),
+               "offen": (x.get("detail") or {}).get("offen") or []}
+              for x in rows if (x.get("detail") or {}).get("turns") is not None]
+    if not laeufe:
+        return {"ok": True, "laeufe": [], "befund": "noch keine Laeufe aufgezeichnet"}
+    turns = [l["turns"] for l in laeufe]
+    ins_budget = sum(1 for l in laeufe if l["grund"] == "turn_budget")
+    genuegsam = sum(1 for l in laeufe if l["grund"] == "fertig" and l["turns"] <= 6)
+    n = len(laeufe)
+    schnitt = sum(turns) / n
+    befund = []
+    if ins_budget / n > 0.3:
+        befund.append(f"{ins_budget} von {n} Laeufen ins Budget gerannt — der Agent "
+                      f"konvergiert nicht. Ihm fehlt Information, nicht Zeit.")
+    if genuegsam / n > 0.3:
+        befund.append(f"{genuegsam} von {n} Laeufen nach hoechstens 6 Turns fertig — "
+                      f"zu genuegsam. Die Fertig-Schwelle ist zu leicht zu erreichen.")
+    if not befund:
+        befund.append(f"unauffaellig: Schnitt {schnitt:.1f} Turns, "
+                      f"{ins_budget} im Budget, {genuegsam} unter sieben Turns")
+    return {"ok": True, "laeufe_gesamt": n, "turns_schnitt": round(schnitt, 1),
+            "turns_min": min(turns), "turns_max": max(turns),
+            "ins_budget": ins_budget, "unter_sieben": genuegsam,
+            "befund": befund, "laeufe": laeufe[:20]}
 
 
 @app.get("/health")

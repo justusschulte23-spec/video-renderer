@@ -436,6 +436,8 @@ class RemotionRenderRequest(BaseModel):
     cta_word:     Optional[dict] = None  # force a CTA word {word,startFrame,endFrame} (else director)
     scenes:       Optional[list] = None  # force full-screen cutaway scenes (else director/vscript)
     music_url:    Optional[str] = None   # background bed, sidechain-ducked under the voice (§4)
+    metaphern:    bool = True            # Anker→Entfaltung→Rang→Stock-Router als echte Bildebene
+    contact_sheet: bool = True           # Kontaktblatt (Filmstreifen+Wellenform+Wortraster) an die Regie
 
 
 class ThumbnailRequest(BaseModel):
@@ -519,7 +521,10 @@ CHEAP_MODEL = "z-ai/glm-4.6"   # mechanical/derivative tasks (detectors, repurpo
 
 def call_openrouter(system_prompt: str, user_message: str,
                     model: str = "anthropic/claude-haiku-4.5",
-                    max_tokens: int = 6000) -> str:
+                    max_tokens: int = 6000,
+                    image_path: Optional[Path] = None) -> str:
+    """image_path haengt EIN Bild an die User-Nachricht. Ohne Bild bleibt der
+    Content ein String — Modelle, die keine Bilder koennen, sehen keinen Unterschied."""
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY not set")
     headers = {
@@ -528,12 +533,19 @@ def call_openrouter(system_prompt: str, user_message: str,
         "HTTP-Referer": "https://schultensolutions.app.n8n.cloud",
         "X-Title": "Schulten Solutions Video Renderer",
     }
+    user_content = user_message
+    if image_path and Path(image_path).exists():
+        import base64
+        b64 = base64.b64encode(Path(image_path).read_bytes()).decode()
+        user_content = [{"type": "text", "text": user_message},
+                        {"type": "image_url",
+                         "image_url": {"url": "data:image/jpeg;base64," + b64}}]
     payload = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message},
+            {"role": "user",   "content": user_content},
         ],
     }
     if "glm" in model.lower():
@@ -5625,7 +5637,142 @@ def metaphern_debug(req: MetaphernRequest):
     return _metaphern(words, max_anker=req.max_anker)
 
 
-def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float) -> dict:
+def _timed_transcript(words: list, max_chars: int = 4200) -> str:
+    """Wort-Transkript MIT Zeiten, in Zeilen zu 8 Woertern. Der Regie fehlte
+    bisher jede Zeitachse — sie bekam Fliesstext und musste raten, wie eng die
+    Saetze stehen. Die Zeit steht am Zeilenanfang, NIE im Wort selbst, damit
+    eine woertlich kopierte Anker-Phrase sauber bleibt."""
+    out, cur, start = [], [], None
+    for w in (words or []):
+        if start is None:
+            start = float(w.get("start") or 0.0)
+        cur.append(str(w.get("word", "")))
+        if len(cur) >= 8:
+            out.append(f"[{start:6.2f}] " + " ".join(cur))
+            cur, start = [], None
+    if cur:
+        out.append(f"[{start or 0.0:6.2f}] " + " ".join(cur))
+    txt = "\n".join(out)
+    return txt[:max_chars]
+
+
+def _contact_sheet(video: Path, words: list, face: dict, duration: float,
+                   onsets: list, job_dir: Path) -> Optional[Path]:
+    """EIN Kontaktblatt fuer die Regie: Filmstreifen mit eingezeichneter
+    Gesichtsbox, Wellenform mit Transienten, Sprechbalken mit Pausen.
+    Loest die drei Dinge, die der Director bisher blind geraten hat — wo das
+    Gesicht ist, wo Luft ist, wie eng die Betonungen liegen. None bei Fehler:
+    die Regie laeuft dann wie vorher, nur ohne Augen."""
+    try:
+        SHOTS, TW = 8, 150
+        TH = int(TW * 16 / 9)                      # 9:16 Kachel
+        W_SHEET = SHOTS * TW + (SHOTS + 1) * 8
+        WAVE_H, BAR_H, PAD = 150, 74, 8
+        H_SHEET = PAD + TH + 26 + WAVE_H + 12 + BAR_H + 30
+
+        img = Image.new("RGB", (W_SHEET, H_SHEET), (16, 16, 22))
+        d = ImageDraw.Draw(img)
+        try:
+            f_sm = ImageFont.truetype(str(FONT_SEMIBOLD), 17)
+            f_xs = ImageFont.truetype(str(FONT_SEMIBOLD), 14)
+        except Exception:
+            f_sm = f_xs = ImageFont.load_default()
+
+        # ── Filmstreifen + Gesichtsbox ───────────────────────────────────────
+        ft, fb = float(face.get("top", 0.0) or 0.0), float(face.get("bottom", 0.0) or 0.0)
+        for i in range(SHOTS):
+            t = duration * (i + 0.5) / SHOTS
+            fp = job_dir / f"sheet_{i}.jpg"
+            subprocess.run(["ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", str(video),
+                            "-frames:v", "1", "-vf", f"scale={TW}:{TH}", str(fp)],
+                           check=True, capture_output=True)
+            x = PAD + i * (TW + PAD)
+            img.paste(Image.open(str(fp)).convert("RGB"), (x, PAD))
+            if fb > ft > 0:
+                d.rectangle([x, PAD + int(ft * TH), x + TW - 1, PAD + int(fb * TH)],
+                            outline=(255, 92, 92), width=3)
+            d.text((x + 4, PAD + TH + 4), f"{t:.1f}s", font=f_xs, fill=(190, 190, 200))
+        y = PAD + TH + 26
+
+        # ── Wellenform (ffmpeg) + Transienten ────────────────────────────────
+        wav_png = job_dir / "sheet_wave.png"
+        inner_w = W_SHEET - 2 * PAD
+        subprocess.run(["ffmpeg", "-y", "-i", str(video), "-filter_complex",
+                        f"showwavespic=s={inner_w}x{WAVE_H}:colors=0x8B5CF6",
+                        "-frames:v", "1", str(wav_png)], check=True, capture_output=True)
+        img.paste(Image.open(str(wav_png)).convert("RGB"), (PAD, y))
+        for o in (onsets or []):
+            if 0 <= o <= duration:
+                ox = PAD + int(inner_w * o / max(duration, 0.01))
+                d.line([ox, y + WAVE_H - 16, ox, y + WAVE_H], fill=(255, 200, 60), width=2)
+        d.text((PAD + 6, y + 3), "WELLENFORM · gelb = Betonung", font=f_xs, fill=(150, 150, 165))
+        y += WAVE_H + 12
+
+        # ── Sprechbalken: wo geredet wird, wo Luft ist ───────────────────────
+        d.rectangle([PAD, y, PAD + inner_w, y + BAR_H], fill=(30, 30, 40))
+        for w in (words or []):
+            try:
+                a, b = float(w["start"]), float(w.get("end") or w["start"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            x0 = PAD + int(inner_w * a / max(duration, 0.01))
+            x1 = max(x0 + 1, PAD + int(inner_w * b / max(duration, 0.01)))
+            d.rectangle([x0, y + 20, x1, y + BAR_H - 20], fill=(139, 92, 246))
+        for s in range(0, int(duration) + 1, 5):
+            sx = PAD + int(inner_w * s / max(duration, 0.01))
+            d.line([sx, y, sx, y + BAR_H], fill=(70, 70, 88), width=1)
+            d.text((sx + 3, y + BAR_H - 18), f"{s}s", font=f_xs, fill=(130, 130, 150))
+        d.text((PAD + 6, y + 2), "SPRECHBALKEN · Luecke = Pause", font=f_xs, fill=(150, 150, 165))
+
+        out = job_dir / "contact_sheet.jpg"
+        img.save(str(out), "JPEG", quality=78)
+        log.info("[SHEET] Kontaktblatt %dx%d, %d Kacheln, Gesicht %.2f-%.2f",
+                 W_SHEET, H_SHEET, SHOTS, ft, fb)
+        return out
+    except Exception as exc:
+        log.warning("[SHEET] Kontaktblatt fehlgeschlagen: %s", exc)
+        return None
+
+
+def _metaphern_overlays(words: list, duration: float, hook_end_s: float,
+                        face: dict = None) -> list:
+    """Haengt die Anker-Maschine an den Render-Pfad. Sie war gebaut, getestet
+    und nur an /metaphern verdrahtet — jedes Konzept mit echtem Stock-Clip wird
+    jetzt eine Bildebene. Prozedurale Konzepte fallen raus, dafuer gibt es
+    keinen Renderer; das steht im Log, statt still zu verschwinden."""
+    face = face or {}
+    lower_rail = round(min(0.80, float(face.get("bottom", 0.66)) + 0.04), 3)
+    try:
+        meta = _metaphern(words)
+    except Exception as exc:
+        log.warning("[META] Pass fehlgeschlagen: %s", exc)
+        return []
+    overlays, prozedural = [], 0
+    for i, k in enumerate(meta.get("konzepte") or []):
+        clip = ((k.get("stock") or {}).get("clip")) or {}
+        t = k.get("zeit_s")
+        if not clip.get("url"):
+            prozedural += 1
+            continue
+        if t is None or not (hook_end_s <= float(t) < duration - 1.5):
+            continue
+        st = float(t)
+        en = min(st + 2.6, duration - 0.3)
+        overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
+                         "asset_url": clip["url"], "kind": "video", "size": "half",
+                         "position": "lower_third", "topRatio": lower_rail,
+                         "from": "left" if i % 2 == 0 else "right", "text": ""})
+    log.info("[META] %s → %d Bildebenen (%d prozedural verworfen, %d Anker geprueft)",
+             meta.get("_diag"), len(overlays), prozedural, len(meta.get("anker") or []))
+    if not overlays:
+        _log_run("", "metaphern-render", "warn",
+                 {"grund": "keine Bildebene", "diag": meta.get("_diag"),
+                  "verworfen": meta.get("verworfen") or []})
+    return overlays
+
+
+def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float,
+                       sheet: Optional[Path] = None) -> dict:
     """Stage 1 — the visual SCRIPT (rough intent, anchored to script phrases).
     Built from the briefing's argument structure. {} if no briefing to ground it."""
     # Works from the briefing's argument structure if present, ELSE straight from
@@ -5655,9 +5802,18 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
     else:
         return {"beats": [], "_diag": "no-input"}
     user = (f"Dauer ~{duration:.0f}s.\n{src}\n\n"
-            f"WORT-TRANSKRIPT (nimm die anchor-Phrasen WOERTLICH hieraus):\n{transcript[:2600]}")
+            "WORT-TRANSKRIPT MIT ZEITEN (nimm die anchor-Phrasen WOERTLICH hieraus — "
+            "die Zeit in eckigen Klammern ist NUR Orientierung und gehoert NIE in den "
+            "anchor):\n" + _timed_transcript(words))
+    if sheet:
+        user += ("\n\nKONTAKTBLATT (Bild): oben acht Standbilder ueber die Laufzeit, das "
+                 "rote Rechteck ist das getrackte Gesicht — was du darueber oder darunter "
+                 "legst, deckt es nicht. Mitte die Wellenform, gelbe Striche sind Betonungen. "
+                 "Unten der Sprechbalken: Luecken sind Pausen. Setz deine Zustaende dorthin, "
+                 "wo Luft ist, nicht mitten in einen Satz.")
     try:
-        raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5", max_tokens=2500)
+        raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5",
+                              max_tokens=2500, image_path=sheet)
     except Exception as exc:
         log.warning("[VSCRIPT] gen call failed: %s", exc)
         return {"beats": [], "_diag": f"call:{exc}"}
@@ -6482,14 +6638,24 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             dp = None
             hook_override = None
             visual_diag = {"path": "dumb", "beats": 0, "vs_raw": None}
+            # Kontaktblatt: die Regie hat bisher kein einziges Bild gesehen.
+            sheet = (_contact_sheet(facecam_path, words, face, duration, onsets, job_dir)
+                     if (req.overlays and req.contact_sheet) else None)
+            # Anker-Maschine: laeuft parallel zur Regie, liefert eigene Bildebenen.
+            meta_overlays = (_metaphern_overlays(words, duration, hook_end_s, face)
+                             if (req.overlays and req.metaphern) else [])
             if req.overlays:
                 vs = (req.briefing or {}).get("visual_script")
                 if not vs:
-                    vs = _gen_visual_script(req.briefing or {}, words, duration, hook_end_s)
+                    vs = _gen_visual_script(req.briefing or {}, words, duration, hook_end_s,
+                                            sheet=sheet)
                 beats = vs.get("beats") if isinstance(vs, dict) else (vs if isinstance(vs, list) else None)
                 visual_diag["vs_raw"] = (vs or {}).get("_diag") if isinstance(vs, dict) else None
                 if beats:
                     dp = _map_visual_script(beats, words, duration, hook_end_s, face)
+                    # Metaphern-Ebenen VOR dem Gate dazu: sie konkurrieren mit den
+                    # Regie-Elementen um denselben Platz, statt oben draufzuliegen.
+                    dp["overlays"] = (dp.get("overlays") or []) + meta_overlays
                     # PCI: entzerren BEVOR gesnappt wird — sonst rasten zwei
                     # Elemente auf denselben Transienten und stehen doch zusammen.
                     dp = _pci_gate(dp, duration)
@@ -6510,6 +6676,8 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                     plan = _visual_director(words, req.briefing or {}, duration, hook_end_s)
                     if plan:
                         dp = _director_to_props(plan, duration, hook_end_s, face)
+                        dp["overlays"] = (dp.get("overlays") or []) + meta_overlays
+                        dp = _pci_gate(dp, duration)
                         visual_diag = {**visual_diag, "path": "director",
                                        "overlays": len(dp["overlays"]), "lowers": len(dp["lowerThirds"]),
                                        "flow": bool(dp["flowDiagram"]), "callouts": len(dp["callouts"])}
@@ -6525,8 +6693,10 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
                 flow_diagram, cta_word = dp.get("flowDiagram"), dp.get("ctaWord")
                 scenes_layer = dp.get("scenes") or []
             else:
-                overlays = _remotion_overlays(words, duration, hook_end_s) if req.overlays else []
+                overlays = (_remotion_overlays(words, duration, hook_end_s) + meta_overlays
+                            if req.overlays else [])
                 stat_pops = _remotion_stat_pops(words, hook_end_s, duration)
+            visual_diag = {**visual_diag, "meta": len(meta_overlays), "sheet": bool(sheet)}
             # §1 snap visual events onto the nearest audio transient
             if onsets:
                 punch_frames = sorted({_snap_frame(int(f), onsets, FPS) for f in punch_frames})

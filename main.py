@@ -667,29 +667,43 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         log.warning("[HTMLTOOL] Screenshots sind deckend (Alpha %d-%d) — "
                     "das Markup malt einen eigenen Hintergrund", alpha_min, alpha_max)
 
-    out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
+    def _pixfmt(f: Path) -> str:
+        try:
+            return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                   "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(f)],
+                                  capture_output=True, text=True).stdout.strip()
+        except Exception:
+            return "?"
+
+    # VP9 mit Alpha kann nicht jeder ffmpeg-Build; welcher hier liegt, entscheidet
+    # das Bild. VP8 kann Alpha seit jeher, Chromium spielt beides.
+    for enc, extra in (("libvpx-vp9", ["-auto-alt-ref", "0", "-lag-in-frames", "0"]),
+                       ("libvpx", ["-auto-alt-ref", "0"])):
+        out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
+        try:
+            run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
+                 "-c:v", enc, "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
+                 *extra, str(out)], f"htmltool_{enc}")
+        except Exception as exc:
+            log.warning("[HTMLTOOL] %s fehlgeschlagen: %s", enc, str(exc)[:160])
+            continue
+        pf = _pixfmt(out)
+        if pf == "yuva420p":
+            log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB, %s/%s (Alpha %d-%d)",
+                     frames, width, height, time.time() - t0, out.stat().st_size / 1024,
+                     enc, pf, alpha_min, alpha_max)
+            return out
+        log.warning("[HTMLTOOL] %s liefert %s statt yuva420p — naechster Encoder", enc, pf)
+
+    # Beide durch: sagen WAS der Build kann, sonst raet der naechste wieder.
     try:
-        run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
-             "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
-             "-auto-alt-ref", "0", "-lag-in-frames", "0", str(out)], "htmltool_webm")
-    except Exception as exc:
-        log.error("[HTMLTOOL] ffmpeg: %s", exc)
-        return None
-    # ffmpeg faellt auf ein anderes Pixelformat zurueck, wenn der Encoder das
-    # verlangte nicht kann — mit einer Warnung, die niemand liest. Also nachsehen.
-    try:
-        pf = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(out)],
-                            capture_output=True, text=True).stdout.strip()
+        h = subprocess.run(["ffmpeg", "-hide_banner", "-h", "encoder=libvpx-vp9"],
+                           capture_output=True, text=True).stdout
+        pix = next((l.strip() for l in h.splitlines() if "pixel formats" in l.lower()), "unbekannt")
     except Exception:
-        pf = "?"
-    if pf != "yuva420p":
-        log.error("[HTMLTOOL] Alpha verloren — Ausgabe ist %s statt yuva420p", pf)
-        return None
-    log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB, %s (Alpha %d-%d)",
-             frames, width, height, time.time() - t0, out.stat().st_size / 1024,
-             pf, alpha_min, alpha_max)
-    return out
+        pix = "unbekannt"
+    log.error("[HTMLTOOL] kein Encoder liefert Alpha. libvpx-vp9 %s", pix)
+    return None
 
 
 # ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────

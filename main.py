@@ -7359,6 +7359,50 @@ def _layer_hints(lay: dict) -> list:
     return h
 
 
+ANIM_PROPS = ("x", "y", "w", "h", "scale", "opacity", "rotate")
+ANIM_EASE = ("linear", "spring", "easeOut", "easeInOut")
+
+
+def _clean_animate(raw_list, frames: int) -> tuple:
+    """Kurven pruefen, statt sie durchzureichen.
+
+    Der erste Loop-Lauf hat hier 20 Turns verbrannt: das Modell hat ein eigenes
+    Keyframe-Format erfunden ({at, transform}), weil das Werkzeugschema die Form
+    nicht beschrieb. Python liess es durch, die Fertig-Pruefung sagte weiter
+    'keine Kurve', und Remotion ist am Ende an `inputRange must contain only
+    numbers` gestorben. Drei Stellen, an denen es haette auffallen muessen.
+    """
+    clean, fehler = [], []
+    for i, a in enumerate(raw_list or []):
+        if not isinstance(a, dict):
+            fehler.append(f"animate[{i}] ist kein Objekt")
+            continue
+        if "at" in a or "transform" in a:
+            fehler.append(
+                f"animate[{i}] benutzt ein Keyframe-Format. Richtig ist EINE Kurve pro "
+                f"Eintrag: {{property, from, to, start, end, easing}} — Frames, keine Sekunden.")
+            continue
+        p = str(a.get("property", ""))
+        if p not in ANIM_PROPS:
+            fehler.append(f"animate[{i}].property '{p}' unbekannt, erlaubt: {list(ANIM_PROPS)}")
+            continue
+        try:
+            von, bis = float(a["from"]), float(a["to"])
+            st, en = int(a["start"]), int(a["end"])
+        except (KeyError, TypeError, ValueError):
+            fehler.append(f"animate[{i}]: from/to muessen Zahlen sein, start/end Frames "
+                          f"(ganze Zahlen). Bekommen: {json.dumps(a, ensure_ascii=False)[:120]}")
+            continue
+        if en <= st:
+            fehler.append(f"animate[{i}]: end ({en}) muss groesser als start ({st}) sein")
+            continue
+        e = a.get("easing", "easeOut")
+        clean.append({"property": p, "from": von, "to": bis,
+                      "start": max(0, st), "end": min(frames, en),
+                      "easing": e if e in ANIM_EASE else "easeOut"})
+    return clean, fehler
+
+
 def _layer_defaults(raw: dict, frames: int) -> dict:
     """Fuellt eine Ebene auf die Form, die LayerStage erwartet. Der Agent soll
     nicht jedes Feld kennen muessen — was er nicht sagt, ist Vollbild, sichtbar,
@@ -7373,13 +7417,18 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
     mods = {"handheld": bool(m.get("handheld", False)),
             "grade": bool(m.get("grade", False)),
             "punch": m.get("punch")}
+    anim, anim_fehler = _clean_animate(raw.get("animate"), frames)
+    if anim_fehler:
+        raise HTTPException(status_code=422, detail={
+            "abgelehnt": raw.get("id"), "fehler": [{"regel": "animate", "text": t}
+                                                   for t in anim_fehler]})
     return {
         "id": str(raw.get("id") or f"L{uuid.uuid4().hex[:6]}"),
         "source": raw.get("source") or {"kind": "text", "content": ""},
         "from": max(0, int(raw.get("from", 0))),
         "to": min(frames, int(raw.get("to", frames))),
         "z": int(raw.get("z", 20)),
-        "transform": tr, "animate": list(raw.get("animate") or []),
+        "transform": tr, "animate": anim,
         "modifiers": mods,
         "mask": raw.get("mask") if raw.get("mask") in ("none", "circle", "rounded", "speaker") else "none",
         "blend": str(raw.get("blend") or "normal"),
@@ -7908,7 +7957,12 @@ def tool_move_layer(req: MoveLayerRequest):
         lay["transform"].update({k: v for k, v in req.transform.items()
                                  if k in lay["transform"]})
     if req.animate is not None:
-        lay["animate"] = req.animate
+        anim, anim_fehler = _clean_animate(req.animate, s["frames"])
+        if anim_fehler:
+            raise HTTPException(status_code=422, detail={
+                "abgelehnt": req.id, "fehler": [{"regel": "animate", "text": t}
+                                                for t in anim_fehler]})
+        lay["animate"] = anim
     if req.z is not None:
         lay["z"] = int(req.z)
     if req.from_frame is not None:
@@ -8246,8 +8300,35 @@ def _tool_specs() -> list:
         return {"type": "function", "function": {
             "name": name, "description": desc,
             "parameters": {"type": "object", "properties": props, "required": req}}}
-    L = {"type": "object", "description": "Ebene: id, source{kind,...}, from, to, z, "
-         "transform{x,y,w,h,scale,rotate,opacity,origin}, animate[], mask, konzept"}
+    # Die Form der Ebene GEHOERT ins Schema. Beschreibt man sie nur in Prosa,
+    # erfindet das Modell ein plausibles eigenes Format — und verbrennt daran
+    # sein halbes Budget.
+    ANIM = {"type": "object", "description": "EINE Kurve. Frames, keine Sekunden.",
+            "properties": {
+                "property": {"type": "string", "enum": list(ANIM_PROPS)},
+                "from": {"type": "number"}, "to": {"type": "number"},
+                "start": {"type": "integer"}, "end": {"type": "integer"},
+                "easing": {"type": "string", "enum": list(ANIM_EASE)}},
+            "required": ["property", "from", "to", "start", "end"]}
+    L = {"type": "object", "required": ["source", "from", "to"], "properties": {
+        "id": {"type": "string"},
+        "source": {"type": "object", "description":
+                   "kind facecam|video|image|text|card|stat|flow|lower|scene|cta|hook. "
+                   "Bei video/image zusaetzlich url (und transparent:true fuer "
+                   "render_html-Ergebnisse), bei text content."},
+        "from": {"type": "integer", "description": "Startframe"},
+        "to": {"type": "integer", "description": "Endframe"},
+        "z": {"type": "integer", "description": "Reihenfolge, Facecam liegt auf 10"},
+        "transform": {"type": "object", "description":
+                      "x,y,w,h als Anteile — x/w von 1080, y/h von 1920. "
+                      "Ausserdem scale, rotate, opacity, origin[2].",
+                      "properties": {"x": {"type": "number"}, "y": {"type": "number"},
+                                     "w": {"type": "number"}, "h": {"type": "number"},
+                                     "scale": {"type": "number"}, "rotate": {"type": "number"},
+                                     "opacity": {"type": "number"}}},
+        "animate": {"type": "array", "items": ANIM},
+        "mask": {"type": "string", "enum": ["none", "circle", "rounded", "speaker"]},
+        "konzept": {"type": "string", "description": "kurzes Schlagwort fuer die Historie"}}}
     return [
         T("read_transcript", "Wort-Transkript mit Zeiten.", {}, []),
         T("read_contact_sheet", "Kontaktblatt als Bild-URL. Ohne Grenzen das ganze Video.",

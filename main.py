@@ -7326,6 +7326,23 @@ def _layer_rule_errors(lay: dict, face: dict) -> list:
     return out
 
 
+def _doppelte_pflicht(layers: list) -> list:
+    """Von Facecam und Captions gibt es genau eine. Der Agent hat in zwei von
+    drei Laeufen eine zweite Facecam angelegt statt die vorhandene zu
+    verschieben — das dekodiert das Video doppelt und macht move_layer auf die
+    erste wirkungslos, ohne dass irgendwo ein Fehler steht."""
+    out = []
+    for kind in PFLICHT_KINDS:
+        ids = [l["id"] for l in layers if l["source"].get("kind") == kind]
+        if len(ids) > 1:
+            out.append({"ebene": ",".join(ids), "regel": "doppelte_pflichtebene",
+                        "text": f"{len(ids)} Ebenen vom Typ '{kind}' ({', '.join(ids)}). "
+                                f"Es gibt genau eine — sie liegt seit dem Oeffnen der "
+                                f"Sitzung da. Verschieb sie mit move_layer, statt eine "
+                                f"zweite anzulegen."})
+    return out
+
+
 def _budget_errors(layers: list) -> list:
     """Hoechstens drei Ebenen ausser der Facecam gleichzeitig."""
     deko = [l for l in layers if not _ist_pflicht(l)]
@@ -7374,7 +7391,7 @@ def _motion_at_zero(layers: list) -> bool:
 
 def _hard_check(layers: list, face: dict) -> list:
     fehler = [e for l in layers for e in _layer_rule_errors(l, face)]
-    return fehler + _budget_errors(layers)
+    return fehler + _budget_errors(layers) + _doppelte_pflicht(layers)
 
 
 def _herkunft(source: dict) -> str:

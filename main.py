@@ -667,49 +667,34 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         log.warning("[HTMLTOOL] Screenshots sind deckend (Alpha %d-%d) — "
                     "das Markup malt einen eigenen Hintergrund", alpha_min, alpha_max)
 
-    def _pixfmt(f: Path) -> str:
-        try:
-            return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                                   "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(f)],
-                                  capture_output=True, text=True).stdout.strip()
-        except Exception:
-            return "?"
-
-    # VP9 mit Alpha kann nicht jeder ffmpeg-Build; welcher hier liegt, entscheidet
-    # das Bild. VP8 kann Alpha seit jeher, Chromium spielt beides.
-    # Zwei Zutaten, ohne die ffmpeg das Alpha still fallen laesst, obwohl der
-    # Encoder yuva420p koennte: `-vf format=yuva420p` haelt die Filterkette davon
-    # ab, vorher auf yuv420p zu skalieren, und `alpha_mode=1` sagt dem
-    # Matroska-Muxer, dass er die Alpha-Spur ueberhaupt schreiben soll.
-    for enc, extra in (("libvpx-vp9", ["-auto-alt-ref", "0", "-lag-in-frames", "0"]),
-                       ("libvpx", ["-auto-alt-ref", "0"])):
-        out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
-        try:
-            run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
-                 "-vf", "format=yuva420p",
-                 "-c:v", enc, "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
-                 "-metadata:s:v:0", "alpha_mode=1",
-                 *extra, str(out)], f"htmltool_{enc}")
-        except Exception as exc:
-            log.warning("[HTMLTOOL] %s fehlgeschlagen: %s", enc, str(exc)[:160])
-            continue
-        pf = _pixfmt(out)
-        if pf == "yuva420p":
-            log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs → %.1f KB, %s/%s (Alpha %d-%d)",
-                     frames, width, height, time.time() - t0, out.stat().st_size / 1024,
-                     enc, pf, alpha_min, alpha_max)
-            return out
-        log.warning("[HTMLTOOL] %s liefert %s statt yuva420p — naechster Encoder", enc, pf)
-
-    # Beide durch: sagen WAS der Build kann, sonst raet der naechste wieder.
+    out = job_dir / f"htmltool_{uuid.uuid4().hex[:8]}.webm"
     try:
-        h = subprocess.run(["ffmpeg", "-hide_banner", "-h", "encoder=libvpx-vp9"],
-                           capture_output=True, text=True).stdout
-        pix = next((l.strip() for l in h.splitlines() if "pixel formats" in l.lower()), "unbekannt")
+        run(["ffmpeg", "-y", "-framerate", str(fps), "-i", str(shots / "%05d.png"),
+             "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
+             "-auto-alt-ref", "0", str(out)], "htmltool_webm")
+    except Exception as exc:
+        log.error("[HTMLTOOL] ffmpeg: %s", exc)
+        return None
+
+    # WebM legt Alpha NICHT im Pixelformat des Hauptstroms ab, sondern als
+    # Nebenspur. ffprobe meldet fuer den Hauptstrom deshalb weiter yuv420p, auch
+    # wenn alles stimmt — der Beweis steht im Tag alpha_mode, und dekodieren
+    # laesst sich die Spur nur mit `-c:v libvpx-vp9` VOR dem Input.
+    # Wer hier auf pix_fmt prueft, baut sich einen Fehlalarm.
+    try:
+        tag = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                              "-show_entries", "stream_tags=alpha_mode",
+                              "-of", "csv=p=0", str(out)],
+                             capture_output=True, text=True).stdout.strip()
     except Exception:
-        pix = "unbekannt"
-    log.error("[HTMLTOOL] kein Encoder liefert Alpha. libvpx-vp9 %s", pix)
-    return None
+        tag = ""
+    if tag != "1":
+        log.error("[HTMLTOOL] keine Alpha-Spur (alpha_mode=%r)", tag)
+        return None
+    log.info("[HTMLTOOL] %d Frames %dx%d in %.1fs -> %.1f KB, alpha_mode=1 (Screenshot-Alpha %d-%d)",
+             frames, width, height, time.time() - t0, out.stat().st_size / 1024,
+             alpha_min, alpha_max)
+    return out
 
 
 # ── Playwright: HTML → looped MP4 ─────────────────────────────────────────────

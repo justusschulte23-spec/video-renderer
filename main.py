@@ -8724,6 +8724,10 @@ def tool_stats_kosten(req: KostenRequest):
 HTML_AGENT_RUNDEN   = 3     # gebaute Fassungen, danach wird abgegeben
 HTML_AGENT_TURNS    = 10    # harte Bremse, falls er sich im Ansehen verliert
 HTML_AGENT_MIN_PX   = 26    # kleiner ist auf dem Handy unlesbar
+# Dasselbe starke Modell wie der Hauptagent, solange die Optik das Problem ist.
+# Erst wenn die Qualitaet steht und es Beispiele zum Vergleichen gibt, lohnt ein
+# Test mit einem guenstigeren Modell gegen dieselbe Latte.
+HTML_AGENT_MODELL   = "anthropic/claude-sonnet-4.5"
 
 # Skelette: welche Knoten in welcher Verschachtelung. KEINE Gestaltung —
 # Struktur ist wiederholbar, Aussehen nicht. Ohne das erfindet er bei jedem
@@ -9273,7 +9277,7 @@ class HtmlAgentRequest(BaseModel):
     h_px:      int = 420
     dauer_s:   float = 3.0
     client_id: str = "justus"
-    model:     str = "anthropic/claude-sonnet-4.5"
+    model:     str = HTML_AGENT_MODELL
     debug:     bool = False   # gibt das gebaute Markup mit zurueck
 
 
@@ -9332,34 +9336,29 @@ rechts von right ist frei, auch auf Augenhoehe.
 Nutze beides. Wenn drei Elemente hintereinander dieselbe Breite und dieselbe
 Hoehe haben, hast du aufgehoert zu komponieren.
 
-DIE BEISPIELE SIND EINE LATTE, KEINE VORLAGE
-Du siehst Beispiel-Overlays. Sie zeigen das NIVEAU, das erwartet wird — nicht
-das Layout, das du bauen sollst.
+GRAFIKELEMENTE BESTELLST DU, DU BAUST SIE NICHT
+render_html nimmt keine HTML mehr. Du beschreibst, WAS du brauchst — Art,
+Hauptwert, Beschriftung, Einordnung, worauf der Akzent liegt, was sich bewegt.
+Ein eigener Gestalter baut es, sieht es sich an, misst nach und korrigiert.
 
-Hat dein Element dieselbe Anordnung wie eines der Beispiele, hast du
-abgeschrieben statt gestaltet. Bau es um.
+Du bekommst zurueck, was tatsaechlich gebaut wurde: eine URL, wie viele Runden
+es gebraucht hat, ob etwas nicht gepasst hat. Kein Markup. Sag im Auftrag genau
+EINE Aussage; zwei Zahlen in einem Element werden zwei Elemente.
 
-Was du aus ihnen ziehst:
-  wie viel leere Flaeche ein Element braucht
-  wie stark Haupt- und Nebenzeile sich unterscheiden duerfen
-  wie zurueckhaltend Rahmen und Schatten sein muessen
-  dass eine Karte EINE Aussage traegt, nicht drei
+Steht im Feld "hinweis" etwas anderes als "passt", ist an dem Element etwas
+offen. Dann entscheidest du: kleiner bestellen, kuerzer texten, oder es so
+nehmen.
 
-Was du NICHT uebernimmst:
-  Anordnung, Seitenverhaeltnis, Anzahl der Zeilen, Position
-
-NACH JEDEM render_html: EINMAL HINSEHEN
+NACH JEDEM GESETZTEN ELEMENT: EINMAL HINSEHEN
 Setz die Ebene, dann preview_frame auf einen Frame, an dem sie steht — BEVOR
 du die naechste baust. Ueberlappender Text, abgeschnittene Zeilen und
 Elemente, die sich gegenseitig verdecken, sieht man nur so. Du hast das
 Werkzeug; ein Cutter, der sein Bild nicht ansieht, ist keiner.
 
-WENN DU HTML SCHREIBST
-Die Leinwand ist genau so gross, wie du sie anforderst — was darueber
-hinausragt, wird abgeschnitten. Schmale Kaesten brauchen kurze Zeilen und
-kleinere Schrift, keine Tabelle mit festen Pixelbreiten. Das Werkzeug sagt dir
-im Feld "ueberlauf", ob es gepasst hat. Passt es nicht, schreib den Inhalt
-schmaler statt ihn stehen zu lassen.
+WIE GROSS DU BESTELLST
+Die Leinwand ist genau so gross, wie du sie anforderst. Ein langer Satz in
+einem schmalen Kasten geht nicht auf — dann bestell breiter oder texte kuerzer.
+Der Gestalter kuerzt nicht selbst, er meldet es dir.
 
 DEINE MITTEL
 Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die
@@ -9367,8 +9366,8 @@ Ecke ruecken ist derselbe Layer mit anderem x/y/w/h und mask 'circle'. Du kannst
 Text, Bilder, Videos, Stock-Clips und selbstgeschriebene HTML-Animationen als
 Ebenen setzen, jede mit freier Position, Groesse, Ebene und Dauer.
 
-Reicht dir kein vorhandener Baustein, schreib die Animation selbst
-(render_html, HTML+CSS+GSAP, kommt als transparentes Video zurueck).
+Reicht dir kein vorhandener Baustein, bestell ein Element (render_html). Es
+kommt als transparentes Video zurueck und wird wie jede andere Ebene gesetzt.
 
 DIE HARTEN GRENZEN
 Sie werden erzwungen, nicht erbeten. Ein Verstoss wird abgelehnt, die Aenderung
@@ -9467,11 +9466,32 @@ def _tool_specs() -> list:
         T("generate_image", "Photoreales, gebrandetes Bild erzeugen.",
           {"prompt": {"type": "string", "description": "3-6 Woerter Englisch, EIN Hero-Objekt"}},
           ["prompt"]),
-        T("render_html", "Eigene Animation als HTML/CSS/GSAP; kommt als transparentes "
-          "Video. Die Leinwand ist so gross wie width/height; was darueber hinausragt, "
-          "wird abgeschnitten (Feld 'ueberlauf' in der Antwort)." + _few_shot_overlays(),
-          {"markup": {"type": "string"}, "width": {"type": "integer"},
-           "height": {"type": "integer"}, "seconds": {"type": "number"}}, ["markup"]),
+        # Die Beispiel-Overlays standen frueher hier — fuenf Markup-Bloecke in
+        # der Werkzeugliste, die in JEDEM Turn mitgeschickt wurden. Sie gehoeren
+        # jetzt in den Kontext des Gestalters, der sie auch braucht.
+        T("render_html",
+          "Ein Grafikelement BESTELLEN. Du beschreibst es, ein eigener Gestalter baut "
+          "es, prueft es am Bild und korrigiert. Du bekommst zurueck, was gebaut wurde "
+          "(url, runden, ueberlauf, vorschau, hinweis) — kein Markup. EINE Aussage pro "
+          "Element.",
+          {"auftrag": {"type": "object",
+                       "description": "art: stat|zitat|vergleich|ablauf|titel. "
+                                      "hauptwert, beschriftung, einordnung: die Texte, "
+                                      "wie sie dastehen sollen (mit Einheit). "
+                                      "akzent_auf: welcher Bestandteil dominiert. "
+                                      "bewegung: was passiert, in wenigen Worten.",
+                       "properties": {
+                           "art": {"type": "string",
+                                   "enum": ["stat", "zitat", "vergleich", "ablauf", "titel"]},
+                           "hauptwert": {"type": "string"},
+                           "beschriftung": {"type": "string"},
+                           "einordnung": {"type": "string"},
+                           "akzent_auf": {"type": "string"},
+                           "bewegung": {"type": "string"}},
+                       "required": ["art"]},
+           "w_px": {"type": "integer"}, "h_px": {"type": "integer"},
+           "dauer_s": {"type": "number"}},
+          ["auftrag", "w_px", "h_px", "dauer_s"]),
         T("place_layer", "Ebene setzen.", {"layer": L}, ["layer"]),
         T("move_layer", "Ebene verschieben, skalieren, maskieren, umzeiten.",
           {"id": {"type": "string"}, "transform": {"type": "object"},
@@ -9518,9 +9538,11 @@ def _tool_call(name: str, args: dict, s: dict) -> dict:
             return tool_generate_image(GenerateImageRequest(prompt=args["prompt"],
                                                             client_id=s["client_id"]))
         if name == "render_html":
-            return asyncio.run(tool_render_html(RenderHtmlRequest(
-                markup=args["markup"], width=args.get("width", W),
-                height=args.get("height", 420), seconds=args.get("seconds", 3.0))))
+            return _html_subagent(args.get("auftrag") or {},
+                                  int(args.get("w_px", 620)),
+                                  int(args.get("h_px", 420)),
+                                  float(args.get("dauer_s", 3.0)),
+                                  s["client_id"], s.get("model") or HTML_AGENT_MODELL)
         if name == "place_layer":
             return tool_place_layer(PlaceLayerRequest(session_id=sid, layer=args["layer"]))
         if name == "move_layer":
@@ -9576,6 +9598,8 @@ def _loop_impl(s: dict, model: str) -> dict:
     nach jedem Turn gezaehlt, gesichert und gefragt wird."""
     tools = _tool_specs()
     _t_loop = time.time()
+    # Der Gestalter laeuft auf demselben Modell wie die Schleife, die ihn ruft.
+    s["model"] = model
     # Der statische Block liegt EINMAL im ersten User-Turn und ist ab da Praefix
     # der gesamten Historie — genau das cached Anthropic.
     erst = [{"type": "text", "text": s["prefix"], **CACHE_MARK}]

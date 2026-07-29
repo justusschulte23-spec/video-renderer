@@ -698,18 +698,17 @@ HTML_TOOL_MAX_S = 8.0        # ein vom Agenten gebautes Element, kein Film
 HTML_TOOL_MAX_PX = 1080 * 1920
 
 
-# GSAP rendert traege ("lazy"): Schreibzugriffe, die kein sichtbares Attribut
-# setzen — typisch der onUpdate eines Zaehlers — werden auf den naechsten Tick
-# verschoben. Bei Seek-getriebenem Rendern laeuft nie ein Tick, also passiert der
-# Schreibzugriff nie. Vier Probelaeufe des HTML-Subagenten haben deshalb einen
-# Zaehler gebaut, der in JEDEM Frame auf dem Startwert stand, waehrend die
-# opacity-Tweens danebem sauber liefen. Ein ausdruecklicher tick() nach dem Seek
-# schiebt die aufgeschobenen Renderings nach.
+# Das zweite Argument von seek() ist suppressEvents, und es steht per Default
+# auf true: beim Springen feuert GSAP KEINE Callbacks. Tweens, die ein sichtbares
+# Attribut setzen, sehen trotzdem richtig aus — sie brauchen keinen Callback.
+# Ein Zaehler dagegen schreibt seinen Wert in onUpdate, und der wurde nie
+# gerufen. Ergebnis: jede hochzaehlende Zahl stand in JEDEM Frame auf dem
+# Startwert, waehrend die Einblendungen daneben sauber liefen.
+#
+# Nachgewiesen mit handgeschriebenem Markup, nicht mit Agenten-Ausgabe: der
+# Fehler sitzt im Renderer und betrifft jedes HTML-Element, das je gebaut wurde.
 SEEK_JS = """(t) => {
-    if (window.gsap) {
-        gsap.globalTimeline.seek(t);
-        if (gsap.ticker && gsap.ticker.tick) gsap.ticker.tick();
-    }
+    if (window.gsap) gsap.globalTimeline.seek(t, false);
     document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
 }"""
 

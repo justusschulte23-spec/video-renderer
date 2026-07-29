@@ -8750,9 +8750,14 @@ DU GIBST ERST AB, WENN
   kann in die Leinwand passen und trotzdem seinen eigenen Inhalt beschneiden.
   Genau so verschwindet das Prozentzeichen hinter der Zahl.
 - "fehlender_inhalt" ist leer. Jeder Text aus dem Auftrag muss am ENDE der
-  Standzeit wirklich dastehen. Zaehlt ein Wert hoch, zaehlt er auf den
-  bestellten Wert hoch — die Einheit ("%", "x", "Mio") gehoert dazu und wird
-  nicht weggelassen, nur weil sie nicht mitzaehlt.
+  Standzeit SICHTBAR dastehen — nicht nur im DOM. Geprueft wird, was man sieht:
+  opacity 0, Groesse 0 und versteckte Knoten zaehlen als nicht da.
+  Zaehlt ein Wert hoch, zaehlt er auf den bestellten Wert hoch, und die Einheit
+  ("%", "x", "Mio") gehoert dazu — sie wird nicht weggelassen, nur weil sie
+  nicht mitzaehlt.
+  Ein Zaehler laeuft ueber die GSAP-Zeitleiste (gsap.to auf ein Objekt mit
+  onUpdate, das den Text schreibt). Setzt du Ziffern per opacity oder Versatz
+  ein, muessen ALLE am Ende sichtbar sein — nicht nur die erste.
 - kein Text beruehrt einen anderen
 - die drei Bestandteile sind auf den ersten Blick unterscheidbar
 - etwas bewegt sich ab dem ersten Frame
@@ -8870,8 +8875,7 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
                     if (window.gsap) gsap.globalTimeline.seek(t);
                     document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
                 }""", float(t_ende))
-                text_ende = await page.evaluate(
-                    "() => (document.body.innerText || document.body.textContent || '')")
+                text_ende = await page.evaluate(SICHTBARER_TEXT_JS)
                 await page.evaluate("""(t) => {
                     if (window.gsap) gsap.globalTimeline.seek(t);
                     document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
@@ -8903,6 +8907,28 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
             "zu_klein": [k for k in knoten if k.get("schrift_px", 99) < HTML_AGENT_MIN_PX],
             "js_fehler": fehler[:3], "bild_b64": bild_b64,
             "text_ende": text_ende}
+
+
+# innerText reicht nicht: es meldet auch Text mit opacity:0 oder auf null
+# skaliert. Der dritte Probelauf hatte '247 %' im DOM und zeigte in JEDEM Frame
+# '2 %' — Inhalt da, Ziffern unsichtbar. Geprueft wird, was man SIEHT.
+SICHTBARER_TEXT_JS = """() => {
+  const teile = [];
+  document.querySelectorAll('*').forEach(el => {
+    const eigen = Array.from(el.childNodes)
+      .filter(n => n.nodeType === 3 && n.textContent.trim());
+    if (!eigen.length) return;
+    let sichtbar = true;
+    try {
+      sichtbar = el.checkVisibility({opacityProperty: true, visibilityProperty: true,
+                                     contentVisibilityAuto: true});
+    } catch (e) { sichtbar = getComputedStyle(el).visibility !== 'hidden'; }
+    const r = el.getBoundingClientRect();
+    if (!sichtbar || r.width < 1 || r.height < 1) return;
+    teile.push(eigen.map(n => n.textContent).join(''));
+  });
+  return teile.join('\\n');
+}"""
 
 
 MESS_JS = """() => {

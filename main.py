@@ -698,6 +698,22 @@ HTML_TOOL_MAX_S = 8.0        # ein vom Agenten gebautes Element, kein Film
 HTML_TOOL_MAX_PX = 1080 * 1920
 
 
+# GSAP rendert traege ("lazy"): Schreibzugriffe, die kein sichtbares Attribut
+# setzen — typisch der onUpdate eines Zaehlers — werden auf den naechsten Tick
+# verschoben. Bei Seek-getriebenem Rendern laeuft nie ein Tick, also passiert der
+# Schreibzugriff nie. Vier Probelaeufe des HTML-Subagenten haben deshalb einen
+# Zaehler gebaut, der in JEDEM Frame auf dem Startwert stand, waehrend die
+# opacity-Tweens danebem sauber liefen. Ein ausdruecklicher tick() nach dem Seek
+# schiebt die aufgeschobenen Renderings nach.
+SEEK_JS = """(t) => {
+    if (window.gsap) {
+        gsap.globalTimeline.seek(t);
+        if (gsap.ticker && gsap.ticker.tick) gsap.ticker.tick();
+    }
+    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+}"""
+
+
 async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
                              job_dir: Path, fps: int = FPS) -> tuple:
     """HTML/CSS/GSAP → transparentes WebM (vp9, yuva420p).
@@ -757,11 +773,7 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
             """() => ({ b: document.body.scrollWidth, h: document.body.scrollHeight })""")
         for f in range(frames):
             t = f / fps
-            await page.evaluate(
-                """(t) => {
-                    if (window.gsap) gsap.globalTimeline.seek(t);
-                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
-                }""", t)
+            await page.evaluate(SEEK_JS, t)
             await page.screenshot(path=str(shots / f"{f:05d}.png"), omit_background=True)
         await ctx.close()
         await browser.close()
@@ -8779,8 +8791,9 @@ DIE TECHNIK
   oder requestAnimationFrame — beides steht still.
 - Ab Frame 0 muss etwas in Bewegung sein. Ein Element, das erst nach einer
   Sekunde anfaengt, sieht im Schnitt aus wie ein Standbild.
-- Keine externen Schriften, Bilder oder Skripte. Was nicht im Markup steht,
-  ist beim Rendern nicht da.
+- GSAP ist schon da. Schreib KEIN <script src="..."> — kein CDN, keine
+  externen Schriften oder Bilder. Was nicht im Markup steht, ist beim Rendern
+  nicht da.
 
 DAS SKELETT
 Du bekommst eine Knotenstruktur fuer deine Art. Sie legt fest, WAS es gibt und
@@ -8862,24 +8875,15 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
                 if (window.gsap) { gsap.globalTimeline.pause(); }
                 document.getAnimations().forEach(a => { a.pause(); });
             }""")
-            await page.evaluate("""(t) => {
-                if (window.gsap) gsap.globalTimeline.seek(t);
-                document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
-            }""", float(t_s))
+            await page.evaluate(SEEK_JS, float(t_s))
             mess = await page.evaluate(MESS_JS)
             text_ende = ""
             if t_ende is not None:
                 # Einmal ans Ende springen und nur den Text lesen. Kein zweiter
                 # Browserstart: der kostet mehr als dieser Sprung.
-                await page.evaluate("""(t) => {
-                    if (window.gsap) gsap.globalTimeline.seek(t);
-                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
-                }""", float(t_ende))
+                await page.evaluate(SEEK_JS, float(t_ende))
                 text_ende = await page.evaluate(SICHTBARER_TEXT_JS)
-                await page.evaluate("""(t) => {
-                    if (window.gsap) gsap.globalTimeline.seek(t);
-                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
-                }""", float(t_s))
+                await page.evaluate(SEEK_JS, float(t_s))
             if mit_bild:
                 # Neutraler Grund: auf transparentem Screenshot sieht helle
                 # Schrift auf hellem Grund gleich aus wie auf dunklem.
@@ -9218,6 +9222,14 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                         ", ".join(k["knoten"] for k in pr["abgeschnitten"][:3]))
     if pr.get("ueberlappungen"):
         hinweise.append(f"{len(pr['ueberlappungen'])} Textueberlappung(en)")
+    # Nach aufgebrauchtem Rundenbudget gibt der Subagent ab, auch wenn etwas
+    # offen ist. Dann MUSS es hier stehen — sonst meldet er "passt", waehrend
+    # der bestellte Wert gar nicht im Bild ist. Genau so ist ein Element mit
+    # eingefrorenem Zaehler als fertig durchgegangen.
+    if pr.get("fehlender_inhalt"):
+        hinweise.append("fehlt im Bild: " +
+                        ", ".join(f"{f['feld']}='{f['erwartet']}'"
+                                  for f in pr["fehlender_inhalt"][:3]))
     if zustand["runden"] >= HTML_AGENT_RUNDEN and (pr.get("ueberlauf")
                                                    or pr.get("ueberlappungen")):
         hinweise.append("Rundenbudget aufgebraucht, Rest steht so")

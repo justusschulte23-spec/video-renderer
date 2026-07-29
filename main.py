@@ -8749,6 +8749,10 @@ DU GIBST ERST AB, WENN
 - die Liste "abgeschnitten" ist leer. Sie meint EINZELNE Knoten: ein Kasten
   kann in die Leinwand passen und trotzdem seinen eigenen Inhalt beschneiden.
   Genau so verschwindet das Prozentzeichen hinter der Zahl.
+- "fehlender_inhalt" ist leer. Jeder Text aus dem Auftrag muss am ENDE der
+  Standzeit wirklich dastehen. Zaehlt ein Wert hoch, zaehlt er auf den
+  bestellten Wert hoch — die Einheit ("%", "x", "Mio") gehoert dazu und wird
+  nicht weggelassen, nur weil sie nicht mitzaehlt.
 - kein Text beruehrt einen anderen
 - die drei Bestandteile sind auf den ersten Blick unterscheidbar
 - etwas bewegt sich ab dem ersten Frame
@@ -8795,8 +8799,27 @@ HTML_AGENT_GESTALTUNG = """GESTALTUNGSREGELN
   ein, ein Balken waechst. Kein Dauerpulsieren, kein Rotieren."""
 
 
+def _fehlender_inhalt(auftrag: dict, text: str) -> list:
+    """Steht im Element wirklich drin, was bestellt wurde?
+
+    Die Geometrie kann das nicht sehen: der erste saubere Lauf hat '247 %'
+    bekommen und '247' gebaut. Kein Ueberlauf, kein abgeschnittener Knoten,
+    trotzdem falsch. Geprueft wird am ENDE der Standzeit — waehrend ein Wert
+    hochzaehlt, steht in der Mitte zurecht etwas anderes."""
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", "", str(s)).casefold()
+    hay = norm(text)
+    fehlt = []
+    for k, v in (auftrag or {}).items():
+        if k in ("art", "akzent_auf", "bewegung") or not isinstance(v, str) or not v.strip():
+            continue
+        if norm(v) not in hay:
+            fehlt.append({"feld": k, "erwartet": v})
+    return fehlt
+
+
 async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
-                           mit_bild: bool = False) -> dict:
+                           mit_bild: bool = False, t_ende: Optional[float] = None) -> dict:
     """Ein Playwright-Durchgang: Ueberlauf, Textmasse, Ueberlappungen, optional
     ein Standbild auf neutralem Grund.
 
@@ -8839,6 +8862,20 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
                 document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
             }""", float(t_s))
             mess = await page.evaluate(MESS_JS)
+            text_ende = ""
+            if t_ende is not None:
+                # Einmal ans Ende springen und nur den Text lesen. Kein zweiter
+                # Browserstart: der kostet mehr als dieser Sprung.
+                await page.evaluate("""(t) => {
+                    if (window.gsap) gsap.globalTimeline.seek(t);
+                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+                }""", float(t_ende))
+                text_ende = await page.evaluate(
+                    "() => (document.body.innerText || document.body.textContent || '')")
+                await page.evaluate("""(t) => {
+                    if (window.gsap) gsap.globalTimeline.seek(t);
+                    document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+                }""", float(t_s))
             if mit_bild:
                 # Neutraler Grund: auf transparentem Screenshot sieht helle
                 # Schrift auf hellem Grund gleich aus wie auf dunklem.
@@ -8864,7 +8901,8 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
             "abgeschnitten": abgeschnitten,
             "ueberlappungen": mess.get("ueberlappungen") or [],
             "zu_klein": [k for k in knoten if k.get("schrift_px", 99) < HTML_AGENT_MIN_PX],
-            "js_fehler": fehler[:3], "bild_b64": bild_b64}
+            "js_fehler": fehler[:3], "bild_b64": bild_b64,
+            "text_ende": text_ende}
 
 
 MESS_JS = """() => {
@@ -9002,9 +9040,10 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "abgelehnt": True,
                         "fehler": f"{HTML_AGENT_RUNDEN} Runden sind aufgebraucht. "
                                   f"Ruf fertig auf — die letzte Fassung wird genommen."}
-            pr = asyncio.run(_html_pruefstand(mk, w_px, h_px, t_mitte))
+            pr = asyncio.run(_html_pruefstand(mk, w_px, h_px, t_mitte, t_ende=dauer_s))
             if not pr.get("ok"):
                 return {"ok": False, "fehler": pr.get("grund", "Pruefstand kaputt")}
+            pr["fehlender_inhalt"] = _fehlender_inhalt(auftrag, pr.get("text_ende", ""))
             zustand["markup"] = mk
             zustand["pruefung"] = pr
             zustand["runden"] += 1
@@ -9022,6 +9061,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                     "schrift_zu_klein": [f"{k['knoten']} {k['schrift_px']}px"
                                          for k in pr["zu_klein"]],
                     "js_fehler": pr["js_fehler"],
+                    "fehlender_inhalt": pr["fehlender_inhalt"],
                     "runden_uebrig": HTML_AGENT_RUNDEN - zustand["runden"]}
         if name == "preview_frame":
             if not zustand["markup"]:
@@ -9054,6 +9094,9 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             if pr.get("ueberlappungen"):
                 maengel.append(", ".join(f"{u['a']} beruehrt {u['b']}"
                                          for u in pr["ueberlappungen"][:3]))
+            for f in pr.get("fehlender_inhalt", []):
+                maengel.append(f"'{f['erwartet']}' aus dem Feld {f['feld']} steht am Ende "
+                               f"der Standzeit nicht im Element")
             uebrig = HTML_AGENT_RUNDEN - zustand["runden"]
             if maengel and uebrig > 0:
                 return {"ok": False, "abgelehnt": True,

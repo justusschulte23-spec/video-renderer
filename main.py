@@ -7489,6 +7489,41 @@ def _element_masse(lay: dict) -> Optional[tuple]:
     return None
 
 
+def _element_box_angleichen(lay: dict) -> Optional[str]:
+    """Die Hoehe einer Element-Ebene ist aus Breite und Quellmass vollstaendig
+    bestimmt. Sie abzufragen und dann abzulehnen war ein Konstruktionsfehler:
+    in drei Laeufen hintereinander hat 'seitenverhaeltnis' JEDE Platzierung
+    verworfen, und im Video stand kein einziges Element. Eine Zahl, die das
+    System selbst ausrechnen kann, darf es nicht erfragen."""
+    if _ist_pflicht(lay):
+        return None
+    masse = _element_masse(lay)
+    if not masse:
+        return None
+    sv = masse[0] / max(1, masse[1])
+    t = lay["transform"]
+    if t["w"] <= 0:
+        return None
+    h_soll = t["w"] * W / sv / H
+    if t["y"] + h_soll > 1 - SAFE_MARGIN + 1e-6:
+        # Nach unten ist kein Platz — dann bestimmt die Hoehe die Breite.
+        h_soll = max(0.02, 1 - SAFE_MARGIN - t["y"])
+        w_soll = h_soll * H * sv / W
+        if abs(w_soll - t["w"]) < 1e-4 and abs(h_soll - t["h"]) < 1e-4:
+            return None
+        alt_w, alt_h = t["w"], t["h"]
+        t["w"], t["h"] = round(w_soll, 4), round(h_soll, 4)
+        return (f"{lay['id']}: unter y={t['y']:.2f} war nicht genug Hoehe. Kasten auf "
+                f"{t['w']:.3f} x {t['h']:.3f} gesetzt (war {alt_w:.3f} x {alt_h:.3f}), "
+                f"Verhaeltnis {sv:.2f}:1 gehalten.")
+    if abs(h_soll - t["h"]) < 1e-4:
+        return None
+    alt = t["h"]
+    t["h"] = round(h_soll, 4)
+    return (f"{lay['id']}: Hoehe auf {t['h']:.3f} gesetzt (war {alt:.3f}). Das Element "
+            f"ist {sv:.2f}:1 — die Hoehe folgt aus der Breite, du musst sie nicht raten.")
+
+
 def _freie_zonen(face: dict, band: Optional[tuple], masse: Optional[tuple]) -> list:
     """Wo eine Ebene dieser Groesse ueberhaupt noch hin darf — ausgerechnet, nicht
     beschrieben. Eine Ablehnung, die nur sagt was verboten ist, kostet einen Turn;
@@ -8368,6 +8403,7 @@ def tool_place_layer(req: PlaceLayerRequest):
     if not roh:
         raise HTTPException(status_code=400, detail="layer oder layers noetig")
     neue = [_layer_defaults(r, s["frames"]) for r in roh]
+    angeglichen = [n for n in (_element_box_angleichen(l) for l in neue) if n]
     neue_ids = {l["id"] for l in neue}
     if len(neue_ids) != len(neue):
         raise HTTPException(status_code=422, detail={
@@ -8396,7 +8432,7 @@ def tool_place_layer(req: PlaceLayerRequest):
                                          _element_masse(neue[0])),
             "hinweis": ("keine der Ebenen wurde gesetzt" if len(neue) > 1 else None)})
     s["layers"] = kandidat
-    hin = [h for l in neue for h in _layer_hints(l)]
+    hin = angeglichen + [h for l in neue for h in _layer_hints(l)]
     lay = neue[-1]
     # Drei gleiche Formate hintereinander sind kein Regelverstoss, aber der
     # deutlichste Hinweis darauf, dass jemand nur noch ablegt statt zu setzen.
@@ -8438,6 +8474,7 @@ def tool_move_layer(req: MoveLayerRequest):
         # Ohne diese Zeile waere ein move_layer darauf ein Aufruf, der nichts tut.
         if lay["source"].get("kind") == "captions" and "y" in req.transform:
             lay["source"]["y"] = float(req.transform["y"])
+    angeglichen = _element_box_angleichen(lay)
     if req.animate is not None:
         anim, anim_fehler = _clean_animate(req.animate, s["frames"])
         if anim_fehler:
@@ -8462,7 +8499,8 @@ def tool_move_layer(req: MoveLayerRequest):
                      "turn": s["turns_used"]})
         raise HTTPException(status_code=422, detail={"abgelehnt": req.id, "fehler": fehler,
                                                      "zurueckgesetzt": True})
-    return {"ok": True, "layer": lay, "hinweise": _layer_hints(lay)}
+    return {"ok": True, "layer": lay,
+            "hinweise": ([angeglichen] if angeglichen else []) + _layer_hints(lay)}
 
 
 class RemoveLayerRequest(BaseModel):
@@ -9574,10 +9612,10 @@ zaehlt nicht:
 - ein bestelltes Element darf nicht kleiner gesetzt werden als 0.75 seines
   Anforderungsmasses. Willst du es schmal, bestell es schmal (w_px), statt
   ein breites zu schrumpfen — die Schrift schrumpft mit.
-- die Ebene muss das Seitenverhaeltnis des Elements halten. Ebenen werden
-  beschnitten, nicht gestaucht: passt das Verhaeltnis nicht, faellt an den
-  Raendern Text weg, und im fertigen Video sieht das aus wie ein Tippfehler.
-  Rechne h aus w und dem Verhaeltnis, das render_html zurueckgibt.
+Die Hoehe eines bestellten Elements musst du NICHT ausrechnen. Setz w und ein
+beliebiges h — das System zieht h auf das Verhaeltnis des Elements nach und
+sagt dir im Hinweis, was daraus wurde. Ebenen werden beschnitten und nicht
+gestaucht, deshalb ist diese Zahl nicht verhandelbar.
 Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 
 WANN DU FERTIG BIST

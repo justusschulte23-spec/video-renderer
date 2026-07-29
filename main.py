@@ -124,6 +124,10 @@ def _tpl_colors(tpl: dict) -> dict:
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 W, H, FPS         = 1080, 1920, 30
+# Eine Abtastrate fuer alles, was spaeter aneinandergehaengt wird. concat
+# verlangt identische Stroeme; 44,1 kHz an einer Stelle und 48 an der anderen
+# hat die Endkarte gekostet, ohne dass es jemand gemerkt hat.
+AUDIO_HZ          = 48000
 BROLL_H           = 622
 DIVIDER_Y         = 622
 DIVIDER_H         = 110
@@ -441,7 +445,6 @@ class RemotionRenderRequest(BaseModel):
     flow_diagram: Optional[dict] = None  # force a node-graph {nodes,chips,startFrame,endFrame} (else director)
     cta_word:     Optional[dict] = None  # force a CTA word {word,startFrame,endFrame} (else director)
     scenes:       Optional[list] = None  # force full-screen cutaway scenes (else director/vscript)
-    music_url:    Optional[str] = None   # background bed, sidechain-ducked under the voice (§4)
     metaphern:    bool = True            # Anker→Entfaltung→Rang→Stock-Router als echte Bildebene
     contact_sheet: bool = True           # Kontaktblatt (Filmstreifen+Wellenform+Wortraster) an die Regie
     layer_stage:  bool = True            # R3 Teil 1: über die generische Ebenen-Composition rendern.
@@ -1379,11 +1382,17 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
 
 # ── Deterministic max-gap silence trimmer ─────────────────────────────────────
 def _compute_keep_segments(words: list, duration: float,
-                           max_gap: float = 0.30, pad: float = 0.05) -> list:
+                           max_gap: float = 0.30, pad: float = 0.05,
+                           tail_pad: float = 0.35) -> list:
     """Max-Gap rule on Whisper word timestamps. Gaps <= max_gap stay (natural cadence);
     gaps > max_gap keep only `pad` after the previous word and `pad` before the next,
     the dead-air between is discarded. Leading/trailing dead-air trimmed the same way.
-    Returns the list of (start, end) intervals to KEEP."""
+    Returns the list of (start, end) intervals to KEEP.
+
+    `tail_pad` gilt NUR fuer das Ende der Aufnahme und ist absichtlich groesser:
+    Whisper setzt das `end` des letzten Wortes regelmaessig zu frueh, und hinter
+    dem letzten Wort kommt kein weiteres, das den Schnitt noch retten koennte.
+    Fuenf Hundertstel reichen dort nicht - dann fehlt die letzte Silbe."""
     if not words:
         return [(0.0, duration)]
     removes = []
@@ -1398,8 +1407,8 @@ def _compute_keep_segments(words: list, duration: float,
             if b > a:
                 removes.append((a, b))
     last = float(words[-1]["end"])
-    if duration - last > max_gap:
-        removes.append((min(last + pad, duration), duration))
+    if duration - last > max_gap + tail_pad:
+        removes.append((min(last + tail_pad, duration), duration))
 
     keeps, cursor = [], 0.0
     for a, b in removes:
@@ -1427,12 +1436,25 @@ def _silence_intervals(audio_path: Path, noise_db: int = -30, min_silence: float
         return []
 
 
-def _silence_keep_segments(silences: list, duration: float, pad: float = 0.09) -> list:
+def _silence_keep_segments(silences: list, duration: float, pad: float = 0.09,
+                           wort_ende_pad: float = 0.20,
+                           tail_pad: float = 0.35) -> list:
     """Keep everything except the interior of each real silence (minus a small pad
-    so speech onsets/tails aren't clipped)."""
+    so speech onsets/tails aren't clipped).
+
+    Die Polster sind absichtlich UNGLEICH. Am ANFANG einer Stille klingt das
+    eben gesprochene Wort noch aus - ein Zischlaut oder ein weiches Ende faellt
+    unter die -30-dB-Schwelle, waehrend man es noch hoert. Am ENDE der Stille
+    liegt nur der Einsatz des naechsten Wortes, der hart einsetzt. Ein gleiches
+    Polster auf beiden Seiten schneidet deshalb regelmaessig Wortenden an.
+
+    Die letzte Stille bekommt `tail_pad`: dahinter kommt kein Wort mehr, das den
+    Schnitt hoerbar macht - er faellt erst im fertigen Video auf."""
     keeps, cur = [], 0.0
-    for s, e in silences:
-        a, b = s + pad, e - pad
+    letzte = len(silences) - 1
+    for i, (s, e) in enumerate(silences):
+        vorn = tail_pad if (i == letzte and e >= duration - 0.25) else wort_ende_pad
+        a, b = s + max(pad, vorn), e - pad
         if b - a <= 0.06:
             continue
         if a > cur:
@@ -6139,6 +6161,52 @@ def _metaphern_overlays(words: list, duration: float, hook_end_s: float,
     return overlays
 
 
+def _metapher_ebenen(s: dict) -> list:
+    """Dieselbe Anker-Maschine, aber als Ebenen fuer LayerStage statt als
+    Overlays fuer die alte Composition.
+
+    Sie gehoert dem System, nicht dem Agenten: sie laeuft nach seinem letzten
+    Turn und kostet ihn kein Budget. Deshalb wird sie auch nicht gegen die
+    Regeln geprueft, die fuer seine Ebenen gelten — sie setzt sich selbst auf
+    die sichere Schiene unter dem Gesicht."""
+    woerter = s.get("words") or []
+    if not woerter:
+        return []
+    dauer = s["frames"] / FPS
+    face = s.get("face") or {}
+    # Nach dem Hook: die ersten Sekunden gehoeren dem Einstieg, da will niemand
+    # ein Stockbild sehen.
+    hook_ende = min(4.0, dauer * 0.12)
+    try:
+        overlays = _metaphern_overlays(woerter, dauer, hook_ende, face)
+    except Exception as exc:
+        log.warning("[META] Ebenenbau fehlgeschlagen: %s", exc)
+        return []
+    schiene = round(min(0.78, float(face.get("bottom", 0.66)) + 0.04), 3)
+    ebenen = []
+    for i, o in enumerate(overlays):
+        von, bis = int(o["startFrame"]), int(o["endFrame"])
+        if bis - von < int(MIN_LAYER_S * FPS):
+            continue
+        links = (i % 2 == 0)
+        roh = {
+            "id": f"meta_{i}",
+            "source": {"kind": "video", "url": o["asset_url"], "transparent": False},
+            "from": von, "to": bis, "z": 30,
+            "transform": {"x": 0.06 if links else 0.50, "y": schiene,
+                          "w": 0.44, "h": 0.24},
+            # Ein hartes Erscheinen sieht nach Fehler aus, nicht nach Schnitt.
+            "animate": [{"property": "opacity", "from": 0, "to": 1,
+                         "start": von, "end": von + 6, "easing": "easeOut"}],
+            "herkunft": "metapher", "konzept": str(o.get("konzept") or ""),
+        }
+        try:
+            ebenen.append(_layer_defaults(roh, s["frames"]))
+        except Exception as exc:
+            log.warning("[META] Ebene %d verworfen: %s", i, exc)
+    return ebenen
+
+
 def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s: float,
                        sheet: Optional[Path] = None) -> dict:
     """Stage 1 — the visual SCRIPT (rough intent, anchored to script phrases).
@@ -6773,39 +6841,62 @@ def _make_thumbnail_image(concept: str, client_id: str, out_path: Path) -> bool:
     return True
 
 
-def _append_end_thumbnail(video_path: Path, req: RemotionRenderRequest, job_dir: Path) -> Path:
+def _append_end_thumbnail(video_path: Path, job_dir: Path, *, concept: str = "",
+                          client_id: str = "justus",
+                          thumbnail_url: Optional[str] = None) -> Path:
     """Append a 0.2s thumbnail freeze-frame to the END of the render (never the
     start — a still on frame 0 kills the hook). Returns the original path on any
-    failure so a thumbnail problem never drops the video."""
+    failure so a thumbnail problem never drops the video.
+
+    Nimmt einfache Parameter statt des Request-Objekts: der Sitzungs-Pfad hat
+    keinen RemotionRenderRequest, braucht aber dieselbe Endkarte."""
     try:
         thumb_img = job_dir / "thumb.jpg"
-        if req.thumbnail_url:
-            if not download_file(req.thumbnail_url, thumb_img):
+        if thumbnail_url:
+            if not download_file(thumbnail_url, thumb_img):
                 log.warning("[REMOTION] thumbnail_url download failed — skipping end-card")
                 return video_path
         else:
-            concept = req.thumbnail_concept or req.hook_text or req.headline or req.topic_label or ""
             if not concept:
                 return video_path
-            _make_thumbnail_image(concept, req.client_id or "justus", thumb_img)
+            _make_thumbnail_image(concept, client_id or "justus", thumb_img)
         thumb_clip = job_dir / "thumb_clip.mp4"
         run(["ffmpeg", "-y", "-loop", "1", "-framerate", str(FPS), "-i", str(thumb_img),
-             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={AUDIO_HZ}",
              "-t", "0.2", "-vf",
              f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1",
              "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "192k",
+             "-ar", str(AUDIO_HZ), "-ac", "2",
              "-pix_fmt", "yuv420p", "-shortest", str(thumb_clip)], "thumb_clip")
         out = job_dir / "with_thumb.mp4"
+        # concat verlangt in JEDEM Strom dieselben Parameter. Die Endkarte kam
+        # mit 44,1 kHz, der Render mit 48 — ffmpeg bricht dann mit
+        # "Error reinitializing filters" und -22 ab, und das Video ging still
+        # ohne Endkarte raus. Beide Seiten werden jetzt vorher angeglichen,
+        # statt sich auf zufaellig passende Parameter zu verlassen.
+        norm = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H},setsar=1,fps={FPS},format=yuv420p[v0];"
+                f"[0:a]aformat=sample_fmts=fltp:sample_rates={AUDIO_HZ}:"
+                f"channel_layouts=stereo[a0];"
+                f"[1:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H},setsar=1,fps={FPS},format=yuv420p[v1];"
+                f"[1:a]aformat=sample_fmts=fltp:sample_rates={AUDIO_HZ}:"
+                f"channel_layouts=stereo[a1];"
+                f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]")
         run(["ffmpeg", "-y", "-i", str(video_path), "-i", str(thumb_clip),
-             "-filter_complex", "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]",
+             "-filter_complex", norm,
              "-map", "[vout]", "-map", "[aout]",
              "-c:v", "libx264", "-crf", "20", "-preset", "medium",
-             "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_HZ), "-pix_fmt", "yuv420p",
              "-movflags", "+faststart", str(out)], "thumb_concat")
         log.info("[REMOTION] appended 0.2s thumbnail end-card")
         return out
     except Exception as exc:
+        # Eine WARNING-Zeile im Containerlog hat gestern niemand gesehen. Ein
+        # fehlender Abspann ist ein unvollstaendiges Video, kein Randfall.
         log.warning("[REMOTION] thumbnail end-card failed, shipping without: %s", exc)
+        _log_run(client_id, "endcard", "fehler",
+                 {"grund": "concat_fehlgeschlagen", "text": str(exc)[:400]})
         return video_path
 
 
@@ -6834,68 +6925,9 @@ def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0, name: str = "f
     return path
 
 
-MUSIC_SELECTOR_URL = os.environ.get(
-    "MUSIC_SELECTOR_URL", "https://ad-music-selector-production.up.railway.app/select-music")
-
-
-def _pick_music(client_id: str, briefing: dict, duration: float) -> str:
-    """Waehlt das Musikbett aus der Bibliothek des Kunden (clients.music_tracks).
-    Ohne Bibliothek gibt es kein Bett — es wird keine erfunden. Die Auswahl macht
-    der ad-music-selector (Gemini hoert die Previews)."""
-    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY and client_id):
-        return ""
-    try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients", timeout=20,
-                         headers={"apikey": SUPABASE_SERVICE_KEY,
-                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
-                         params={"client_id": f"eq.{client_id}", "select": "music_tracks"})
-        rows = r.json() if r.ok else []
-        tracks = (rows[0].get("music_tracks") if rows else None) or []
-    except Exception as exc:
-        log.warning("[MUSIC] Bibliothek nicht lesbar: %s", exc)
-        return ""
-    if not tracks:
-        log.info("[MUSIC] keine Tracks fuer %s hinterlegt — Render laeuft ohne Bett", client_id)
-        return ""
-    b = briefing or {}
-    try:
-        sel = requests.post(MUSIC_SELECTOR_URL, timeout=180, json={
-            "tracks": tracks[:8],
-            "adCtx": {"stil": b.get("hook_formel", ""), "mood": "",
-                      "hook_audio": b.get("hook", ""),
-                      "zielgruppe": b.get("avatar_pain", "")}})
-        sel.raise_for_status()
-        data = sel.json() or {}
-        url = data.get("best_track_url") or data.get("url") or ""
-        log.info("[MUSIC] gewaehlt: %s", url[:80] or "nichts")
-        return url
-    except Exception as exc:
-        log.warning("[MUSIC] Auswahl fehlgeschlagen: %s", exc)
-        return ""
-
-
-def _add_music_ducked(video: Path, music_url: str, job_dir: Path) -> Path:
-    """§4 mix a background music bed UNDER the voice with sidechain ducking — the
-    music drops ~8dB while the speaker talks, breathes back in the pauses. Returns
-    the original path on any failure so music never breaks the render."""
-    try:
-        mus = job_dir / "music.mp3"
-        if not download_file(music_url, mus):
-            return video
-        out = job_dir / "with_music.mp4"
-        filt = (
-            "[1:a]volume=0.18,aloop=loop=-1:size=2000000000[m];"
-            "[0:a]asplit=2[v0][key];"
-            "[m][key]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=250[md];"
-            "[v0][md]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]"
-        )
-        run(["ffmpeg", "-y", "-i", str(video), "-i", str(mus), "-filter_complex", filt,
-             "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-             "-shortest", "-movflags", "+faststart", str(out)], "music_duck")
-        return out if out.exists() else video
-    except Exception as exc:
-        log.warning("[MUSIC] ducking failed: %s", exc)
-        return video
+# Kein Musikbett mehr. Der Ton kommt auf der Plattform dazu, und ein Bett,
+# das niemand hoert, kostet nur Rechenzeit und eine Fehlerquelle beim Mischen.
+# _pick_music und _add_music_ducked sind ersatzlos entfernt (2026-07-29).
 
 
 def _gen_scene_image(concept: str, client_id: str, job_dir: Path) -> str:
@@ -7264,15 +7296,14 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             else:
                 log.warning("[REMOTION] SFX mix produced nothing — shipping dry audio")
 
-        # §4 background music bed, sidechain-ducked under the voice. Ohne
-        # explizite URL waehlt der Selector aus der Bibliothek des Kunden.
-        _music = req.music_url or _pick_music(req.client_id or "", req.briefing or {}, duration)
-        if _music:
-            out = _add_music_ducked(out, _music, job_dir)
-
         # thumbnail end-card (0.2s freeze at the very end, after everything else)
         if req.thumbnail:
-            out = _append_end_thumbnail(out, req, job_dir)
+            out = _append_end_thumbnail(
+                out, job_dir,
+                concept=req.thumbnail_concept or req.hook_text or req.headline
+                or req.topic_label or "",
+                client_id=req.client_id or "justus",
+                thumbnail_url=req.thumbnail_url)
 
         out = _fit_size(out, job_dir)   # never exceed the 50MB ceiling
         url = upload_supabase(out, f"remotion_{comp}_{job_id}", folder="renders")
@@ -7980,7 +8011,7 @@ def tool_session_open(req: OpenSessionRequest):
         "style_guide": style, "colors": _tpl_colors(tpl),
         "brand": _brand_fuer(req.client_id, tpl),
         "caption_stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
-        "briefing": req.briefing, "sfx": [], "music": None,
+        "briefing": req.briefing, "sfx": [],
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
         "gelesen": set(), "verlauf": [],
@@ -8026,7 +8057,7 @@ def tool_session_state(sid: str):
     s = _sess(sid)
     return {"ok": True, "session_id": sid, "frames": s["frames"],
             "duration": round(s["duration"], 3), "layers": s["layers"],
-            "sfx": s["sfx"], "music": s["music"],
+            "sfx": s["sfx"],
             "turns_used": s["turns_used"], "turn_budget": s["turn_budget"],
             "abbruch_grund": s["abbruch_grund"]}
 
@@ -8039,7 +8070,7 @@ class SessionRef(BaseModel):
 # entweder wiederherstellbar oder gehoert nicht in eine Datenbank.
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
-                "music", "layers", "turns_used", "turn_budget", "abbruch_grund",
+                "layers", "turns_used", "turn_budget", "abbruch_grund",
                 "prefix", "prefix_sha", "gelesen", "verlauf", "tokens",
                 "brand", "caption_stil")
 
@@ -8607,20 +8638,6 @@ def tool_sfx_library():
     return {"ok": True, "assets": sorted(SFX_LIBRARY)}
 
 
-class SetMusicRequest(BaseModel):
-    session_id: str
-    url:        str = ""
-    ducking:    bool = True
-
-
-@app.post("/tool/set-music")
-def tool_set_music(req: SetMusicRequest):
-    s = _sess(req.session_id)
-    _budget_guard(s)
-    s["music"] = {"url": req.url, "ducking": req.ducking} if req.url else None
-    return {"ok": True, "music": s["music"]}
-
-
 # ── Prüfen ────────────────────────────────────────────────────────────────────
 @app.post("/tool/validate")
 def tool_validate(req: SessionRef):
@@ -8647,9 +8664,12 @@ def tool_validate(req: SessionRef):
 # ── Rendern ───────────────────────────────────────────────────────────────────
 @app.post("/tool/session/render")
 def tool_session_render(req: SessionRef):
-    """Die Sitzung zu Ende bringen: Ebenen → Remotion, Ton drunter, SFX, Musik.
-    Schreibt danach jede Ebene nach render_layers — das ist die Quelle, aus der
-    read_history spaeter liest."""
+    """Die Sitzung zu Ende bringen: Metapher-Ebenen dazu, Ebenen → Remotion,
+    Ton drunter, SFX, QA-Gate mit einer Korrekturrunde, Endkarte.
+
+    Diese Nachbearbeitung gehoert dem System, nicht dem Agenten - er kann sie
+    weder vergessen noch verbrauchen. Musik gibt es hier nicht mehr; der Ton
+    kommt auf der Plattform dazu."""
     s = _sess(req.session_id)
     # KEIN Budget-Guard: rendern ist der Ausweg aus dem Abbruch, nicht noch
     # eine Aenderung. Der Grund wandert in die Telemetrie.
@@ -8658,44 +8678,118 @@ def tool_session_render(req: SessionRef):
              s["turn_budget"], s.get("abbruch_grund") or "manuell",
              "" if stand["fertig"] else f", offen: {stand['offen']}")
     job = s["dir"]
-    props = {"layers": s["layers"], "legacy": None, "face_url": s["face_url"],
-             "durationInSeconds": round(s["frames"] / FPS, 3),
-             # OHNE das rendert jeder Kunde in Justus' Amethyst — die Composition
-             # hat den Justus-Brand als Default.
-             "brand": s.get("brand") or BRAND_PRESETS["justus"]}
-    vkbit = max(800, min(int(42 * 8 * 1000 / max(s["frames"] / FPS, 1.0)), 12000))
-    body = {"composition": "LayerStage", "inputProps": props, "videoBitrate": f"{vkbit}k",
-            "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
-                         "bucket": SUPABASE_BUCKET}}
-    if s["frames"] / FPS > 55:
-        body["scale"] = 0.75
-    try:
-        r = requests.post(f"{REMOTION_URL}/render", json=body, timeout=900)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"remotion: {exc}")
-    if not data.get("ok"):
-        raise HTTPException(status_code=502, detail=str(data.get("error"))[:300])
+    dauer = s["frames"] / FPS
+    cid = s["client_id"]
 
-    gfx = job / "gfx_session.mp4"
-    if not download_file(data["url"], gfx):
-        raise HTTPException(status_code=500, detail="Grafik nicht ladbar")
-    out = job / "final_session.mp4"
-    LUT = "lut/cinematic.cube"
-    sharp = "unsharp=3:3:0.35:3:3:0.0,eq=contrast=1.03:saturation=1.05:brightness=0.012"
-    vf = f"lut3d={LUT},{sharp}" if os.path.exists(LUT) else sharp
-    run(["ffmpeg", "-y", "-i", str(gfx), "-i", str(s["facecam_path"]),
-         "-map", "0:v:0", "-map", "1:a:0?", "-vf", vf,
-         "-c:v", "libx264", "-crf", "19", "-preset", "medium", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(out)],
-        "session_mux")
-    if s["sfx"]:
-        mixed = mix_sfx_into_video(out, s["sfx"], job, s["frames"] / FPS)
+    # ── Metapher-Maschine ────────────────────────────────────────────────────
+    # Anker → Entfaltung → Rang → Stock. Sie gehoert nicht dem Agenten: sie
+    # liest das Transkript und haengt gefundene Bilder als eigene Ebenen an.
+    # Muss VOR dem Render laufen — nachtraeglich laesst sich keine Ebene mehr
+    # in eine fertige Grafik legen.
+    meta_ebenen = _metapher_ebenen(s)
+    if meta_ebenen:
+        s["layers"].extend(meta_ebenen)
+        log.info("[SESSION] %s +%d Metapher-Ebenen", s["id"], len(meta_ebenen))
+
+    def _render_session(layers: list, tag: str) -> Path:
+        """Ebenen → Remotion → Ton drunter. Zweimal aufrufbar, damit die
+        QA-Korrektur nicht den halben Renderpfad kopieren muss."""
+        props = {"layers": layers, "legacy": None, "face_url": s["face_url"],
+                 "durationInSeconds": round(dauer, 3),
+                 # OHNE das rendert jeder Kunde in Justus' Amethyst — die
+                 # Composition hat den Justus-Brand als Default.
+                 "brand": s.get("brand") or BRAND_PRESETS["justus"]}
+        vkbit = max(800, min(int(42 * 8 * 1000 / max(dauer, 1.0)), 12000))
+        body = {"composition": "LayerStage", "inputProps": props,
+                "videoBitrate": f"{vkbit}k",
+                "supabase": {"url": SUPABASE_URL, "key": SUPABASE_SERVICE_KEY,
+                             "bucket": SUPABASE_BUCKET}}
+        if dauer > 55:
+            body["scale"] = 0.75
+        try:
+            r = requests.post(f"{REMOTION_URL}/render", json=body, timeout=900)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"remotion: {exc}")
+        if not data.get("ok"):
+            raise HTTPException(status_code=502, detail=str(data.get("error"))[:300])
+        gfx = job / f"gfx_session_{tag}.mp4"
+        if not download_file(data["url"], gfx):
+            raise HTTPException(status_code=500, detail="Grafik nicht ladbar")
+        fertig_mp4 = job / f"final_session_{tag}.mp4"
+        LUT = "lut/cinematic.cube"
+        sharp = "unsharp=3:3:0.35:3:3:0.0,eq=contrast=1.03:saturation=1.05:brightness=0.012"
+        vf = f"lut3d={LUT},{sharp}" if os.path.exists(LUT) else sharp
+        run(["ffmpeg", "-y", "-i", str(gfx), "-i", str(s["facecam_path"]),
+             "-map", "0:v:0", "-map", "1:a:0?", "-vf", vf,
+             "-c:v", "libx264", "-crf", "19", "-preset", "medium", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_HZ), "-shortest",
+             "-movflags", "+faststart", str(fertig_mp4)], f"session_mux_{tag}")
+        return fertig_mp4
+
+    out = _render_session(s["layers"], "a")
+
+    # ── SFX ──────────────────────────────────────────────────────────────────
+    # Was der Agent selbst gesetzt hat, gilt. Nur wenn er nichts gesetzt hat,
+    # kommen die automatisch erkannten Schnittmarken aus der Bibliothek dazu.
+    sfx_events = s["sfx"]
+    sfx_quelle = "agent"
+    if not sfx_events:
+        try:
+            sfx_events = _llm_impacts(s["words"]) or []
+            sfx_quelle = "erkannt"
+        except Exception as exc:
+            log.warning("[SESSION] Impact-Erkennung fehlgeschlagen: %s", exc)
+            sfx_events = []
+    if sfx_events:
+        mixed = mix_sfx_into_video(out, sfx_events, job, dauer)
         if mixed:
             out = mixed
-    if s.get("music") and s["music"].get("url"):
-        out = _add_music_ducked(out, s["music"]["url"], job)
+        else:
+            log.warning("[SESSION] SFX-Mix ergab nichts — Ton bleibt trocken")
+    log.info("[SESSION] %s SFX: %d (%s)", s["id"], len(sfx_events), sfx_quelle)
+
+    # ── QA-Gate mit einer Korrekturrunde ─────────────────────────────────────
+    qa_zeiten = sorted({round(l["from"] / FPS + 0.4, 2) for l in s["layers"]
+                        if not _ist_pflicht(l)})[:6]
+    qa = _gemini_qa(out, qa_zeiten, dauer) if qa_zeiten else {"overall": "SKIP"}
+    if qa.get("overall") == "ISSUES":
+        # Nicht die Ebenen wegwerfen — das hat frueher nackte Videos erzeugt.
+        # Stattdessen alles, was dem Agenten gehoert, auf die sicheren Schienen
+        # ueber und unter dem Gesicht ziehen und EINMAL neu rendern.
+        face = s.get("face") or {}
+        oben = round(max(0.04, float(face.get("top", 0.15)) - 0.18), 3)
+        unten = round(min(0.80, float(face.get("bottom", 0.66)) + 0.04), 3)
+        sicher = []
+        for l in s["layers"]:
+            if _ist_pflicht(l):
+                sicher.append(l)
+                continue
+            t = dict(l["transform"])
+            t["y"] = oben if (t.get("y", 0) + t.get("h", 0) / 2) < 0.5 else unten
+            t["h"] = min(float(t.get("h", 0.2)), 0.24)
+            sicher.append({**l, "transform": t})
+        log.info("[SESSION] QA ISSUES → eine Korrekturrunde auf sicheren Schienen")
+        out_b = _render_session(sicher, "b")
+        if sfx_events:
+            mixed_b = mix_sfx_into_video(out_b, sfx_events, job, dauer)
+            if mixed_b:
+                out_b = mixed_b
+        qa_b = _gemini_qa(out_b, qa_zeiten, dauer)
+        n_a = sum(1 for f in qa.get("frames", []) if not f.get("ok", True))
+        n_b = sum(1 for f in qa_b.get("frames", []) if not f.get("ok", True))
+        if n_b <= n_a:
+            out, qa, s["layers"] = out_b, {**qa_b, "auto_fixed": True}, sicher
+
+    # ── Endkarte ─────────────────────────────────────────────────────────────
+    briefing = s.get("briefing") or {}
+    out = _append_end_thumbnail(
+        out, job,
+        concept=str(briefing.get("thumbnail_concept") or briefing.get("hook")
+                    or briefing.get("topic") or ""),
+        client_id=cid)
+
     out = _fit_size(out, job)
     url = upload_supabase(out, f"session_{s['id']}", folder="renders")
 
@@ -8716,11 +8810,14 @@ def tool_session_render(req: SessionRef):
     _log_run(s["client_id"], "session-render", "ok" if stand["fertig"] else "warn",
              {"render_id": rid, "turns": s["turns_used"], "budget": s["turn_budget"],
               "grund": s.get("abbruch_grund") or "manuell", "offen": stand["offen"],
-              "ebenen": len(s["layers"])})
+              "ebenen": len(s["layers"]), "metapher_ebenen": len(meta_ebenen),
+              "sfx": len(sfx_events), "sfx_quelle": sfx_quelle,
+              "qa": qa.get("overall"), "qa_korrigiert": bool(qa.get("auto_fixed"))})
     log.info("[SESSION] %s gerendert: %d Ebenen → %s", s["id"], len(s["layers"]), url)
     return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"]),
             "turns_used": s["turns_used"], "grund": s.get("abbruch_grund") or "manuell",
-            "fertig": stand["fertig"], "offen": stand["offen"]}
+            "fertig": stand["fertig"], "offen": stand["offen"],
+            "metapher_ebenen": len(meta_ebenen), "sfx": len(sfx_events), "qa": qa}
 
 
 class TurnStatsRequest(BaseModel):

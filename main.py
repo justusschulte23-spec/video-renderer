@@ -8773,6 +8773,11 @@ DU GIBST ERST AB, WENN
 - die drei Bestandteile sind auf den ersten Blick unterscheidbar
 - etwas bewegt sich ab dem ersten Frame
 
+GEMESSEN WIRD IN DER MITTE UND AM ENDE
+Ein Kasten, der fuer den Startwert passt, ist fuer den Endwert oft zu schmal:
+"0 %" braucht weniger Platz als "247 %". Plan den Platz fuer den ENDWERT, nicht
+fuer den Anfang.
+
 WENN ETWAS NICHT PASST
 Kuerzen, nicht verkleinern. Schrift unter {min_px}px ist auf dem Handy
 unlesbar — dann lieber weniger Text.
@@ -8824,7 +8829,13 @@ def _fehlender_inhalt(auftrag: dict, text: str) -> list:
     trotzdem falsch. Geprueft wird am ENDE der Standzeit — waehrend ein Wert
     hochzaehlt, steht in der Mitte zurecht etwas anderes."""
     def norm(s: str) -> str:
-        return re.sub(r"\s+", "", str(s)).casefold()
+        # Umlaute vereinheitlichen. Der Auftrag kommt aus der Datenbank mal mit
+        # 'ue', mal mit 'ü'; wer das nicht angleicht, meldet eine fehlende Zeile,
+        # die in Wahrheit dasteht — und der Subagent verbrennt eine Runde damit.
+        s = str(s).casefold()
+        for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+            s = s.replace(a, b)
+        return re.sub(r"\s+", "", s)
     hay = norm(text)
     fehlt = []
     for k, v in (auftrag or {}).items():
@@ -8876,12 +8887,16 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
             }""")
             await page.evaluate(SEEK_JS, float(t_s))
             mess = await page.evaluate(MESS_JS)
-            text_ende = ""
+            mess_ende, text_ende = None, ""
             if t_ende is not None:
                 # Einmal ans Ende springen und nur den Text lesen. Kein zweiter
                 # Browserstart: der kostet mehr als dieser Sprung.
                 await page.evaluate(SEEK_JS, float(t_ende))
                 text_ende = await page.evaluate(SICHTBARER_TEXT_JS)
+                # Auch am Ende messen. Ein Kasten, der fuer '0 %' passt, ist fuer
+                # '247 %' zu schmal — in der Mitte der Standzeit sieht man das
+                # nicht, im letzten Frame schon.
+                mess_ende = await page.evaluate(MESS_JS)
                 await page.evaluate(SEEK_JS, float(t_s))
             if mit_bild:
                 # Neutraler Grund: auf transparentem Screenshot sieht helle
@@ -8900,9 +8915,20 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
     shutil.rmtree(job, ignore_errors=True)
 
     knoten = mess.get("knoten") or []
-    breite, hoehe = int(mess.get("b") or 0), int(mess.get("h") or 0)
+    knoten_ende = (mess_ende or {}).get("knoten") or []
+    breite = max(int(mess.get("b") or 0), int((mess_ende or {}).get("b") or 0))
+    hoehe = max(int(mess.get("h") or 0), int((mess_ende or {}).get("h") or 0))
     ueberlauf = breite > width + 2 or hoehe > height + 2
-    abgeschnitten = [k for k in knoten if k.get("abgeschnitten")]
+    # Beide Zeitpunkte zusammenwerfen, je Knoten einmal. Was zu irgendeinem
+    # Zeitpunkt abgeschnitten ist, ist abgeschnitten.
+    nach_name: dict = {}
+    for k in knoten + knoten_ende:
+        if not k.get("abgeschnitten"):
+            continue
+        alt = nach_name.get(k["knoten"])
+        if not alt or k["breite_inhalt"] > alt["breite_inhalt"]:
+            nach_name[k["knoten"]] = k
+    abgeschnitten = list(nach_name.values())
     return {"ok": True, "ueberlauf": ueberlauf, "breite": breite, "hoehe": hoehe,
             "leinwand": [width, height], "knoten": knoten,
             "abgeschnitten": abgeschnitten,

@@ -9034,7 +9034,7 @@ def _html_agent_tools() -> list:
 
 
 def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
-                   client_id: str, model: str) -> dict:
+                   client_id: str, model: str, debug: bool = False) -> dict:
     """Eigener Kontext, eigene kurze Schleife. Der Hauptagent sieht davon nur
     das Ergebnis — genau das ist der Punkt."""
     art = str(auftrag.get("art") or "stat")
@@ -9225,7 +9225,9 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             "ueberlauf": bool(pr.get("ueberlauf")), "vorschau": vorschau,
             "hinweis": "; ".join(hinweise) or (zustand["begruendung"] or "passt"),
             "art": art, "seconds": dauer_s,
-            "layer_source": {"kind": "video", "url": url, "transparent": True}}
+            "layer_source": {"kind": "video", "url": url, "transparent": True},
+            **({"markup": zustand["markup"],
+                "text_ende": (pr.get("text_ende") or "")[:400]} if debug else {})}
 
 
 class HtmlAgentRequest(BaseModel):
@@ -9235,6 +9237,7 @@ class HtmlAgentRequest(BaseModel):
     dauer_s:   float = 3.0
     client_id: str = "justus"
     model:     str = "anthropic/claude-sonnet-4.5"
+    debug:     bool = False   # gibt das gebaute Markup mit zurueck
 
 
 @app.post("/tool/html-agent")
@@ -9244,7 +9247,7 @@ def tool_html_agent(req: HtmlAgentRequest):
     if not req.auftrag:
         raise HTTPException(status_code=400, detail="auftrag fehlt")
     return _html_subagent(req.auftrag, req.w_px, req.h_px, req.dauer_s,
-                          req.client_id, req.model)
+                          req.client_id, req.model, req.debug)
 
 
 # ── Teil 4: der Loop ──────────────────────────────────────────────────────────

@@ -8700,6 +8700,450 @@ def tool_stats_kosten(req: KostenRequest):
             "ohne_messung": ohne_messung, "befund": befund, "posten": liste}
 
 
+# ── R4: der HTML-Subagent ─────────────────────────────────────────────────────
+# Zwei Gruende, ein Umbau. Erstens Kontext: geschriebenes Markup stand als
+# Assistant-Nachricht in der Hauptschleife und wurde jeden weiteren Turn
+# mitgeschickt. Zweitens Qualitaet: der Hauptagent hat gebaut und ist
+# weitergegangen, ohne das Element je anzusehen. Ueberlappender Text und
+# abgeschnittene Woerter kamen beide daher.
+#
+# Kein Kostenargument. Der Subagent iteriert, also wird HTML teurer. Das ist
+# beabsichtigt.
+
+HTML_AGENT_RUNDEN   = 3     # gebaute Fassungen, danach wird abgegeben
+HTML_AGENT_TURNS    = 10    # harte Bremse, falls er sich im Ansehen verliert
+HTML_AGENT_MIN_PX   = 26    # kleiner ist auf dem Handy unlesbar
+
+# Skelette: welche Knoten in welcher Verschachtelung. KEINE Gestaltung —
+# Struktur ist wiederholbar, Aussehen nicht. Ohne das erfindet er bei jedem
+# Element die Struktur neu und trifft dabei jedes Mal andere Fehler.
+SKELETTE = {
+    "stat": "<div class='wrap'><div class='wert'></div><div class='label'></div>"
+            "<div class='linie'></div><div class='einordnung'></div></div>",
+    "zitat": "<div class='wrap'><div class='balken'></div><div class='text'></div>"
+             "<div class='quelle'></div></div>",
+    "vergleich": "<div class='wrap'><div class='links'><div class='wert'></div>"
+                 "<div class='label'></div></div><div class='trenner'></div>"
+                 "<div class='rechts'><div class='wert'></div><div class='label'></div></div>"
+                 "<div class='differenz'></div></div>",
+    "ablauf": "<div class='wrap'><div class='schritt aktiv'></div><div class='schritt'></div>"
+              "<div class='schritt'></div></div>",
+    "titel": "<div class='wrap'><div class='zeile e1'></div><div class='zeile e2'></div></div>",
+}
+
+HTML_AGENT_SYS = """Du baust EIN einzelnes Grafikelement als HTML mit CSS und GSAP.
+Es wird auf transparentem Grund gerendert und ueber ein Video gelegt.
+
+Du bekommst einen Auftrag mit den Bestandteilen und die Masse.
+Du entscheidest, wie es aussieht — innerhalb der Gestaltungsregeln.
+
+DEIN ABLAUF
+1 Bauen
+2 preview_frame auf die Mitte der Standzeit
+3 Ansehen: passt alles rein, ueberlappt nichts, ist die Hierarchie sichtbar
+4 Korrigieren
+5 Nach spaetestens 3 Runden abgeben, auch wenn nicht perfekt
+
+DU GIBST ERST AB, WENN
+- ueberlauf ist false
+- kein Text beruehrt einen anderen
+- die drei Bestandteile sind auf den ersten Blick unterscheidbar
+- etwas bewegt sich ab dem ersten Frame
+
+WENN ETWAS NICHT PASST
+Kuerzen, nicht verkleinern. Schrift unter {min_px}px ist auf dem Handy
+unlesbar — dann lieber weniger Text.
+
+MESSEN STATT RATEN
+messe_text gibt dir je Textknoten Inhalts- und Kastenmass. Ein Bild zeigt dir,
+DASS etwas abgeschnitten ist, nicht um wie viel. Bei Ueberlauf misst du zuerst
+und aenderst dann gezielt — nicht alle Groessen auf Verdacht.
+
+DIE TECHNIK
+- Der Grund ist transparent. Mal keinen eigenen Vollflaechen-Hintergrund;
+  Karten und Balken duerfen Flaeche haben, die Leinwand nicht.
+- GSAP ist geladen. Die Uhr wird angehalten und auf Zeitpunkte gesetzt, also
+  bau Bewegung ueber gsap-Tweens oder CSS-Animationen, nie ueber setTimeout
+  oder requestAnimationFrame — beides steht still.
+- Ab Frame 0 muss etwas in Bewegung sein. Ein Element, das erst nach einer
+  Sekunde anfaengt, sieht im Schnitt aus wie ein Standbild.
+- Keine externen Schriften, Bilder oder Skripte. Was nicht im Markup steht,
+  ist beim Rendern nicht da.
+
+DAS SKELETT
+Du bekommst eine Knotenstruktur fuer deine Art. Sie legt fest, WAS es gibt und
+wie es verschachtelt ist. Farben, Groessen, Abstaende, Bewegung schreibst du
+selbst. Halte dich an die Klassennamen, aber nicht an eine Gestaltung — es gibt
+keine.
+
+Du arbeitest still. Kein Bericht. Wenn du fertig bist, ruf fertig auf."""
+
+HTML_AGENT_GESTALTUNG = """GESTALTUNGSREGELN
+- Eine Karte traegt EINE Aussage. Drei gleichrangige Zeilen sind keine
+  Hierarchie, sondern eine Liste.
+- Der Hauptwert dominiert deutlich. Wenn Haupt- und Nebenzeile aehnlich gross
+  sind, hat der Zuschauer nichts, woran sein Auge zuerst haengenbleibt.
+- Weissraum ist ein Mittel, kein Rest. Fuell die Leinwand nicht aus, nur weil
+  sie da ist.
+- Rahmen, Schatten und Verlaeufe zurueckhaltend. Sie sollen die Karte vom Video
+  trennen, nicht selbst auffallen.
+- Grossbuchstaben nur fuer kurze Beschriftungen, nie fuer ganze Saetze.
+- Die Bewegung dient der Aussage: ein Wert zaehlt hoch, eine Zeile schiebt sich
+  ein, ein Balken waechst. Kein Dauerpulsieren, kein Rotieren."""
+
+
+async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
+                           mit_bild: bool = False) -> dict:
+    """Ein Playwright-Durchgang: Ueberlauf, Textmasse, Ueberlappungen, optional
+    ein Standbild auf neutralem Grund.
+
+    Bewusst DIESELBE Seitenhuelle wie im echten Alpha-Render. Misst man in einer
+    anderen Huelle, misst man ein anderes Layout — und der Agent bekommt gruenes
+    Licht fuer etwas, das im Video abgeschnitten ist."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return {"ok": False, "grund": "Playwright fehlt"}
+    page_html = (
+        "<!doctype html><html><head><meta charset='utf-8'><style>"
+        "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
+        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}</style></head>"
+        f"<body>{markup}</body></html>"
+    )
+    job = Path(f"/tmp/htmlagent_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    src = job / "pruef.html"
+    src.write_text(page_html, encoding="utf-8")
+    bild_b64, fehler = "", []
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
+            ctx = await browser.new_context(viewport={"width": width, "height": height},
+                                            device_scale_factor=1)
+            if GSAP_LOCAL.exists():
+                await ctx.add_init_script(path=str(GSAP_LOCAL))
+            page = await ctx.new_page()
+            page.on("pageerror", lambda e: fehler.append(str(e)[:160]))
+            await page.goto(f"file://{src.absolute()}", wait_until="load", timeout=20000)
+            await page.evaluate("""() => {
+                if (window.gsap) { gsap.globalTimeline.pause(); }
+                document.getAnimations().forEach(a => { a.pause(); });
+            }""")
+            await page.evaluate("""(t) => {
+                if (window.gsap) gsap.globalTimeline.seek(t);
+                document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+            }""", float(t_s))
+            mess = await page.evaluate(MESS_JS)
+            if mit_bild:
+                # Neutraler Grund: auf transparentem Screenshot sieht helle
+                # Schrift auf hellem Grund gleich aus wie auf dunklem.
+                await page.evaluate(
+                    "() => { document.documentElement.style.background = '#33333a'; }")
+                png = job / "vorschau.png"
+                await page.screenshot(path=str(png))
+                import base64 as _b64
+                bild_b64 = _b64.b64encode(png.read_bytes()).decode()
+            await ctx.close()
+            await browser.close()
+    except Exception as exc:
+        shutil.rmtree(job, ignore_errors=True)
+        return {"ok": False, "grund": str(exc)[:200]}
+    shutil.rmtree(job, ignore_errors=True)
+
+    knoten = mess.get("knoten") or []
+    breite, hoehe = int(mess.get("b") or 0), int(mess.get("h") or 0)
+    ueberlauf = breite > width + 2 or hoehe > height + 2
+    abgeschnitten = [k for k in knoten if k.get("abgeschnitten")]
+    return {"ok": True, "ueberlauf": ueberlauf, "breite": breite, "hoehe": hoehe,
+            "leinwand": [width, height], "knoten": knoten,
+            "abgeschnitten": abgeschnitten,
+            "ueberlappungen": mess.get("ueberlappungen") or [],
+            "zu_klein": [k for k in knoten if k.get("schrift_px", 99) < HTML_AGENT_MIN_PX],
+            "js_fehler": fehler[:3], "bild_b64": bild_b64}
+
+
+MESS_JS = """() => {
+  const el_mit_text = [];
+  document.querySelectorAll('*').forEach(el => {
+    const eigen = Array.from(el.childNodes)
+      .filter(n => n.nodeType === 3 && n.textContent.trim()).length;
+    if (!eigen) return;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none') return;
+    const kastenB = el.clientWidth  || Math.round(r.width);
+    const kastenH = el.clientHeight || Math.round(r.height);
+    el_mit_text.push({el: el, rect: r, d: {
+      knoten: el.tagName.toLowerCase() +
+              (el.className ? '.' + String(el.className).trim().split(/\\s+/).join('.') : ''),
+      text: el.textContent.trim().slice(0, 48),
+      schrift_px: Math.round(parseFloat(cs.fontSize) || 0),
+      breite_inhalt: Math.round(el.scrollWidth), breite_kasten: Math.round(kastenB),
+      hoehe_inhalt: Math.round(el.scrollHeight), hoehe_kasten: Math.round(kastenH),
+      x: Math.round(r.x), y: Math.round(r.y),
+      b: Math.round(r.width), h: Math.round(r.height),
+      abgeschnitten: (el.scrollWidth > kastenB + 1) || (el.scrollHeight > kastenH + 1)
+    }});
+  });
+  const ueberlappungen = [];
+  for (let i = 0; i < el_mit_text.length; i++) {
+    for (let j = i + 1; j < el_mit_text.length; j++) {
+      const a = el_mit_text[i], b = el_mit_text[j];
+      if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+      const x = Math.max(0, Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left));
+      const y = Math.max(0, Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top));
+      if (x * y > 16) ueberlappungen.push({
+        a: a.d.knoten, b: b.d.knoten, flaeche_px: Math.round(x * y)});
+    }
+  }
+  return {b: document.body.scrollWidth, h: document.body.scrollHeight,
+          knoten: el_mit_text.map(e => e.d), ueberlappungen: ueberlappungen};
+}"""
+
+
+def _letzte_html_elemente(client_id: str, n: int = 5) -> list:
+    """Was zuletzt gebaut wurde — als Ausschlussliste, nicht als Vorlage."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return []
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/render_layers", timeout=20,
+                         params={"client_id": f"eq.{client_id}", "herkunft": "eq.html",
+                                 "select": "konzept,transform,created_at",
+                                 "order": "created_at.desc", "limit": str(n)},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        r.raise_for_status()
+        return [{"konzept": x.get("konzept") or "?",
+                 "breite": round(float((x.get("transform") or {}).get("w") or 0), 2)}
+                for x in (r.json() or [])]
+    except Exception as exc:
+        log.warning("[HTMLAGENT] Historie: %s", exc)
+        return []
+
+
+def _html_agent_prompt(art: str, client_id: str) -> str:
+    teile = [HTML_AGENT_SYS.format(min_px=HTML_AGENT_MIN_PX), "", HTML_AGENT_GESTALTUNG]
+    skelett = SKELETTE.get(art)
+    if skelett:
+        teile += ["", f"SKELETT FUER '{art}' — Struktur, keine Gestaltung:", skelett]
+    try:
+        sg = tool_read_style_guide(StyleGuideRequest(client_id=client_id))
+        farben = sg.get("farben") or {}
+        if farben:
+            teile += ["", "MARKEN-TOKEN DES KUNDEN — benutz diese Farben, erfinde keine:",
+                      json.dumps(farben, ensure_ascii=False)]
+        if sg.get("edit_style"):
+            teile += ["", "SCHNITTSTIL DES KUNDEN:", str(sg["edit_style"])[:600]]
+    except Exception as exc:
+        log.warning("[HTMLAGENT] Style-Guide: %s", exc)
+    bsp = _few_shot_overlays()
+    if bsp:
+        teile += ["", bsp]
+    letzte = _letzte_html_elemente(client_id)
+    if letzte:
+        teile += ["", "ZULETZT GEBAUT — keine dieser Anordnungen nochmal:",
+                  json.dumps(letzte, ensure_ascii=False)]
+    return "\n".join(teile)
+
+
+def _html_agent_tools() -> list:
+    def T(name, desc, props, req):
+        return {"type": "function", "function": {
+            "name": name, "description": desc,
+            "parameters": {"type": "object", "properties": props, "required": req}}}
+    return [
+        T("schreibe_html", "Markup rendern und pruefen. Gibt Ueberlauf, Masse, "
+          "Ueberlappungen und zu kleine Schrift zurueck — kein Bild.",
+          {"markup": {"type": "string"}}, ["markup"]),
+        T("preview_frame", "Standbild des Elements auf neutralem Grund, zum Zeitpunkt t "
+          "in Sekunden.", {"t": {"type": "number"}}, ["t"]),
+        T("messe_text", "Je Textknoten Inhalts- und Kastenmass, Schriftgroesse und Lage. "
+          "Zahlen sind hier zuverlaessiger als Sehen.", {}, []),
+        T("fertig", "Abgeben. Kurze Begruendung, warum es steht.",
+          {"begruendung": {"type": "string"}}, ["begruendung"]),
+    ]
+
+
+def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
+                   client_id: str, model: str) -> dict:
+    """Eigener Kontext, eigene kurze Schleife. Der Hauptagent sieht davon nur
+    das Ergebnis — genau das ist der Punkt."""
+    art = str(auftrag.get("art") or "stat")
+    w_px, h_px = max(80, int(w_px)), max(60, int(h_px))
+    dauer_s = max(0.8, min(float(dauer_s), HTML_TOOL_MAX_S))
+    t_mitte = round(dauer_s / 2.0, 2)
+
+    tools = _html_agent_tools()
+    sys_p = _html_agent_prompt(art, client_id)
+    auftrag_text = (
+        "AUFTRAG\n" + json.dumps(auftrag, ensure_ascii=False, indent=1) +
+        f"\n\nLEINWAND {w_px}x{h_px} px, Standzeit {dauer_s:.1f} s."
+        f"\nDie Mitte der Standzeit liegt bei t={t_mitte}."
+        "\nBau die erste Fassung und sieh sie dir an.")
+    messages = [{"role": "system", "content": [{"type": "text", "text": sys_p, **CACHE_MARK}]},
+                {"role": "user", "content": auftrag_text}]
+
+    zustand = {"markup": "", "pruefung": None, "runden": 0, "vorschau_b64": "",
+               "begruendung": ""}
+    tok = {"ein": 0, "aus": 0, "cached": 0}
+    t0 = time.time()
+
+    def werkzeug(name: str, args: dict) -> dict:
+        if name == "schreibe_html":
+            mk = str(args.get("markup") or "").strip()
+            if not mk:
+                return {"ok": False, "fehler": "markup ist leer"}
+            if zustand["runden"] >= HTML_AGENT_RUNDEN:
+                return {"ok": False, "abgelehnt": True,
+                        "fehler": f"{HTML_AGENT_RUNDEN} Runden sind aufgebraucht. "
+                                  f"Ruf fertig auf — die letzte Fassung wird genommen."}
+            pr = asyncio.run(_html_pruefstand(mk, w_px, h_px, t_mitte))
+            if not pr.get("ok"):
+                return {"ok": False, "fehler": pr.get("grund", "Pruefstand kaputt")}
+            zustand["markup"] = mk
+            zustand["pruefung"] = pr
+            zustand["runden"] += 1
+            return {"ok": True, "runde": zustand["runden"],
+                    "ueberlauf": pr["ueberlauf"], "inhalt_px": [pr["breite"], pr["hoehe"]],
+                    "leinwand_px": pr["leinwand"],
+                    "abgeschnitten": [k["knoten"] for k in pr["abgeschnitten"]],
+                    "ueberlappungen": pr["ueberlappungen"],
+                    "schrift_zu_klein": [f"{k['knoten']} {k['schrift_px']}px"
+                                         for k in pr["zu_klein"]],
+                    "js_fehler": pr["js_fehler"],
+                    "runden_uebrig": HTML_AGENT_RUNDEN - zustand["runden"]}
+        if name == "preview_frame":
+            if not zustand["markup"]:
+                return {"ok": False, "fehler": "noch nichts gebaut"}
+            t = float(args.get("t", t_mitte))
+            pr = asyncio.run(_html_pruefstand(zustand["markup"], w_px, h_px, t, mit_bild=True))
+            if not pr.get("ok"):
+                return {"ok": False, "fehler": pr.get("grund", "")}
+            zustand["vorschau_b64"] = pr["bild_b64"]
+            return {"ok": True, "t": t, "bild": "folgt als naechste Nachricht"}
+        if name == "messe_text":
+            pr = zustand["pruefung"]
+            if not pr:
+                return {"ok": False, "fehler": "noch nichts gebaut"}
+            return {"ok": True, "leinwand_px": pr["leinwand"], "knoten": pr["knoten"][:20]}
+        if name == "fertig":
+            zustand["begruendung"] = str(args.get("begruendung") or "")[:300]
+            return {"ok": True, "abgegeben": True}
+        return {"ok": False, "fehler": f"unbekanntes Werkzeug {name}"}
+
+    for _ in range(HTML_AGENT_TURNS):
+        try:
+            msg, usage, finish = _openrouter_turn(messages, tools, model)
+        except Exception as exc:
+            log.error("[HTMLAGENT] Modellaufruf: %s", exc)
+            break
+        tok["ein"] += int(usage.get("prompt_tokens") or 0)
+        tok["aus"] += int(usage.get("completion_tokens") or 0)
+        tok["cached"] += int(((usage.get("prompt_tokens_details") or {})
+                              .get("cached_tokens")) or 0)
+        messages.append(msg)
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            messages.append({"role": "user", "content":
+                             "Kein Werkzeugaufruf. Bau die naechste Fassung oder ruf fertig."})
+            continue
+        abgegeben = False
+        for c in calls:
+            fn = c.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            name = fn.get("name", "")
+            res = werkzeug(name, args)
+            messages.append({"role": "tool", "tool_call_id": c.get("id"),
+                             "content": json.dumps(res, ensure_ascii=False)[:2000]})
+            # Ein Bild passt nicht in eine tool-Nachricht. Es kommt als eigener
+            # User-Turn hinterher, sonst sieht er nur die Zusage, nie das Bild.
+            if name == "preview_frame" and res.get("ok") and zustand["vorschau_b64"]:
+                messages.append({"role": "user", "content": [
+                    {"type": "text", "text": "Das ist dein Element auf neutralem Grund."},
+                    {"type": "image_url", "image_url": {
+                        "url": "data:image/png;base64," + zustand["vorschau_b64"]}}]})
+            if name == "fertig" and res.get("ok"):
+                abgegeben = True
+        if abgegeben:
+            break
+        if zustand["runden"] >= HTML_AGENT_RUNDEN and zustand["pruefung"]:
+            # Runden aufgebraucht und eine Fassung steht: abgeben, statt ihn
+            # weiter gegen die abgelehnte schreibe_html laufen zu lassen.
+            break
+
+    dauer_ms = int((time.time() - t0) * 1000)
+    _log_llm("html-subagent", model,
+             {"prompt_tokens": tok["ein"], "completion_tokens": tok["aus"],
+              "prompt_tokens_details": {"cached_tokens": tok["cached"]}},
+             dauer_ms, client_id,
+             status="ok" if zustand["markup"] else "fehler",
+             extra={"runden": zustand["runden"], "art": art})
+
+    if not zustand["markup"]:
+        raise HTTPException(status_code=502,
+                            detail="HTML-Subagent hat nichts gebaut")
+
+    pr = zustand["pruefung"] or {}
+    job = Path(f"/tmp/htmlagent_out_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        out, ueber = asyncio.run(
+            _render_html_alpha(zustand["markup"], w_px, h_px, dauer_s, job))
+        if not out:
+            raise HTTPException(status_code=500,
+                                detail={"text": "Alpha-Render fehlgeschlagen",
+                                        "ueberlauf": ueber})
+        url = upload_supabase(out, out.stem, folder="htmltool", content_type="video/webm")
+        vorschau = ""
+        if zustand["vorschau_b64"]:
+            import base64 as _b64
+            png = job / "vorschau.png"
+            png.write_bytes(_b64.b64decode(zustand["vorschau_b64"]))
+            vorschau = upload_supabase(png, png.stem, folder="preview",
+                                       content_type="image/png")
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+    hinweise = []
+    if pr.get("abgeschnitten"):
+        hinweise.append("abgeschnitten: " +
+                        ", ".join(k["knoten"] for k in pr["abgeschnitten"][:3]))
+    if pr.get("ueberlappungen"):
+        hinweise.append(f"{len(pr['ueberlappungen'])} Textueberlappung(en)")
+    if zustand["runden"] >= HTML_AGENT_RUNDEN and (pr.get("ueberlauf")
+                                                   or pr.get("ueberlappungen")):
+        hinweise.append("Rundenbudget aufgebraucht, Rest steht so")
+    return {"ok": True, "url": url, "runden": zustand["runden"],
+            "ueberlauf": bool(pr.get("ueberlauf")), "vorschau": vorschau,
+            "hinweis": "; ".join(hinweise) or (zustand["begruendung"] or "passt"),
+            "art": art, "seconds": dauer_s,
+            "layer_source": {"kind": "video", "url": url, "transparent": True}}
+
+
+class HtmlAgentRequest(BaseModel):
+    auftrag:   dict
+    w_px:      int = 620
+    h_px:      int = 420
+    dauer_s:   float = 3.0
+    client_id: str = "justus"
+    model:     str = "anthropic/claude-sonnet-4.5"
+
+
+@app.post("/tool/html-agent")
+def tool_html_agent(req: HtmlAgentRequest):
+    """Ein Element isoliert bauen lassen. Der Weg, auf dem der Subagent geprueft
+    wird, bevor der Hauptagent auf ihn umgestellt wird."""
+    if not req.auftrag:
+        raise HTTPException(status_code=400, detail="auftrag fehlt")
+    return _html_subagent(req.auftrag, req.w_px, req.h_px, req.dauer_s,
+                          req.client_id, req.model)
+
+
 # ── Teil 4: der Loop ──────────────────────────────────────────────────────────
 # Werkzeuge, Grenzen und Abbruch stehen. Was hier dazukommt, ist die Anleitung,
 # wie ein Editor denkt — und die Schleife, die sie ausfuehrt.

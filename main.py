@@ -593,9 +593,12 @@ def _log_llm(tool: str, model: str, usage: dict, dauer_ms: int,
     ein = int(u.get("prompt_tokens") or 0)
     aus = int(u.get("completion_tokens") or 0)
     cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+    # extra ZUERST: sonst ueberschreibt ein Aufrufer mit eigenem "art" das
+    # Unterscheidungsmerkmal, und die Zeile faellt in der Auswertung stumm unter
+    # "ohne Messung". Genau so waren sieben Subagenten-Laeufe unsichtbar.
     _log_kosten(client_id, tool, status,
-                {"art": "llm", "modell": model, "ein": ein, "aus": aus,
-                 "cached": cached, "dauer_ms": int(dauer_ms), **(extra or {})})
+                {**(extra or {}), "art": "llm", "modell": model, "ein": ein,
+                 "aus": aus, "cached": cached, "dauer_ms": int(dauer_ms)})
 
 
 def _log_einheit(tool: str, einheit: str, menge: float, dauer_ms: int,
@@ -603,8 +606,8 @@ def _log_einheit(tool: str, einheit: str, menge: float, dauer_ms: int,
                  extra: Optional[dict] = None) -> None:
     """Bilder, Audio-Minuten, Renderzeit. Alles, was nach Stueck abgerechnet wird."""
     _log_kosten(client_id, tool, status,
-                {"art": "einheit", "einheit": einheit, "menge": round(float(menge), 4),
-                 "dauer_ms": int(dauer_ms), **(extra or {})})
+                {**(extra or {}), "art": "einheit", "einheit": einheit,
+                 "menge": round(float(menge), 4), "dauer_ms": int(dauer_ms)})
 
 
 def _audio_minuten(pfad: Path) -> float:
@@ -9216,7 +9219,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
               "prompt_tokens_details": {"cached_tokens": tok["cached"]}},
              dauer_ms, client_id,
              status="ok" if zustand["markup"] else "fehler",
-             extra={"runden": zustand["runden"], "art": art})
+             extra={"runden": zustand["runden"], "element_art": art})
 
     if not zustand["markup"]:
         raise HTTPException(status_code=502,

@@ -9426,7 +9426,12 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
               "prompt_tokens_details": {"cached_tokens": tok["cached"]}},
              dauer_ms, client_id,
              status="ok" if zustand["markup"] else "fehler",
-             extra={"runden": zustand["runden"], "element_art": art})
+             # w_px mitschreiben: ob er breit bestellt, das Ergebnis seitlich
+             # nicht unterbringt und schmal nachbestellt, sieht man nur an den
+             # Bestellmassen zweier Aufrufe im selben Lauf. Ohne die Zahl bleibt
+             # das eine Vermutung.
+             extra={"runden": zustand["runden"], "element_art": art,
+                    "w_px": w_px, "h_px": h_px})
 
     if not zustand["markup"]:
         raise HTTPException(status_code=502,

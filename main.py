@@ -8746,6 +8746,9 @@ DEIN ABLAUF
 
 DU GIBST ERST AB, WENN
 - ueberlauf ist false
+- die Liste "abgeschnitten" ist leer. Sie meint EINZELNE Knoten: ein Kasten
+  kann in die Leinwand passen und trotzdem seinen eigenen Inhalt beschneiden.
+  Genau so verschwindet das Prozentzeichen hinter der Zahl.
 - kein Text beruehrt einen anderen
 - die drei Bestandteile sind auf den ersten Blick unterscheidbar
 - etwas bewegt sich ab dem ersten Frame
@@ -9008,7 +9011,13 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             return {"ok": True, "runde": zustand["runden"],
                     "ueberlauf": pr["ueberlauf"], "inhalt_px": [pr["breite"], pr["hoehe"]],
                     "leinwand_px": pr["leinwand"],
-                    "abgeschnitten": [k["knoten"] for k in pr["abgeschnitten"]],
+                    # Mit Zahlen, nicht nur mit Namen: "fehlt 34px" ist eine
+                    # Anweisung, "abgeschnitten" ist eine Vermutung.
+                    "abgeschnitten": [
+                        {"knoten": k["knoten"], "text": k["text"],
+                         "fehlt_breite_px": max(0, k["breite_inhalt"] - k["breite_kasten"]),
+                         "fehlt_hoehe_px": max(0, k["hoehe_inhalt"] - k["hoehe_kasten"])}
+                        for k in pr["abgeschnitten"]],
                     "ueberlappungen": pr["ueberlappungen"],
                     "schrift_zu_klein": [f"{k['knoten']} {k['schrift_px']}px"
                                          for k in pr["zu_klein"]],
@@ -9029,6 +9038,29 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "fehler": "noch nichts gebaut"}
             return {"ok": True, "leinwand_px": pr["leinwand"], "knoten": pr["knoten"][:20]}
         if name == "fertig":
+            # Ein Tor, das nur fragt, ob er fertig sein WILL, ist keins. Der
+            # erste Lauf gab mit abgeschnittenem Prozentzeichen ab, obwohl der
+            # Pruefstand es gemeldet hatte.
+            pr = zustand["pruefung"] or {}
+            maengel = []
+            if pr.get("ueberlauf"):
+                maengel.append(f"Inhalt {pr['breite']}x{pr['hoehe']}px passt nicht in "
+                               f"{pr['leinwand'][0]}x{pr['leinwand'][1]}px")
+            for k in pr.get("abgeschnitten", []):
+                maengel.append(
+                    f"{k['knoten']} schneidet '{k['text'][:20]}' ab "
+                    f"(fehlen {max(0, k['breite_inhalt'] - k['breite_kasten'])}px breit, "
+                    f"{max(0, k['hoehe_inhalt'] - k['hoehe_kasten'])}px hoch)")
+            if pr.get("ueberlappungen"):
+                maengel.append(", ".join(f"{u['a']} beruehrt {u['b']}"
+                                         for u in pr["ueberlappungen"][:3]))
+            uebrig = HTML_AGENT_RUNDEN - zustand["runden"]
+            if maengel and uebrig > 0:
+                return {"ok": False, "abgelehnt": True,
+                        "fehler": "Noch nicht abgabereif: " + "; ".join(maengel),
+                        "runden_uebrig": uebrig,
+                        "hinweis": "Kuerzen oder den Kasten weiten. Nicht die Schrift "
+                                   f"unter {HTML_AGENT_MIN_PX}px druecken."}
             zustand["begruendung"] = str(args.get("begruendung") or "")[:300]
             return {"ok": True, "abgegeben": True}
         return {"ok": False, "fehler": f"unbekanntes Werkzeug {name}"}
@@ -9102,7 +9134,9 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
         vorschau = ""
         if zustand["vorschau_b64"]:
             import base64 as _b64
-            png = job / "vorschau.png"
+            # Eindeutiger Name. Mit festem "vorschau.png" ueberschreibt jeder
+            # Lauf den vorherigen, und zwei Elemente zeigen dasselbe Bild.
+            png = job / f"vorschau_{uuid.uuid4().hex[:8]}.png"
             png.write_bytes(_b64.b64decode(zustand["vorschau_b64"]))
             vorschau = upload_supabase(png, png.stem, folder="preview",
                                        content_type="image/png")

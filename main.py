@@ -7489,6 +7489,47 @@ def _element_masse(lay: dict) -> Optional[tuple]:
     return None
 
 
+def _freie_zonen(face: dict, band: Optional[tuple], masse: Optional[tuple]) -> list:
+    """Wo eine Ebene dieser Groesse ueberhaupt noch hin darf — ausgerechnet, nicht
+    beschrieben. Eine Ablehnung, die nur sagt was verboten ist, kostet einen Turn;
+    eine, die den freien Platz mitliefert, kostet keinen."""
+    ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
+    fl, fr = float(face.get("left", 0.28)), float(face.get("right", 0.72))
+    lo, hi = SAFE_MARGIN, 1 - SAFE_MARGIN
+    bt, bb = band if band else (2.0, 2.0)
+    sv = (masse[0] / max(1, masse[1])) if masse else None
+    kaesten = [
+        ("ueber dem Gesicht", lo, hi, lo, min(ft, bt)),
+        ("unter allem",       lo, hi, max(fb, bb), hi),
+        ("links daneben",     lo, min(fl, hi), lo, min(bt, hi)),
+        ("rechts daneben",    max(fr, lo), hi, lo, min(bt, hi)),
+    ]
+    out = []
+    for name, x0, x1, y0, y1 in kaesten:
+        bw, bh = x1 - x0, y1 - y0
+        if bw <= 0.02 or bh <= 0.02:
+            continue
+        z = {"zone": name, "x": round(x0, 2), "y": round(y0, 2),
+             "max_w": round(bw, 2), "max_h": round(bh, 2)}
+        if sv:
+            # Die groesste Ebene, die in den Kasten passt UND das Verhaeltnis haelt.
+            w = min(bw, bh * H * sv / W)
+            z["passt_w"] = round(w, 3)
+            z["passt_h"] = round(w * W / sv / H, 3)
+            z["bestell_w_px"] = int(round(w * W))
+            # Geometrisch passen und erlaubt sein ist nicht dasselbe: in drei von
+            # vier Zonen ist ein 620px-Element zu stark geschrumpft. Eine Zone zu
+            # melden, die danach doch abgelehnt wird, kostet denselben Turn wie
+            # gar keine Meldung.
+            z["passt_so"] = (w * W) >= MIN_ELEMENT_SKALA * masse[0]
+            if not z["passt_so"]:
+                z["sonst"] = (f"hier passt nur ein Element, das mit "
+                              f"w_px={z['bestell_w_px']} BESTELLT wurde — dieses "
+                              f"ist fuer {masse[0]}px gebaut")
+        out.append(z)
+    return out
+
+
 def _caption_band(layers: list) -> Optional[tuple]:
     """Wo die Untertitel stehen — aus der Ebene selbst, nicht aus einer Konstante.
     Die Captions duerfen sich bewegen (ducken, Hook), also wird die aeusserste
@@ -8310,7 +8351,12 @@ def tool_generate_image(req: GenerateImageRequest):
 # ── Bauen ─────────────────────────────────────────────────────────────────────
 class PlaceLayerRequest(BaseModel):
     session_id: str
-    layer:      dict
+    layer:      Optional[dict] = None
+    # Mehrere auf einmal. Der Agent hat im ersten Lauf mit Gestalter sieben
+    # Elemente in zwei Turns bestellt und danach zehn Turns damit verbracht, sie
+    # einzeln zu setzen — und ist ins Turn-Budget gelaufen. Das Budget hochzu-
+    # setzen haette das Symptom behandelt.
+    layers:     Optional[list] = None
 
 
 @app.post("/tool/place-layer")
@@ -8318,15 +8364,40 @@ def tool_place_layer(req: PlaceLayerRequest):
     s = _sess(req.session_id)
     _budget_guard(s)
     _lesen_guard(s)
-    lay = _layer_defaults(req.layer, s["frames"])
-    kandidat = [l for l in s["layers"] if l["id"] != lay["id"]] + [lay]
+    roh = req.layers if req.layers is not None else ([req.layer] if req.layer else [])
+    if not roh:
+        raise HTTPException(status_code=400, detail="layer oder layers noetig")
+    neue = [_layer_defaults(r, s["frames"]) for r in roh]
+    neue_ids = {l["id"] for l in neue}
+    if len(neue_ids) != len(neue):
+        raise HTTPException(status_code=422, detail={
+            "abgelehnt": "alle", "fehler": [{"regel": "doppelte_id",
+                                             "text": "zwei Ebenen im selben Aufruf teilen sich eine id"}]})
+    kandidat = [l for l in s["layers"] if l["id"] not in neue_ids] + neue
     fehler = _hard_check(kandidat, s.get("face") or {})
     if fehler:
         # Ablehnen, nicht mitschleppen. Eine Regel, die man erst im Bericht
-        # sieht, ist eine Bitte.
-        raise HTTPException(status_code=422, detail={"abgelehnt": lay["id"], "fehler": fehler})
+        # sieht, ist eine Bitte. Alles oder nichts: eine halb angenommene
+        # Gruppe waere ein Zustand, den der Agent nicht mehr ueberblickt.
+        # Abgelehnt heisst nicht folgenlos: elf Ablehnungen in Folge haben in
+        # einem Lauf das ganze Turn-Budget aufgebraucht, und im Video stand
+        # danach kein einziges Element. Ohne Zeile sieht das aus wie ein Agent,
+        # der nichts bauen wollte.
+        _log_kosten(s["client_id"], "place-abgelehnt", "warn",
+                    {"ebenen": sorted(neue_ids),
+                     "regeln": sorted({f["regel"] for f in fehler}),
+                     "texte": [f["text"][:160] for f in fehler[:4]],
+                     "transform": [l["transform"] for l in neue][:3],
+                     "turn": s["turns_used"]})
+        raise HTTPException(status_code=422, detail={
+            "abgelehnt": sorted(neue_ids), "fehler": fehler,
+            "freier_platz": _freie_zonen(s.get("face") or {},
+                                         _caption_band(kandidat),
+                                         _element_masse(neue[0])),
+            "hinweis": ("keine der Ebenen wurde gesetzt" if len(neue) > 1 else None)})
     s["layers"] = kandidat
-    hin = _layer_hints(lay)
+    hin = [h for l in neue for h in _layer_hints(l)]
+    lay = neue[-1]
     # Drei gleiche Formate hintereinander sind kein Regelverstoss, aber der
     # deutlichste Hinweis darauf, dass jemand nur noch ablegt statt zu setzen.
     deko = [l for l in s["layers"] if not _ist_pflicht(l)]
@@ -8337,7 +8408,8 @@ def tool_place_layer(req: PlaceLayerRequest):
                    f"({letzte[-1]['transform']['w']:.2f} x {letzte[-1]['transform']['h']:.2f}). "
                    f"Neben das Gesicht passt ein schmales Element — aber BESTELL es "
                    f"schmal (w_px um 240), statt ein breites zu schrumpfen.")
-    return {"ok": True, "layer": lay, "layers": len(s["layers"]), "hinweise": hin}
+    return {"ok": True, "gesetzt": [l["id"] for l in neue], "layer": lay,
+            "layers": len(s["layers"]), "hinweise": hin}
 
 
 class MoveLayerRequest(BaseModel):
@@ -8384,6 +8456,10 @@ def tool_move_layer(req: MoveLayerRequest):
     fehler = _hard_check(s["layers"], s.get("face") or {})
     if fehler:
         s["layers"] = [vorher if l["id"] == req.id else l for l in s["layers"]]
+        _log_kosten(s["client_id"], "move-abgelehnt", "warn",
+                    {"ebene": req.id, "regeln": sorted({f["regel"] for f in fehler}),
+                     "texte": [f["text"][:160] for f in fehler[:4]],
+                     "turn": s["turns_used"]})
         raise HTTPException(status_code=422, detail={"abgelehnt": req.id, "fehler": fehler,
                                                      "zurueckgesetzt": True})
     return {"ok": True, "layer": lay, "hinweise": _layer_hints(lay)}
@@ -9410,7 +9486,11 @@ WIE DU ARBEITEST — IN DIESER REIHENFOLGE
              liegen. Grob. Keine Frames.
 3 BESCHAFFEN Erst jetzt Material holen: Stock suchen und pruefen, ein Bild
              erzeugen, oder eine Animation selbst schreiben.
-4 BAUEN      Ebenen setzen, Schnitte, Dauer, Ton.
+4 BAUEN      Ebenen setzen, Schnitte, Dauer, Ton. place_layer nimmt MEHRERE
+             Ebenen auf einmal ("layers"). Setz sie zusammen, nicht einzeln —
+             sonst verbrauchst du dein Budget im Ablegen statt im Bauen.
+             Wird eine abgelehnt, steht keine; die Antwort sagt dir unter
+             "freier_platz", wo sie hinpassen.
 5 PRUEFEN    preview_frame an den kritischen Stellen. Sieh dir an, was du gebaut
              hast, bevor du es fuer fertig haeltst.
 
@@ -9458,10 +9538,19 @@ du die naechste baust. Ueberlappender Text, abgeschnittene Zeilen und
 Elemente, die sich gegenseitig verdecken, sieht man nur so. Du hast das
 Werkzeug; ein Cutter, der sein Bild nicht ansieht, ist keiner.
 
-WIE GROSS DU BESTELLST
-Die Leinwand ist genau so gross, wie du sie anforderst. Ein langer Satz in
-einem schmalen Kasten geht nicht auf — dann bestell breiter oder texte kuerzer.
-Der Gestalter kuerzt nicht selbst, er meldet es dir.
+BESTELL FUER DEN PLATZ, DEN DU MEINST
+Entscheide VOR render_html, wo das Element stehen soll.
+Die Breite bestimmt den Platz, nicht umgekehrt.
+
+  neben dem Gesicht    → w_px 220-260
+  ueber oder unter     → w_px 600-950
+  Vollbild-Szene       → w_px 1080
+
+Ein breit gebautes Element passt nicht mehr seitlich. Dann musst du es neu
+bauen — das kostet dich einen Turn, den du nicht hast.
+
+Ein langer Satz in einem schmalen Kasten geht nicht auf: dann bestell breiter
+oder texte kuerzer. Der Gestalter kuerzt nicht selbst, er meldet es dir.
 
 DEINE MITTEL
 Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die
@@ -9604,7 +9693,10 @@ def _tool_specs() -> list:
            "w_px": {"type": "integer"}, "h_px": {"type": "integer"},
            "dauer_s": {"type": "number"}},
           ["auftrag", "w_px", "h_px", "dauer_s"]),
-        T("place_layer", "Ebene setzen.", {"layer": L}, ["layer"]),
+        T("place_layer", "Ebenen setzen — eine in 'layer' ODER mehrere auf einmal in "
+          "'layers'. Mehrere zusammen zu setzen ist der Normalfall: es wird alles "
+          "zusammen geprueft, und entweder stehen alle oder keine. Das spart Turns.",
+          {"layer": L, "layers": {"type": "array", "items": L}}, []),
         T("move_layer", "Ebene verschieben, skalieren, maskieren, umzeiten.",
           {"id": {"type": "string"}, "transform": {"type": "object"},
            "animate": {"type": "array", "items": {"type": "object"}},
@@ -9656,7 +9748,8 @@ def _tool_call(name: str, args: dict, s: dict) -> dict:
                                   float(args.get("dauer_s", 3.0)),
                                   s["client_id"], s.get("model") or HTML_AGENT_MODELL)
         if name == "place_layer":
-            return tool_place_layer(PlaceLayerRequest(session_id=sid, layer=args["layer"]))
+            return tool_place_layer(PlaceLayerRequest(
+                session_id=sid, layer=args.get("layer"), layers=args.get("layers")))
         if name == "move_layer":
             return tool_move_layer(MoveLayerRequest(session_id=sid, **{
                 k: v for k, v in args.items()

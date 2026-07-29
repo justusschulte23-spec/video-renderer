@@ -671,8 +671,12 @@ def call_openrouter(system_prompt: str, user_message: str,
             {"role": "user",   "content": user_content},
         ],
     }
-    if "glm" in model.lower():
-        payload["reasoning"] = {"enabled": False}   # GLM burns tokens on reasoning otherwise
+    # Nicht nur GLM. Sonnet 5 hat am 29.07. denselben Ausfall produziert: es denkt
+    # bis ans Token-Limit, finish_reason=length, `content` bleibt null — kein
+    # Fehler, nur eine leere Antwort, fuer die voll bezahlt wird. Belegt an
+    # kalle-interview: 6 von 7 Aufrufen, 3000 Token je 6 ct fuer nichts.
+    # Kein Aufruf hier will Reasoning; alle wollen JSON in engem Budget.
+    payload["reasoning"] = {"enabled": False}
     t0 = time.time()
     try:
         resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
@@ -691,10 +695,22 @@ def call_openrouter(system_prompt: str, user_message: str,
         raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
     _log_llm(tool, model, d.get("usage") or {}, dauer_ms, client_id)
     try:
-        return d["choices"][0]["message"]["content"]
+        wahl = d["choices"][0]
+        inhalt = wahl["message"]["content"]
     except Exception as exc:
         log.error("OpenRouter parse error. status=%d body=%s", resp.status_code, resp.text[:400])
         raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
+    # Leerer Inhalt ist kein Ergebnis. Vorher wurde None zurueckgegeben, landete
+    # als String "None" im naechsten Parser und fiel dort still auf die
+    # Standardwerte — sichtbar erst am halbfertigen Ergebnis, nie am Log.
+    if not (inhalt or "").strip():
+        grund = wahl.get("finish_reason")
+        _log_llm(tool, model, d.get("usage") or {}, dauer_ms, client_id, "fehler",
+                 {"grund": "leerer_inhalt", "finish_reason": grund,
+                  "denk_zeichen": len(str((wahl.get("message") or {}).get("reasoning") or ""))})
+        log.error("[%s] leere Antwort von %s, finish_reason=%s", tool, model, grund)
+        raise RuntimeError(f"{tool}: leere Modellantwort (finish_reason={grund})")
+    return inhalt
 
 
 HTML_TOOL_MAX_S = 8.0        # ein vom Agenten gebautes Element, kein Film

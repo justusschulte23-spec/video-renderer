@@ -11,6 +11,7 @@ import copy
 from datetime import datetime, timezone
 import re
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -531,14 +532,105 @@ CHEAP_MODEL = "z-ai/glm-4.6"   # mechanical/derivative tasks (detectors, repurpo
 CACHE_MARK = {"cache_control": {"type": "ephemeral"}}
 
 
+# ── Kosten-Messung ────────────────────────────────────────────────────────────
+# Erst messen, dann optimieren. Jeder bezahlte Aufruf schreibt eine Zeile in
+# run_log: Modelle mit Token-Zahlen, alles andere mit einer Menge (Bild, Minute,
+# Sekunde Renderzeit). Solange diese Zeilen fehlen, ist jede Aussage darueber,
+# welcher Posten der groesste ist, geraten — und man optimiert den falschen.
+#
+# Preise in USD, Stand 2026-07-29. Bewusst im Code und nicht in der DB: eine
+# Preisaenderung ist ein Deploy wert, sonst sehen alte Auswertungen rueckwirkend
+# anders aus. LLM-Tupel: (ein, aus, cache_write, cache_read) je 1 Mio Token.
+PREISE_LLM = {
+    "anthropic/claude-sonnet-4.6":  (3.00, 15.00, 3.75, 0.30),
+    "anthropic/claude-sonnet-4.5":  (3.00, 15.00, 3.75, 0.30),
+    "anthropic/claude-haiku-4.5":   (1.00,  5.00, 1.25, 0.10),
+    "z-ai/glm-4.6":                 (0.40,  1.75, 0.50, 0.04),
+    "google/gemini-2.5-flash":      (0.30,  2.50, 0.38, 0.075),
+    "perplexity/sonar":             (1.00,  1.00, 1.00, 1.00),
+    "perplexity/sonar-pro":         (3.00, 15.00, 3.00, 3.00),
+}
+# Unbekanntes Modell teuer rechnen. Eine zu hohe Schaetzung faellt auf und wird
+# korrigiert; eine zu niedrige laesst den Posten unsichtbar bleiben.
+PREIS_LLM_UNBEKANNT = (3.00, 15.00, 3.75, 0.30)
+
+PREISE_EINHEIT = {                  # USD je Einheit
+    "fal-nano-banana-pro": 0.140,   # ein Bild
+    "fal-flux-2-flash":    0.015,   # ein Bild
+    "fal-sonstige":        0.050,   # ein Bild, unbekannter Endpunkt
+    "replicate-whisperx":  0.0060,  # eine Minute Audio
+    "openai-whisper-1":    0.0060,  # eine Minute Audio
+    "railway-render":      0.00040, # eine Sekunde Renderzeit (vCPU + RAM)
+}
+
+# Wer gerade bedient wird. Die Detektoren tief im Renderer bekommen die client_id
+# nicht durchgereicht — ohne sie faellt jede Zeile auf "unknown" und die
+# Auswertung pro Kunde ist wertlos. ContextVar statt Parameter durch 20 Ebenen.
+AKTIVER_CLIENT = contextvars.ContextVar("aktiver_client", default="")
+_kosten_pool = ThreadPoolExecutor(max_workers=2)
+
+
+def _wer() -> str:
+    try:
+        return AKTIVER_CLIENT.get() or ""
+    except Exception:
+        return ""
+
+
+def _log_kosten(client_id: str, tool: str, status: str, detail: dict) -> None:
+    """Im Hintergrund schreiben. Messung darf den gemessenen Weg nicht bremsen —
+    sonst misst man am Ende die Messung mit."""
+    cid = client_id or _wer()
+    try:
+        _kosten_pool.submit(_log_run, cid, tool, status, detail)
+    except Exception as exc:
+        log.warning("[KOSTEN] %s", exc)
+
+
+def _log_llm(tool: str, model: str, usage: dict, dauer_ms: int,
+             client_id: str = "", status: str = "ok", extra: Optional[dict] = None) -> None:
+    u = usage or {}
+    ein = int(u.get("prompt_tokens") or 0)
+    aus = int(u.get("completion_tokens") or 0)
+    cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+    _log_kosten(client_id, tool, status,
+                {"art": "llm", "modell": model, "ein": ein, "aus": aus,
+                 "cached": cached, "dauer_ms": int(dauer_ms), **(extra or {})})
+
+
+def _log_einheit(tool: str, einheit: str, menge: float, dauer_ms: int,
+                 client_id: str = "", status: str = "ok",
+                 extra: Optional[dict] = None) -> None:
+    """Bilder, Audio-Minuten, Renderzeit. Alles, was nach Stueck abgerechnet wird."""
+    _log_kosten(client_id, tool, status,
+                {"art": "einheit", "einheit": einheit, "menge": round(float(menge), 4),
+                 "dauer_ms": int(dauer_ms), **(extra or {})})
+
+
+def _audio_minuten(pfad: Path) -> float:
+    """Laenge aus der Dateigroesse. Das Audio wird immer mit 64 kbit/s mono
+    extrahiert, also 8 kB je Sekunde — genau genug fuer eine Kostenzeile, und
+    kostet keinen ffprobe-Aufruf."""
+    try:
+        return round(Path(pfad).stat().st_size / 8000.0 / 60.0, 3)
+    except Exception:
+        return 0.0
+
+
 def call_openrouter(system_prompt: str, user_message: str,
                     model: str = "anthropic/claude-haiku-4.5",
                     max_tokens: int = 6000,
                     image_path: Optional[Path] = None,
                     cache_system: bool = False,
-                    cache_prefix: Optional[str] = None) -> str:
+                    cache_prefix: Optional[str] = None,
+                    tool: str = "llm-unbenannt",
+                    client_id: str = "") -> str:
     """image_path haengt EIN Bild an die User-Nachricht. Ohne Bild bleibt der
     Content ein String — Modelle, die keine Bilder koennen, sehen keinen Unterschied.
+
+    `tool` ist der Name des Postens in der Kostenauswertung. Default absichtlich
+    haesslich: eine Zeile "llm-unbenannt" in /tool/stats/kosten zeigt sofort, wo
+    noch ein Aufruf ohne Namen sitzt.
 
     cache_system / cache_prefix setzen einen Cache-Punkt auf den STATISCHEN Teil
     (Systemprompt, Few-Shots, Kontaktblatt, Transkript). Das zahlt sich erst aus,
@@ -578,10 +670,25 @@ def call_openrouter(system_prompt: str, user_message: str,
     }
     if "glm" in model.lower():
         payload["reasoning"] = {"enabled": False}   # GLM burns tokens on reasoning otherwise
-    resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
-    resp.raise_for_status()
+    t0 = time.time()
     try:
-        return resp.json()["choices"][0]["message"]["content"]
+        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=180)
+        resp.raise_for_status()
+    except Exception:
+        # Auch der Fehlschlag kostet Zeit und manchmal Tokens. Ohne Zeile sieht
+        # ein Posten, der staendig scheitert und wiederholt wird, billig aus.
+        _log_llm(tool, model, {}, int((time.time() - t0) * 1000), client_id, "fehler")
+        raise
+    dauer_ms = int((time.time() - t0) * 1000)
+    try:
+        d = resp.json()
+    except Exception as exc:
+        _log_llm(tool, model, {}, dauer_ms, client_id, "fehler")
+        log.error("OpenRouter parse error. status=%d body=%s", resp.status_code, resp.text[:400])
+        raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
+    _log_llm(tool, model, d.get("usage") or {}, dauer_ms, client_id)
+    try:
+        return d["choices"][0]["message"]["content"]
     except Exception as exc:
         log.error("OpenRouter parse error. status=%d body=%s", resp.status_code, resp.text[:400])
         raise RuntimeError(f"OpenRouter non-JSON response: {resp.text[:200]}") from exc
@@ -1141,6 +1248,8 @@ def _whisperx_words(audio_path: Path) -> Optional[list]:
     Returns [{word,start,end}] or None on any failure (caller falls back to whisper-1)."""
     if not REPLICATE_API_TOKEN:
         return None
+    t0 = time.time()
+    minuten = _audio_minuten(audio_path)
     try:
         import base64
         with open(audio_path, "rb") as f:
@@ -1163,12 +1272,19 @@ def _whisperx_words(audio_path: Path) -> Optional[list]:
                 st, en = w.get("start"), w.get("end")
                 if txt and st is not None and en is not None:
                     words.append({"word": txt, "start": float(st), "end": float(en)})
+        _log_einheit("transkript-whisperx", "replicate-whisperx", minuten,
+                     int((time.time() - t0) * 1000),
+                     status="ok" if words else "warn", extra={"woerter": len(words)})
         if words:
             log.info("[WHISPERX] %d words (precise align)", len(words))
             return words
         log.warning("[WHISPERX] no words in output — falling back")
         return None
     except Exception as exc:
+        # Fehlgeschlagen heisst nicht kostenlos: die GPU-Zeit bis zum Abbruch ist
+        # bezahlt, und danach laeuft zusaetzlich whisper-1. Doppelt bezahlt.
+        _log_einheit("transkript-whisperx", "replicate-whisperx", minuten,
+                     int((time.time() - t0) * 1000), status="fehler")
         log.warning("[WHISPERX] failed (%s) — falling back to whisper-1", exc)
         return None
 
@@ -1213,8 +1329,12 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
         }
         if prompt:
             kwargs["prompt"] = prompt
+        _t0 = time.time()
         with open(audio_path, "rb") as af:
             resp = openai_client.audio.transcriptions.create(file=af, **kwargs)
+        _log_einheit("transkript-whisper1", "openai-whisper-1", _audio_minuten(audio_path),
+                     int((time.time() - _t0) * 1000),
+                     extra={"fuellwoerter_pass": bool(prompt)})
         words = []
         for w in (resp.words or []):
             words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
@@ -1417,7 +1537,8 @@ def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
     transcript = "\n".join(f"{i}\t{w.get('word','')}" for i, w in enumerate(words))
     try:
         raw = call_openrouter(COHERENCE_SYS, transcript,
-                              model="anthropic/claude-sonnet-4.5", max_tokens=1500)
+                              model="anthropic/claude-sonnet-4.5", max_tokens=1500,
+                              tool="schnitt-kohaerenz")
         m = re.search(r"\{[\s\S]*\}", raw)
         remove = json.loads(m.group(0)).get("remove", []) if m else []
     except Exception as exc:
@@ -1587,7 +1708,8 @@ def _classify_caption_words(words: list) -> list:
             "or 'anecdote' (words inside a personal-story phrase, e.g. a memory or 'aus meinem Bollerwagen'). "
             "Everything else is base (don't return). Return ONLY JSON {\"punch\":[i],\"anecdote\":[i]}"
         )
-        raw = call_openrouter(sys_p, json.dumps(wl), model=CHEAP_MODEL, max_tokens=500)
+        raw = call_openrouter(sys_p, json.dumps(wl), model=CHEAP_MODEL, max_tokens=500,
+                              tool="wort-klassen")
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         d = json.loads(m.group()) if m else {}
         for i in d.get("anecdote", []):
@@ -2040,9 +2162,14 @@ def _call_fal_thumbnail(concept: str, accent: str, bg: str = "#12101a",
     }
 
     log.info("[THUMB] calling fal.ai nano-banana-pro")
+    _t0 = time.time()
     resp = requests.post(FAL_THUMBNAIL_ENDPOINT, headers=headers, json=payload, timeout=90)
     resp.raise_for_status()
     data = resp.json()
+    # Ein Bild, egal ob direkt oder ueber die Warteschlange. Gezaehlt wird der
+    # abgeschickte Auftrag — fal rechnet ab da ab, auch wenn das Polling scheitert.
+    _log_einheit("bild-thumbnail", "fal-nano-banana-pro", 1,
+                 int((time.time() - _t0) * 1000))
 
     # Direct result (synchronous endpoint)
     if data.get("images"):
@@ -2102,7 +2229,8 @@ def _enrich_image_prompt(keyword: str, accent: str = "#8B5CF6") -> dict:
             "no people, no text. 1-2 sentences, object + material/form only."
         )
         subject = _strip_fences(str(call_openrouter(
-            sys_p, f"Keyword: {keyword}", model=CHEAP_MODEL, max_tokens=120))).strip() \
+            sys_p, f"Keyword: {keyword}", model=CHEAP_MODEL, max_tokens=120,
+            tool="bild-enricher"))).strip() \
             or keyword.strip()
     except Exception as exc:
         log.warning("[IMG] enrich LLM failed, using raw keyword: %s", exc)
@@ -2128,7 +2256,8 @@ def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6",
             'Return ONLY JSON: {"prompts":[{"i":1,"prompt":"..."}]}\n\nKEYWORDS:\n' + kw)
     prompts = [None] * len(cuts)
     try:
-        raw = call_openrouter(sys_p, user, model="anthropic/claude-sonnet-4.6", max_tokens=2500)
+        raw = call_openrouter(sys_p, user, model="anthropic/claude-sonnet-4.6", max_tokens=2500,
+                              tool="bild-prompts")
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         for item in (json.loads(m.group()).get("prompts", []) if m else []):
             idx = int(item.get("i", 0)) - 1
@@ -2161,9 +2290,13 @@ def _call_fal_flux(prompt: str, negative: str = "", endpoint: str = None) -> str
         "guidance_scale": 2.5,
         "output_format": "jpeg",
     }
+    _t0 = time.time()
     resp = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
     data = resp.json()
+    _log_einheit("bild-cutaway",
+                 "fal-flux-2-flash" if "flux-2/flash" in endpoint else "fal-sonstige",
+                 1, int((time.time() - _t0) * 1000), extra={"endpunkt": endpoint})
     if data.get("images"):
         return data["images"][0]["url"]
 
@@ -2211,7 +2344,7 @@ def _detect_image_cuts(words: list, duration: float) -> list:
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model=CHEAP_MODEL, max_tokens=400)
+                              model=CHEAP_MODEL, max_tokens=400, tool="bild-schnitte")
         m    = re.search(r'\{.*\}', raw, re.DOTALL)
         cuts = json.loads(m.group()).get("cuts", []) if m else []
     except Exception as exc:
@@ -2439,7 +2572,7 @@ def _detect_video_cuts(words: list, duration: float,
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model=CHEAP_MODEL, max_tokens=700)
+                              model=CHEAP_MODEL, max_tokens=700, tool="stock-schnitte")
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         cuts = json.loads(m.group()).get("cuts", []) if m else []
     except Exception as exc:
@@ -2535,7 +2668,7 @@ def _detect_logos(words: list, duration: float) -> list:
     )
     try:
         raw = call_openrouter(sys_p, json.dumps(words),
-                              model=CHEAP_MODEL, max_tokens=300)
+                              model=CHEAP_MODEL, max_tokens=300, tool="logo-erkennung")
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         logos = json.loads(m.group()).get("logos", []) if m else []
     except Exception as exc:
@@ -2832,6 +2965,7 @@ def _segment_into_scenes(words: list, duration: float, topic: str) -> list:
             f"Topic: {topic}\nFull transcript: {json.dumps(full_words)}",
             model=CHEAP_MODEL,
             max_tokens=1200,
+            tool="broll-szenen",
         )
         m      = re.search(r'\{.*\}', raw, re.DOTALL)
         scenes = json.loads(m.group()).get("scenes", []) if m else []
@@ -3695,7 +3829,7 @@ SZENEN-DIVS:
 """
     out = _strip_fences(str(call_openrouter(
         sys_p, f"Erzeuge den vollständigen <script>-Block für alle {n} Szenen.",
-        model="anthropic/claude-sonnet-4.6", max_tokens=8000)))
+        model="anthropic/claude-sonnet-4.6", max_tokens=8000, tool="broll-script")))
     if "<script" not in out.lower():
         out = f"<script>\n{out}\n</script>"
     return out
@@ -3750,7 +3884,7 @@ async def _generate_broll_synced_impl(req: BrollSyncedRequest):
         def _gen_full_html():
             return call_openrouter(system_prompt, user_msg,
                                    model="anthropic/claude-sonnet-4.6",
-                                   max_tokens=32000)
+                                   max_tokens=32000, tool="broll-html")
 
         loop     = asyncio.get_event_loop()
         html_raw = None
@@ -3937,6 +4071,7 @@ async def generate_broll(req: GenerateBrollRequest):
             system_prompt, user_message,
             model="anthropic/claude-sonnet-4.6",
             max_tokens=12000,
+            tool="broll-html-alt",
         )
 
         html_content = _strip_fences(html_content)
@@ -3998,7 +4133,7 @@ def _llm_impacts(words: list) -> list:
         'Return ONLY JSON: {"impacts":[{"time":2.34,"category":"impact","asset":"impact_bass_drop_01","word":"x","reason":"y"}]}'
     )
     raw = call_openrouter(system_prompt, json.dumps(words),
-                          model=CHEAP_MODEL, max_tokens=1000)
+                          model=CHEAP_MODEL, max_tokens=1000, tool="impacts")
     try:
         m = re.search(r'\{.*\}', raw, re.DOTALL)
         impacts = json.loads(m.group()).get("impacts", []) if m else []
@@ -5160,7 +5295,8 @@ def _visual_director(words: list, briefing: dict, duration: float,
             f"SKRIPT-ABSICHT:\n{seg_intent}\n\nWORT-TRANSKRIPT (mit Zeiten):\n"
             + json.dumps([{"w": w["word"], "t": round(float(w["start"]), 2)} for w in words], ensure_ascii=False))
     try:
-        raw = call_openrouter(system, user, model="anthropic/claude-sonnet-4.5", max_tokens=2000)
+        raw = call_openrouter(system, user, model="anthropic/claude-sonnet-4.5",
+                              max_tokens=2000, tool="regie-visuell")
         m = re.search(r"\{[\s\S]*\}", raw)
         plan = json.loads(m.group()) if m else {}
     except Exception as exc:
@@ -5505,7 +5641,7 @@ def _rang(wort: str, ideen: list) -> list:
     try:
         raw = call_openrouter(RANG_SYS, f"WORT: {wort}\n\n{liste}",
                               model="anthropic/claude-sonnet-4.5", max_tokens=300,
-                              cache_system=True)
+                              cache_system=True, tool="rang")
         m = re.search(r"\{[\s\S]*\}", raw)
         o = json.loads(m.group()) if m else {}
         order = [int(i) for i in o.get("von_naheliegend_nach_ueberraschend", [])
@@ -5616,6 +5752,7 @@ def _vision_pick(beschreibung: str, kandidaten: list, streng: bool = True) -> di
         "{\"index\":0,\"begruendung\":\"ein Satz\"}")}]
     for c in teil:
         content.append({"type": "image_url", "image_url": {"url": c["thumb"]}})
+    t0 = time.time()
     try:
         r = requests.post("https://openrouter.ai/api/v1/chat/completions", timeout=120,
                           headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -5624,13 +5761,22 @@ def _vision_pick(beschreibung: str, kandidaten: list, streng: bool = True) -> di
                                 "messages": [{"role": "user", "content": content}],
                                 "max_tokens": 300})
         r.raise_for_status()
-        txt = r.json()["choices"][0]["message"]["content"]
+        d = r.json()
+        # Bis zu 12 Vorschaubilder pro Aufruf, und der Check laeuft zweimal
+        # (streng, dann locker). Das ist der teuerste Bild-Posten im Stock-Weg —
+        # er gehoert einzeln gezaehlt, nicht unter "stock-router" versteckt.
+        _log_llm("stock-vision", "google/gemini-2.5-flash", d.get("usage") or {},
+                 int((time.time() - t0) * 1000),
+                 extra={"bilder": len(teil), "streng": streng})
+        txt = d["choices"][0]["message"]["content"]
         m = re.search(r"\{[\s\S]*\}", txt)
         o = json.loads(m.group()) if m else {}
         i = int(o.get("index", -1))
         if 0 <= i < len(teil):
             return {"clip": teil[i], "begruendung": o.get("begruendung", "")}
     except Exception as exc:
+        _log_llm("stock-vision", "google/gemini-2.5-flash", {},
+                 int((time.time() - t0) * 1000), status="fehler")
         log.warning("[STOCK] Vision-Check: %s", exc)
     return {}
 
@@ -5639,7 +5785,7 @@ def _stock_fuer(bild: str) -> dict:
     """Router + Suche + Vision-Check fuer EIN Bild."""
     try:
         raw = call_openrouter(ROUTER_SYS, bild, model="anthropic/claude-sonnet-4.5",
-                              max_tokens=300, cache_system=True)
+                              max_tokens=300, cache_system=True, tool="stock-router")
         m = re.search(r"\{[\s\S]*\}", raw)
         o = json.loads(m.group()) if m else {}
     except Exception as exc:
@@ -5685,7 +5831,7 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
     idx = "\n".join(f"{i}\t{w.get('word','')}" for i, w in enumerate(words))
     try:
         raw = call_openrouter(ANKER_SYS, idx[:6000], model="anthropic/claude-sonnet-4.5",
-                              max_tokens=900)
+                              max_tokens=900, tool="anker")
         m = re.search(r"\{[\s\S]*\}", raw)
         anker = (json.loads(m.group()).get("anker", []) if m else [])
     except Exception as exc:
@@ -5720,7 +5866,7 @@ def _metaphern(words: list, max_anker: int = 4) -> dict:
         try:
             raw = call_openrouter(ENTFALTUNG_SYS, user, model="anthropic/claude-sonnet-4.5",
                                   max_tokens=1200, cache_system=True,
-                                  cache_prefix=shots)
+                                  cache_prefix=shots, tool="entfaltung")
             m = re.search(r"\{[\s\S]*\}", raw)
             k = json.loads(m.group()) if m else {}
         except Exception as exc:
@@ -6013,7 +6159,7 @@ def _gen_visual_script(briefing: dict, words: list, duration: float, hook_end_s:
         # der sonst bei jedem Turn neu bezahlt wird.
         raw = call_openrouter(VISUAL_SCRIPT_SYS, user, model="anthropic/claude-sonnet-4.5",
                               max_tokens=2500, image_path=sheet, cache_system=True,
-                              cache_prefix=prefix)
+                              cache_prefix=prefix, tool="regie-briefing")
     except Exception as exc:
         log.warning("[VSCRIPT] gen call failed: %s", exc)
         return {"beats": [], "_diag": f"call:{exc}"}
@@ -6529,6 +6675,7 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
             continue
     if len(content) < 2:
         return {"overall": "SKIP", "reason": "no frames"}
+    t0 = time.time()
     try:
         r = requests.post(OPENROUTER_URL, headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -6538,10 +6685,15 @@ def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
         }, json={"model": "google/gemini-2.5-flash", "temperature": 0,
                  "messages": [{"role": "user", "content": content}]}, timeout=90)
         r.raise_for_status()
-        txt = r.json()["choices"][0]["message"]["content"]
+        d = r.json()
+        _log_llm("gemini-qa", "google/gemini-2.5-flash", d.get("usage") or {},
+                 int((time.time() - t0) * 1000), extra={"frames": len(ts)})
+        txt = d["choices"][0]["message"]["content"]
         m = re.search(r"\{[\s\S]*\}", txt)
         qa = json.loads(m.group()) if m else {"overall": "SKIP"}
     except Exception as exc:
+        _log_llm("gemini-qa", "google/gemini-2.5-flash", {},
+                 int((time.time() - t0) * 1000), status="fehler")
         log.warning("[QA] gemini(openrouter) failed: %s", exc)
         return {"overall": "SKIP", "reason": str(exc)}
     qa["checked_at"] = ts
@@ -7104,10 +7256,19 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
 
 def _render_job(job_id: str, req: RemotionRenderRequest):
     RENDER_JOBS[job_id] = {"status": "processing"}
+    # Ab hier haengt die client_id am Thread. Alles, was der Render darunter an
+    # Modellen und Bildern zieht, landet mit dem richtigen Kunden im run_log.
+    AKTIVER_CLIENT.set(req.client_id or "")
+    t0 = time.time()
     try:
         res = _render_remotion_impl(req)
         RENDER_JOBS[job_id] = {"status": "done", **res}
+        _log_einheit("render-laufzeit", "railway-render", time.time() - t0,
+                     int((time.time() - t0) * 1000), extra={"format": req.format})
     except Exception as exc:
+        _log_einheit("render-laufzeit", "railway-render", time.time() - t0,
+                     int((time.time() - t0) * 1000), status="fehler",
+                     extra={"format": req.format})
         log.exception("[REMOTION] job %s failed", job_id)
         RENDER_JOBS[job_id] = {"status": "error", "error": str(exc)}
 
@@ -8382,6 +8543,163 @@ def tool_stats_turns(req: TurnStatsRequest):
             "befund": befund, "laeufe": laeufe[:20]}
 
 
+# ── Kostenauswertung ──────────────────────────────────────────────────────────
+class KostenRequest(BaseModel):
+    tage:      int = 7
+    client_id: str = ""
+    limit:     int = 5000
+
+
+class LlmLogRequest(BaseModel):
+    """Eingang fuer alles, was ausserhalb dieses Dienstes ein Modell ruft —
+    Kalle-Interview, Skript-Bauer, Recherche. Ein HTTP-Node hinter dem LLM-Node,
+    und der Posten taucht in derselben Auswertung auf wie die Renderer-Posten."""
+    tool:      str
+    modell:    str = ""
+    ein:       int = 0
+    aus:       int = 0
+    cached:    int = 0
+    dauer_ms:  int = 0
+    client_id: str = ""
+    status:    str = "ok"
+
+
+class EinheitLogRequest(BaseModel):
+    tool:      str
+    einheit:   str
+    menge:     float = 1.0
+    dauer_ms:  int = 0
+    client_id: str = ""
+    status:    str = "ok"
+
+
+@app.post("/tool/log/llm")
+def tool_log_llm(req: LlmLogRequest):
+    _log_llm(req.tool, req.modell,
+             {"prompt_tokens": req.ein, "completion_tokens": req.aus,
+              "prompt_tokens_details": {"cached_tokens": req.cached}},
+             req.dauer_ms, req.client_id, req.status)
+    return {"ok": True}
+
+
+@app.post("/tool/log/einheit")
+def tool_log_einheit(req: EinheitLogRequest):
+    _log_einheit(req.tool, req.einheit, req.menge, req.dauer_ms,
+                 req.client_id, req.status)
+    return {"ok": True}
+
+
+def _kosten_zeile(d: dict) -> float:
+    """USD fuer EINE run_log-Zeile.
+
+    Ehrliche Grenze: OpenRouter meldet nur `cached_tokens`, nicht wie viele der
+    frischen Token in den Cache GESCHRIEBEN wurden. Ein Schreibvorgang kostet
+    aber das 1,25-fache. Die Zahl hier ist also am Anfang einer Sitzung leicht zu
+    niedrig — bei Sonnet um hoechstens 25 % der Praefix-Token, nicht der Summe."""
+    art = d.get("art")
+    if art == "llm":
+        ein_p, aus_p, _w_p, read_p = PREISE_LLM.get(d.get("modell") or "",
+                                                    PREIS_LLM_UNBEKANNT)
+        ein    = int(d.get("ein") or 0)
+        cached = min(int(d.get("cached") or 0), ein)
+        frisch = ein - cached
+        return (frisch * ein_p + cached * read_p
+                + int(d.get("aus") or 0) * aus_p) / 1_000_000.0
+    if art == "einheit":
+        return float(d.get("menge") or 0.0) * PREISE_EINHEIT.get(d.get("einheit") or "", 0.0)
+    return 0.0
+
+
+@app.post("/tool/stats/kosten")
+def tool_stats_kosten(req: KostenRequest):
+    """Welcher Posten macht welchen Anteil. Sieben Tage, nach tool gruppiert.
+
+    Zeilen ohne `art` sind Ereignis-Zeilen aus der Zeit vor der Messung — sie
+    werden mitgezaehlt, aber mit 0 USD und getrennt ausgewiesen. Sonst sieht
+    eine Luecke in der Messung wie ein billiger Posten aus."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return {"ok": False, "grund": "Supabase nicht konfiguriert"}
+    tage = max(1, min(int(req.tage), 90))
+    seit = datetime.now(timezone.utc).timestamp() - tage * 86400
+    seit_iso = datetime.fromtimestamp(seit, timezone.utc).isoformat()
+    params = {"select": "client_id,tool,status,detail,created_at",
+              "created_at": f"gte.{seit_iso}",
+              "order": "created_at.desc", "limit": str(max(1, min(req.limit, 20000)))}
+    if req.client_id:
+        params["client_id"] = f"eq.{req.client_id}"
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/run_log", params=params, timeout=40,
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as exc:
+        return {"ok": False, "grund": str(exc)[:200]}
+
+    posten: dict = {}
+    ohne_messung = 0
+    for x in rows:
+        d = x.get("detail") or {}
+        art = d.get("art")
+        if art not in ("llm", "einheit"):
+            ohne_messung += 1
+            continue
+        p = posten.setdefault(x.get("tool") or "?", {
+            "tool": x.get("tool") or "?", "art": art, "modelle": set(),
+            "aufrufe": 0, "fehler": 0, "ein": 0, "aus": 0, "cached": 0,
+            "menge": 0.0, "dauer_ms": 0, "usd": 0.0})
+        p["aufrufe"] += 1
+        if x.get("status") == "fehler":
+            p["fehler"] += 1
+        p["dauer_ms"] += int(d.get("dauer_ms") or 0)
+        p["usd"] += _kosten_zeile(d)
+        if art == "llm":
+            p["ein"]    += int(d.get("ein") or 0)
+            p["aus"]    += int(d.get("aus") or 0)
+            p["cached"] += int(d.get("cached") or 0)
+            if d.get("modell"):
+                p["modelle"].add(d["modell"])
+        else:
+            p["menge"] += float(d.get("menge") or 0.0)
+            if d.get("einheit"):
+                p["modelle"].add(d["einheit"])
+
+    gesamt = sum(p["usd"] for p in posten.values()) or 0.0
+    liste = []
+    for p in sorted(posten.values(), key=lambda y: y["usd"], reverse=True):
+        z = {k: v for k, v in p.items() if k != "modelle"}
+        z["modelle"] = sorted(p["modelle"])
+        z["usd"] = round(p["usd"], 4)
+        z["anteil_pct"] = round(100.0 * p["usd"] / gesamt, 1) if gesamt else 0.0
+        z["dauer_s"] = round(p["dauer_ms"] / 1000.0, 1)
+        z.pop("dauer_ms", None)
+        if p["art"] == "llm":
+            z["cache_quote_pct"] = round(100.0 * p["cached"] / p["ein"], 1) if p["ein"] else 0.0
+        else:
+            z.pop("ein", None); z.pop("aus", None); z.pop("cached", None)
+        liste.append(z)
+
+    llm = [p for p in posten.values() if p["art"] == "llm"]
+    ein_ges = sum(p["ein"] for p in llm)
+    cached_ges = sum(p["cached"] for p in llm)
+    befund = []
+    if liste:
+        top = liste[0]
+        befund.append(f"groesster Posten: {top['tool']} mit {top['anteil_pct']}% "
+                      f"({top['usd']} USD in {tage} Tagen)")
+    if ein_ges:
+        q = 100.0 * cached_ges / ein_ges
+        befund.append(f"Cache-Quote gesamt {q:.1f}% ueber {ein_ges} Eingabe-Token"
+                      + ("" if q >= 80 else " — unter 80%, der Praefix wird zu oft neu bezahlt"))
+    if ohne_messung:
+        befund.append(f"{ohne_messung} Zeilen ohne Kostenmessung (Ereignis-Zeilen oder "
+                      f"noch nicht instrumentierte Aufrufe) — nicht in der Summe")
+    return {"ok": True, "tage": tage, "zeilen": len(rows),
+            "usd_gesamt": round(gesamt, 4),
+            "usd_pro_tag": round(gesamt / tage, 4),
+            "ohne_messung": ohne_messung, "befund": befund, "posten": liste}
+
+
 # ── Teil 4: der Loop ──────────────────────────────────────────────────────────
 # Werkzeuge, Grenzen und Abbruch stehen. Was hier dazukommt, ist die Anleitung,
 # wie ein Editor denkt — und die Schleife, die sie ausfuehrt.
@@ -8670,6 +8988,7 @@ def _loop_impl(s: dict, model: str) -> dict:
     entscheidung — beides steckt in den Werkzeugen. Sie sorgt nur dafuer, dass
     nach jedem Turn gezaehlt, gesichert und gefragt wird."""
     tools = _tool_specs()
+    _t_loop = time.time()
     # Der statische Block liegt EINMAL im ersten User-Turn und ist ab da Praefix
     # der gesamten Historie — genau das cached Anthropic.
     erst = [{"type": "text", "text": s["prefix"], **CACHE_MARK}]
@@ -8751,8 +9070,12 @@ def _loop_impl(s: dict, model: str) -> dict:
     log.info("[LOOP] %s Tokens: %d ein (%d aus Cache), %d aus, %d Turns abgeschnitten. "
              "Pro Werkzeug: %s", s["id"], t["ein"], t["cached"], t["aus"],
              t["abgeschnitten"], t["pro_werkzeug"])
+    # art/modell/dauer_ms machen die Zeile fuer /tool/stats/kosten lesbar. Die
+    # Summe ueber alle Turns reicht: abgerechnet wird ohnehin pro Turn, und der
+    # Cache-Anteil ist erst ueber den ganzen Lauf aussagekraeftig.
     _log_run(s["client_id"], "loop-tokens", "warn" if t["abgeschnitten"] else "ok",
-             {"session": s["id"], "turns": s["turns_used"], **t})
+             {"art": "llm", "modell": model, "dauer_ms": int((time.time() - _t_loop) * 1000),
+              "session": s["id"], "turns": s["turns_used"], **t})
     return {**erg, "plan": plan, "turns": s["turns_used"],
             "grund": s.get("abbruch_grund") or "fertig", "tokens": t}
 
@@ -8772,6 +9095,7 @@ _loop_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _loop_job(job_id: str, req: LoopRequest):
+    AKTIVER_CLIENT.set(req.client_id or "")
     try:
         if req.session_id:
             s = _sess(req.session_id)

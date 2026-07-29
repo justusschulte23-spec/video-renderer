@@ -7448,6 +7448,64 @@ def _sess_gc() -> None:
 # Regel, die nur im Bericht steht, ist eine Bitte. place-layer und move-layer
 # lehnen ab, statt den Fehler bis zum Render mitzuschleppen.
 SAFE_MARGIN = 0.06
+
+# ── Platzierungsregeln fuer bestellte Grafikelemente ──────────────────────────
+# Alle drei stammen aus EINEM angesehenen Video (session 9e9560b6fb44): Elemente
+# lagen im Untertitelband, waren auf ein Viertel geschrumpft und links
+# angeschnitten. Sie stehen hier und nicht im Prompt, weil dieselbe Klasse
+# Fehler schon zweimal nur im Prompt stand und nicht gehalten hat.
+
+# Wie stark ein Element gegenueber seinem Anforderungsmass schrumpfen darf. Der
+# Gestalter haelt sich an eine Mindestschrift von HTML_AGENT_MIN_PX auf SEINER
+# Leinwand — wird die Ebene halb so breit gesetzt, ist die Schrift halbiert und
+# die Zusage wertlos. 0.75 laesst 26px auf ~20px fallen, das ist die Grenze.
+MIN_ELEMENT_SKALA = 0.75
+# LayerStage zeichnet Ebenen mit objectFit:"cover". Weicht das Seitenverhaeltnis
+# der Ebene vom Element ab, wird NICHT gestaucht, sondern beschnitten — und zwar
+# still. Genau so sind '00€/Monat 25:' und '1 pra…' am linken Rand entstanden.
+SEITENVERHAELTNIS_TOLERANZ = 0.12
+# Luft ueber und unter dem Untertitelband. Zwei Textebenen uebereinander sind
+# der schlimmste Fall: beide unlesbar, und keine der beiden faellt einzeln auf.
+CAPTION_BAND_LUFT = 0.02
+
+# url -> (w_px, h_px), wie der Gestalter das Element angefordert hat. Im
+# Arbeitsspeicher: nach einem Neustart ist die Zuordnung weg, dann faellt die
+# Pruefung auf source.quelle_px zurueck. Eine Pruefung, die still ausfaellt,
+# waere schlimmer als keine — deshalb beide Wege.
+ELEMENT_MASSE: dict = {}
+
+
+def _element_masse(lay: dict) -> Optional[tuple]:
+    src = lay.get("source") or {}
+    url = str(src.get("url") or "")
+    if url in ELEMENT_MASSE:
+        return ELEMENT_MASSE[url]
+    px = src.get("quelle_px")
+    if isinstance(px, (list, tuple)) and len(px) == 2:
+        try:
+            return int(px[0]), int(px[1])
+        except Exception:
+            return None
+    return None
+
+
+def _caption_band(layers: list) -> Optional[tuple]:
+    """Wo die Untertitel stehen — aus der Ebene selbst, nicht aus einer Konstante.
+    Die Captions duerfen sich bewegen (ducken, Hook), also wird die aeusserste
+    Lage genommen, die sie im Lauf einnehmen koennen."""
+    cap = next((l for l in layers if (l.get("source") or {}).get("kind") == "captions"), None)
+    if not cap:
+        return None
+    s = cap["source"]
+    ys = [float(s.get("y", 0.68))]
+    for k in ("duckY", "hookY"):
+        if s.get(k) is not None:
+            ys.append(float(s[k]))
+    groesste = max(float(s.get(k, 0) or 0)
+                   for k in ("fontSize", "duckFontSize", "hookFontSize")) or 66.0
+    # HormoziCaptions setzt top = y und skaliert das gesprochene Wort auf 1.16.
+    hoehe = (groesste * 1.16) / float(H)
+    return (min(ys) - CAPTION_BAND_LUFT, max(ys) + hoehe + CAPTION_BAND_LUFT)
 MAX_EXTRA_LAYERS = 3
 MIN_LAYER_S = 0.8
 MOTION_WINDOW_F = 15        # in den ersten 15 Frames muss eine Kurve laufen
@@ -7474,7 +7532,7 @@ def _ist_pflicht(l: dict) -> bool:
     return l.get("source", {}).get("kind") in PFLICHT_KINDS
 
 
-def _layer_rule_errors(lay: dict, face: dict) -> list:
+def _layer_rule_errors(lay: dict, face: dict, band: Optional[tuple] = None) -> list:
     """Regeln, die eine EINZELNE Ebene verletzen kann."""
     t = lay["transform"]
     ft, fb = float(face.get("top", 0.15)), float(face.get("bottom", 0.66))
@@ -7504,6 +7562,39 @@ def _layer_rule_errors(lay: dict, face: dict) -> list:
                             f"(y >= {fb:.2f}), links (x+w <= {fl:.2f}) oder rechts "
                             f"(x >= {fr:.2f}). Vollflaechig (w und h > 0.95) waere ein "
                             f"Cutaway und ist erlaubt."})
+    # Untertitelband. Ein vollflaechiger Cutaway darf darueber liegen — dann ist
+    # das Bild bewusst zu, und die Captions liegen oben auf.
+    if band and not vollflaechig and t["y"] < band[1] and t["y"] + t["h"] > band[0]:
+        out.append({"ebene": lay["id"], "regel": "caption_band",
+                    "text": f"liegt im Untertitelband (y {band[0]:.2f}-{band[1]:.2f}). "
+                            f"Zwei Textebenen uebereinander sind beide unlesbar. "
+                            f"Darueber (y+h <= {band[0]:.2f}) oder darunter "
+                            f"(y >= {band[1]:.2f})."})
+    masse = _element_masse(lay)
+    if masse:
+        qw, qh = masse
+        breite_px = t["w"] * W
+        skala = breite_px / max(1, qw)
+        if skala < MIN_ELEMENT_SKALA:
+            vorschlag = int(round(breite_px))
+            out.append({"ebene": lay["id"], "regel": "element_skala",
+                        "text": f"das Element wurde fuer {qw}px Breite gebaut und steht "
+                                f"hier auf {breite_px:.0f}px — Faktor {skala:.2f}. Die "
+                                f"Schrift schrumpft mit und ist auf dem Handy nicht mehr "
+                                f"lesbar. Entweder w >= {MIN_ELEMENT_SKALA * qw / W:.2f} "
+                                f"setzen, oder das Element gleich mit w_px={vorschlag} "
+                                f"bestellen."})
+        sv_ebene = (t["w"] * W) / max(1e-6, t["h"] * H)
+        sv_quelle = qw / max(1, qh)
+        abweichung = abs(sv_ebene - sv_quelle) / sv_quelle
+        if abweichung > SEITENVERHAELTNIS_TOLERANZ:
+            soll_h = (t["w"] * W) / sv_quelle / H
+            out.append({"ebene": lay["id"], "regel": "seitenverhaeltnis",
+                        "text": f"die Ebene ist {sv_ebene:.2f}:1, das Element {sv_quelle:.2f}:1 "
+                                f"({abweichung * 100:.0f}% daneben). Ebenen werden "
+                                f"beschnitten, nicht gestaucht — an den Raendern faellt "
+                                f"Text weg, ohne dass es irgendwo auffaellt. Bei w={t['w']:.2f} "
+                                f"gehoert h={soll_h:.3f}."})
     return out
 
 
@@ -7571,7 +7662,8 @@ def _motion_at_zero(layers: list) -> bool:
 
 
 def _hard_check(layers: list, face: dict) -> list:
-    fehler = [e for l in layers for e in _layer_rule_errors(l, face)]
+    band = _caption_band(layers)
+    fehler = [e for l in layers for e in _layer_rule_errors(l, face, band)]
     return fehler + _budget_errors(layers) + _doppelte_pflicht(layers)
 
 
@@ -8243,7 +8335,8 @@ def tool_place_layer(req: PlaceLayerRequest):
                                   round(l["transform"]["h"], 2)) for l in letzte}) == 1:
         hin.append(f"drei Ebenen in Folge mit derselben Breite und Hoehe "
                    f"({letzte[-1]['transform']['w']:.2f} x {letzte[-1]['transform']['h']:.2f}). "
-                   f"Ein schmales Element (w 0.25-0.40) passt neben das Gesicht.")
+                   f"Neben das Gesicht passt ein schmales Element — aber BESTELL es "
+                   f"schmal (w_px um 240), statt ein breites zu schrumpfen.")
     return {"ok": True, "layer": lay, "layers": len(s["layers"]), "hinweise": hin}
 
 
@@ -9236,6 +9329,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                                 detail={"text": "Alpha-Render fehlgeschlagen",
                                         "ueberlauf": ueber})
         url = upload_supabase(out, out.stem, folder="htmltool", content_type="video/webm")
+        ELEMENT_MASSE[url] = (w_px, h_px)
         vorschau = ""
         if zustand["vorschau_b64"]:
             import base64 as _b64
@@ -9269,7 +9363,13 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             "ueberlauf": bool(pr.get("ueberlauf")), "vorschau": vorschau,
             "hinweis": "; ".join(hinweise) or (zustand["begruendung"] or "passt"),
             "art": art, "seconds": dauer_s,
-            "layer_source": {"kind": "video", "url": url, "transparent": True},
+            "anforderungsmass_px": [w_px, h_px],
+            "seitenverhaeltnis": round(w_px / max(1, h_px), 3),
+            # quelle_px reist in der Ebene mit, ELEMENT_MASSE haelt es
+            # unabhaengig davon. Der Agent kann das Feld weglassen — die
+            # Platzierungspruefung darf davon nicht abhaengen.
+            "layer_source": {"kind": "video", "url": url, "transparent": True,
+                             "quelle_px": [w_px, h_px]},
             **({"markup": zustand["markup"],
                 "text_ende": (pr.get("text_ende") or "")[:400]} if debug else {})}
 
@@ -9380,6 +9480,15 @@ zaehlt nicht:
   Cutaway und das Gesicht ist bewusst weg)
 - jede Ebene mindestens 0.8 Sekunden
 - hoechstens drei Ebenen gleichzeitig ausser der Facecam
+- nichts im Untertitelband. Zwei Textebenen uebereinander sind beide
+  unlesbar. Darueber oder darunter, nicht dazwischen.
+- ein bestelltes Element darf nicht kleiner gesetzt werden als 0.75 seines
+  Anforderungsmasses. Willst du es schmal, bestell es schmal (w_px), statt
+  ein breites zu schrumpfen — die Schrift schrumpft mit.
+- die Ebene muss das Seitenverhaeltnis des Elements halten. Ebenen werden
+  beschnitten, nicht gestaucht: passt das Verhaeltnis nicht, faellt an den
+  Raendern Text weg, und im fertigen Video sieht das aus wie ein Tippfehler.
+  Rechne h aus w und dem Verhaeltnis, das render_html zurueckgibt.
 Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 
 WANN DU FERTIG BIST

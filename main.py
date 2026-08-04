@@ -7552,6 +7552,16 @@ def _element_box_angleichen(lay: dict) -> Optional[str]:
     if t["w"] <= 0:
         return None
     h_soll = t["w"] * W / sv / H
+    # Vollbild gemeint, aber das Element ist nicht 9:16: die Angleichung wuerde
+    # daraus stillschweigend ein Banner machen, das anschliessend an der
+    # Randregel scheitert. Der Agent sah 26 Ablehnungen und nie den Grund.
+    # Also sagen, was zu bestellen ist, statt umzuformen.
+    if t["w"] > 0.95 and t["h"] > 0.95 and h_soll < 0.95:
+        return (f"{lay['id']}: als Vollbild gesetzt, aber das Element wurde "
+                f"{masse[0]}x{masse[1]} gebaut ({sv:.2f}:1). Auf voller Breite "
+                f"waere es nur h={h_soll:.2f} hoch — ein Banner, kein Vollbild, "
+                f"und es faellt durch die Randregel. Bestell es neu mit "
+                f"w_px=1080 UND h_px=1920, dann bleibt es Vollbild.")
     if t["y"] + h_soll > 1 - SAFE_MARGIN + 1e-6:
         # Nach unten ist kein Platz — dann bestimmt die Hoehe die Breite.
         h_soll = max(0.02, 1 - SAFE_MARGIN - t["y"])
@@ -9787,7 +9797,12 @@ Die Breite bestimmt den Platz, nicht umgekehrt.
 
   neben dem Gesicht    → w_px 220-260
   ueber oder unter     → w_px 600-950
-  Vollbild-Szene       → w_px 1080
+  Vollbild-Uebernahme  → w_px 1080 UND h_px 1920
+
+Die 1920 sind nicht optional. Die Hoehe einer Element-Ebene folgt aus dem
+Seitenverhaeltnis des Elements — bestellst du 1080x600 und setzt es auf
+Vollbild, wird daraus ein Banner mit h=0.31, und das faellt durch die
+Randregel. Nur ein Element, das als 1080x1920 gebaut wurde, bleibt Vollbild.
 
 Ein breit gebautes Element passt nicht mehr seitlich. Dann musst du es neu
 bauen — das kostet dich einen Turn, den du nicht hast.

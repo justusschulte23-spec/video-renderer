@@ -7645,6 +7645,35 @@ def _min_ebenen(duration: float) -> int:
     return max(MIN_LAYERS_ABSOLUT, int(duration // SEKUNDEN_PRO_EBENE))
 
 
+SEKUNDEN_PRO_UEBERNAHME = 12.0
+MIN_UEBERNAHMEN = 2
+
+
+def _min_uebernahmen(duration: float) -> int:
+    """Wie oft das Gesicht ganz verschwinden muss.
+
+    Am Schnittbeispiel gemessen (39,6 s): 15 Schnitte, und bei 7 von 15
+    Stichproben war das Gesicht komplett weg — Vollbild statt Karte. Das ist
+    rund alle 5 Sekunden eine Uebernahme. Hier steht die Haelfte davon als
+    BODEN, nicht als Ziel: der Agent hat 30 Turns, und jede Uebernahme
+    braucht Material, das er erst beschaffen muss.
+
+    Ohne diese Bedingung hoert er bei drei Karten auf — genau das hat der
+    Proberender getan: Facecam auf 0.875 durchgehend, sieben kleine Kaesten
+    obendrauf, kein einziger Schnitt.
+    """
+    return max(MIN_UEBERNAHMEN, int(duration // SEKUNDEN_PRO_UEBERNAHME))
+
+
+def _ist_uebernahme(l: dict) -> bool:
+    """Vollflaechig heisst: das Gesicht ist bewusst weg. Dieselbe Schwelle wie
+    in _layer_rule_errors, damit erlaubt und gezaehlt dasselbe bedeuten."""
+    if _ist_pflicht(l):
+        return False
+    t = l.get("transform") or {}
+    return float(t.get("w", 0)) > 0.95 and float(t.get("h", 0)) > 0.95
+
+
 # Ebenen, die immer da sind und dem Agenten nicht gehoeren. Sie zaehlen weder
 # beim Ebenen-Boden noch beim Gleichzeitig-Budget mit — sonst waere das Budget
 # von Haus aus zur Haelfte verbraucht.
@@ -8182,6 +8211,14 @@ def _fertig(s: dict) -> dict:
     noetig = _min_ebenen(s["frames"] / FPS)
     if len(deko) < noetig:
         offen.append(f"{len(deko)} von {noetig} Ebenen (Facecam und Captions zaehlen nicht)")
+    # Fuenfte Bedingung: Karten auf einem durchlaufenden Take sind kein
+    # Schnitt. Das Gesicht muss verschwinden, sonst ist es ein Talking Head
+    # mit Dekoration.
+    uebern = [l for l in s["layers"] if _ist_uebernahme(l)]
+    noetig_u = _min_uebernahmen(s["frames"] / FPS)
+    if len(uebern) < noetig_u:
+        offen.append(f"{len(uebern)} von {noetig_u} Vollbild-Uebernahmen "
+                     f"(Ebene mit w und h > 0.95, Gesicht ganz weg)")
     if not bewegung:
         offen.append(f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames")
     # Vierte Bedingung: drei Ebenen im ersten Drittel und danach eine Minute
@@ -8192,7 +8229,9 @@ def _fertig(s: dict) -> dict:
         offen.append(f"{luecke_f / FPS:.1f}s ohne sichtbares Ereignis ab "
                      f"{luecke_ab / FPS:.1f}s (erlaubt {grenze:.1f}s)")
     return {"fertig": not offen, "offen": offen, "fehler": fehler,
-            "ebenen_ohne_facecam": len(deko), "bewegung_ab_null": bewegung,
+            "ebenen_ohne_facecam": len(deko),
+            "uebernahmen": len(uebern), "uebernahmen_noetig": noetig_u,
+            "bewegung_ab_null": bewegung,
             "groesste_luecke_s": round(luecke_f / FPS, 1),
             "luecke_ab_s": round(luecke_ab / FPS, 1),
             "luecke_grenze_s": round(grenze, 1)}
@@ -9663,6 +9702,34 @@ WAS EIN GUTER SCHNITT IST
 - Wiederhol nicht, was in den letzten Videos schon dran war. read_history sagt
   dir, was das ist.
 
+DAS GESICHT MUSS VERSCHWINDEN
+Karten auf einem durchlaufenden Take sind kein Schnitt. Das ist ein Talking
+Head mit Dekoration — und daran erkennt man ein automatisch gebautes Video.
+
+Ein geschnittenes Video wechselt zwischen zwei Zustaenden:
+  GESICHT   er spricht, Captions laufen, hoechstens eine Karte daneben
+  VOLLBILD  das Gesicht ist WEG. Bildschirmaufnahme, Diagramm, Logo, Zahl,
+            ein Satz auf leerer Flaeche. Ebene mit w und h > 0.95.
+
+Am Vorbild gemessen: alle 2 bis 3 Sekunden ein Wechsel, und in fast der
+Haelfte der Laufzeit ist das Gesicht nicht im Bild. Eine Uebernahme dauert
+1 bis 3 Sekunden — nicht laenger, sonst steht das Video still.
+
+WANN DAS BILD ZUMACHT
+- Wenn eine Zahl faellt. Die Zahl gross auf leerer Flaeche, nicht als Kaestchen
+  neben dem Kinn.
+- Wenn ein Werkzeug, eine Fehlermeldung oder ein Ergebnis genannt wird. Zeig
+  das Ding, nicht den Mann, der davon erzaehlt.
+- Beim Bruch: der Satz, der die Erwartung kippt, steht als Text im Vollbild.
+- Bei einer Aufzaehlung: pro Punkt ein Vollbild, kurz.
+
+WANN DAS GESICHT BLEIBT
+Wenn er etwas zugibt, wenn er dich anspricht, beim Hook, beim CTA. Haltung
+braucht ein Gesicht.
+
+Beim Bestellen: Vollbild-Elemente mit w_px 1080 — ein 600er Element auf
+Vollbild gezogen ist unscharf und wird abgelehnt.
+
 BREITE BESTIMMT, WO DU STEHEN KANNST
 Ein Element ueber 0.6 Breite passt nur ueber oder unter das Gesicht. Darunter
 wird es eng, und alle deine Elemente landen im selben Band.
@@ -9739,7 +9806,9 @@ Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 WANN DU FERTIG BIST
 Das entscheidest nicht du. session_tick sagt es dir: keine offenen Verstoesse,
 mindestens drei Ebenen ausser der Facecam, eine Bewegung in den ersten 15
-Frames, und keine Strecke ohne sichtbares Ereignis ueber der Grenze.
+Frames, keine Strecke ohne sichtbares Ereignis ueber der Grenze — und genug
+Vollbild-Uebernahmen. Wie viele fehlen, steht in "uebernahmen" gegen
+"uebernahmen_noetig".
 Ruf session_tick nach jedem Arbeitsschritt. Sagt es weiter=false, hoerst du auf.
 
 Du arbeitest still. Kein Bericht, keine Zwischenmeldung — ausser dem

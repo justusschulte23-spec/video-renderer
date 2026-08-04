@@ -7586,7 +7586,12 @@ def _freie_zonen(face: dict, band: Optional[tuple], masse: Optional[tuple]) -> l
         ("links daneben",     lo, min(fl, hi), lo, min(bt, hi)),
         ("rechts daneben",    max(fr, lo), hi, lo, min(bt, hi)),
     ]
-    out = []
+    # Der fuenfte Platz ist das ganze Bild. Er stand hier nie drin, also sah
+    # jede Ablehnung so aus, als gaebe es nur die vier Raender.
+    out = [{"zone": "Vollbild-Uebernahme (Gesicht ganz weg)",
+            "x": 0.0, "y": 0.0, "max_w": 1.0, "max_h": 1.0,
+            "bestell_w_px": W,
+            "hinweis": "x=0, y=0, w=1, h=1 — die Schutzzone gilt hier nicht."}]
     for name, x0, x1, y0, y1 in kaesten:
         bw, bh = x1 - x0, y1 - y0
         if bw <= 0.02 or bh <= 0.02:
@@ -7691,11 +7696,26 @@ def _layer_rule_errors(lay: dict, face: dict, band: Optional[tuple] = None) -> l
     out = []
     if _ist_pflicht(lay):
         return out                      # Facecam und Captions duerfen ueberall stehen
-    if (t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6
+    # Die Schutzzone gilt fuer Elemente IM Bild. Eine Uebernahme IST das Bild —
+    # sie muss bis an die Kante laufen, sonst steht ein Rahmen drumherum.
+    # Ohne diese Ausnahme widersprachen sich zwei Regeln: die Gesichts-Regel
+    # erklaerte vollflaechig ausdruecklich fuer erlaubt, safe_area lehnte es
+    # eine Zeile vorher ab. Der Agent hat 30 Turns gegen diesen Widerspruch
+    # gedrueckt und keine einzige Uebernahme gesetzt.
+    vollbild = t["w"] > 0.95 and t["h"] > 0.95
+    if not vollbild and (
+            t["x"] < SAFE_MARGIN - 1e-6 or t["y"] < SAFE_MARGIN - 1e-6
             or t["x"] + t["w"] > 1 - SAFE_MARGIN + 1e-6
             or t["y"] + t["h"] > 1 - SAFE_MARGIN + 1e-6):
+        zusatz = ""
+        # Knapp daneben ist der haeufigste Fall: gemeint war eine Uebernahme,
+        # gesetzt wurde 0.9. Dann sagen, wie es geht, statt nur abzulehnen.
+        if t["w"] > 0.8 and t["h"] > 0.8:
+            zusatz = (" Wenn das eine Vollbild-Uebernahme werden soll: "
+                      "x=0, y=0, w=1, h=1 — dann gilt die Schutzzone nicht.")
         out.append({"ebene": lay["id"], "regel": "safe_area",
-                    "text": f"ragt in die aeusseren {int(SAFE_MARGIN * 100)}%"})
+                    "text": f"ragt in die aeusseren {int(SAFE_MARGIN * 100)}%."
+                            + zusatz})
     if (lay["to"] - lay["from"]) / FPS < MIN_LAYER_S:
         out.append({"ebene": lay["id"], "regel": "mindestdauer",
                     "text": f"{(lay['to'] - lay['from']) / FPS:.2f}s, mindestens {MIN_LAYER_S}s"})

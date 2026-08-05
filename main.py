@@ -8823,7 +8823,8 @@ async def _ziele_finden(seite, ziel: str, wert: bool = False):
         if h > MAX_BLOCK_PX or br > MAX_BLOCK_PX:
             zu_gross += 1
             continue
-        roh.append({"el": el, "y": k["y"], "h": h, "b": br, "text": text})
+        roh.append({"el": el, "x": k["x"], "y": k["y"], "h": h, "b": br,
+                    "text": text})
     if not roh:
         rat = ("Kein Block dieser Groesse. " + (
             "%d Treffer waren groesser als %dpx — das sind Wrapper, keine "
@@ -8833,14 +8834,23 @@ async def _ziele_finden(seite, ziel: str, wert: bool = False):
         return [], rat
     # Verschachtelte Treffer entfernen: liegen zwei Bloecke fast
     # uebereinander, ist der aeussere nur die Huelle des inneren.
-    roh.sort(key=lambda x: (x["y"], x["h"]))
+    # Klein nach gross: der innerste Block zuerst, seine Huellen fliegen
+    # danach raus. NICHT nach y sortieren — Tarifkarten stehen nebeneinander
+    # und haben dieselbe y-Position. Die erste Fassung hat deshalb vier von
+    # fuenf Karten als "Huelle der ersten" verworfen.
+    def _umschliesst(a, b):
+        return (a["x"] <= b["x"] + 2 and a["y"] <= b["y"] + 2
+                and a["x"] + a["b"] >= b["x"] + b["b"] - 2
+                and a["y"] + a["h"] >= b["y"] + b["h"] - 2)
+    roh.sort(key=lambda r: r["h"] * r["b"])
     aus = []
     for r in roh:
-        if any(abs(r["y"] - g["y"]) < 12 and r["h"] >= g["h"] for g in aus):
+        if any(_umschliesst(r, g) for g in aus):
             continue
         aus.append(r)
         if len(aus) >= 5:
             break
+    aus.sort(key=lambda r: (r["y"], r["x"]))
     return aus, ""
 
 

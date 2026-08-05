@@ -7996,7 +7996,8 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
 
 
 def _build_prefix(duration: float, frames_gesamt: int, face: dict, words: list,
-                  onsets: list, style: str) -> str:
+                  onsets: list, style: str,
+                  material: Optional[list] = None) -> str:
     """Der STATISCHE Block, der in jedem Turn identisch mitginge. Er wird EINMAL
     beim Oeffnen der Sitzung gebaut und danach nie wieder berechnet.
 
@@ -8014,13 +8015,42 @@ def _build_prefix(duration: float, frames_gesamt: int, face: dict, words: list,
         f"Nase bei x={face.get('origin_x', '?')} y={face.get('origin_y', '?')}.\n\n"
         "TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(words or []) + "\n\n"
         "BETONUNGEN (Sekunden)\n" + (peaks or "-") + "\n"
+        + _material_block(material)
     )
+
+
+def _material_block(material: Optional[list]) -> str:
+    """Was schon existiert: Fundstuecke und was er selbst geschickt hat.
+
+    Ein echter Beleg schlaegt jede gebaute Karte — der Zuschauer sieht
+    sofort, ob etwas echt ist. Bisher wusste der Regisseur nichts davon.
+    """
+    if not material:
+        return ""
+    zeilen = []
+    for m in material:
+        if not isinstance(m, dict) or not m.get("url"):
+            continue
+        px = m.get("quelle_px") or []
+        zeilen.append("- %s\n  %s%s" % (
+            str(m.get("was") or m.get("im_bild") or "Fundstueck")[:120],
+            m["url"],
+            ("  (%dx%d)" % (px[0], px[1])) if len(px) == 2 else ""))
+    if not zeilen:
+        return ""
+    return ("\nVORHANDENES MATERIAL — ECHT, NICHT GEBAUT\n"
+            + "\n".join(zeilen)
+            + "\nSetz es als Ebene (kind: image, url, quelle_px). Es gehoert an "
+              "die Stelle, an der er DAVON spricht: ein Beleg zur Anleitung "
+              "gehoert in die Anleitung, nicht an den Anfang. Ein nachgebauter "
+              "Kasten mit derselben Aussage ist die schwaechere Fassung.\n")
 
 
 class OpenSessionRequest(BaseModel):
     facecam:      str
     client_id:    str = "justus"
     briefing:     Optional[dict] = None
+    material:     Optional[list] = None   # Fundstuecke, eigene Uploads
     trim:         bool = True
     turn_budget:  int = TURN_BUDGET
 
@@ -8063,7 +8093,8 @@ def tool_session_open(req: OpenSessionRequest):
     frames = int(round(duration * FPS))
     # Einmal bauen, danach nie wieder anfassen — der Cache haengt an der
     # Byte-Gleichheit dieses Strings.
-    prefix = _build_prefix(duration, frames, face, words, onsets, style)
+    prefix = _build_prefix(duration, frames, face, words, onsets, style,
+                           req.material)
     s = {
         "prefix": prefix,
         "prefix_sha": hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:16],
@@ -10842,6 +10873,7 @@ class LoopRequest(BaseModel):
     session_id:  str = ""       # vorhandene Sitzung fortsetzen
     client_id:   str = "justus"
     briefing:    Optional[dict] = None
+    material:    Optional[list] = None
     trim:        bool = True
     turn_budget: int = TURN_BUDGET
     model:       str = "anthropic/claude-sonnet-4.5"
@@ -10859,7 +10891,9 @@ def _loop_job(job_id: str, req: LoopRequest):
         else:
             opened = tool_session_open(OpenSessionRequest(
                 facecam=req.facecam, client_id=req.client_id,
-                briefing=req.briefing, trim=req.trim, turn_budget=req.turn_budget))
+                briefing=req.briefing, material=req.material,
+                                trim=req.trim,
+                                turn_budget=req.turn_budget))
             s = _sess(opened["session_id"])
         LOOP_JOBS[job_id] = {"status": "processing", "session_id": s["id"]}
         LOOP_JOBS[job_id] = {"status": "done", "session_id": s["id"],

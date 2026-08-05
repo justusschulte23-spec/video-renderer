@@ -8016,6 +8016,52 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
     }
 
 
+def _schnitte_vorgeben(layers: list, words: list, frames: int) -> int:
+    """Schnitte an allen Pausen setzen, bevor der Agent startet.
+
+    Die Stellen stehen fest, sobald das Transkript da ist — das ist eine
+    Ableitung, keine Entscheidung. Sie einzeln vom Modell setzen zu lassen
+    hat im Lauf vom 05.08. vier Turns gekostet und null Schnitte erzeugt.
+    """
+    cam = next((l for l in layers
+                if (l.get("source") or {}).get("kind") == "facecam"), None)
+    if not cam:
+        return 0
+    punch = (cam.get("modifiers") or {}).get("punch")
+    if not isinstance(punch, dict):
+        punch = {"frames": [], "hookEndFrame": 0, "outroStartFrame": 0,
+                 "base": 1.04}
+        cam.setdefault("modifiers", {})["punch"] = punch
+    vorhanden = set(punch.get("frames") or [])
+    for p in _pausen(words, frames / FPS):
+        f = int(round(p * FPS))
+        if 0 <= f < frames:
+            vorhanden.add(f)
+    punch["frames"] = sorted(vorhanden)
+    return len(punch["frames"])
+
+
+# Nicht jeder Peak ist ein Impact — sonst klingt es wie ein Drumcomputer.
+IMPACT_ABSTAND_S = 8.0
+IMPACT_ASSETS = ["impact_digital_boom_01", "impact_bass_drop_01",
+                 "impact_cinematic_hit_01"]
+
+
+def _impacts_vorgeben(onsets: list, duration: float) -> list:
+    """Impacts auf die staerksten Betonungen, mit Mindestabstand."""
+    aus, letzte = [], -99.0
+    for i, t in enumerate(onsets or []):
+        t = float(t)
+        if t < 0.3 or t > duration - 0.5 or t - letzte < IMPACT_ABSTAND_S:
+            continue
+        aus.append({"asset": IMPACT_ASSETS[len(aus) % len(IMPACT_ASSETS)],
+                    "time": round(t, 3), "gain": 1.0})
+        letzte = t
+        if len(aus) >= 6:
+            break
+    return aus
+
+
 def _build_prefix(duration: float, frames_gesamt: int, face: dict, words: list,
                   onsets: list, style: str,
                   material: Optional[list] = None) -> str:
@@ -8163,6 +8209,14 @@ def tool_session_open(req: OpenSessionRequest):
     BUILD_SESSIONS[sid] = s
     log.info("[SESSION] %s offen: %.1fs, %d Woerter, Gesicht %s, %d Transienten",
              sid, duration, len(words), bool(face), len(onsets))
+    # Ableitungen VOR dem Agenten: Schnitte an allen Pausen, Impacts auf den
+    # staerksten Betonungen. Beides steht fest, sobald Transkript und Peaks
+    # da sind — das ist Ableitung, keine Entscheidung. Am 05.08. hat der
+    # Agent vier Turns mit cut verbracht und null Schnitte erzeugt.
+    n_cuts = _schnitte_vorgeben(s["layers"], words, frames)
+    s["sfx"] = _impacts_vorgeben(onsets, duration)
+    log.info("[SESSION] %s vorgegeben: %d Schnitte an Pausen, %d Impacts",
+             sid, n_cuts, len(s["sfx"]))
     return {"ok": True, "session_id": sid, "duration": round(duration, 3), "frames": frames,
             "fps": FPS, "face_url": face_url, "contact_sheet": sheet_url,
             "words": len(words), "face": face, "onsets": len(onsets),
@@ -8332,30 +8386,21 @@ def _fertig(s: dict) -> dict:
     _frames = (((_cam or {}).get("modifiers") or {}).get("punch")
                or {}).get("frames") or []
     _schnitte = len(_frames)
-    # Geschnitten wird AN DEN PAUSEN, nicht im Takt. Ein Schnitt je 25
-    # Sekunden war eine erfundene Regel; die Konvention ist: wo Stille ist,
-    # wird geschnitten.
+    # Schnitte und Impacts stehen seit dem Oeffnen der Sitzung — sie sind
+    # abgeleitet, nicht erarbeitet. Als Abnahmebedingung waeren sie
+    # Buchhaltung ueber etwas, das ohnehin da ist.
     _pausen_s = _pausen(s.get("words") or [], dauer_s)
     _gesetzt = [f / FPS for f in _frames]
     _ohne = [p for p in _pausen_s
              if not any(abs(p - g) <= SCHNITT_FENSTER_S for g in _gesetzt)]
-    noetig_c = len(_pausen_s)
-    if _ohne:
-        offen.append("%d von %d Pausen ohne Schnitt — bei %s%s"
-                     % (len(_ohne), noetig_c,
-                        ", ".join(f"{p:.1f}s" for p in _ohne[:6]),
-                        " …" if len(_ohne) > 6 else ""))
-    noetig_sfx = max(1, int(dauer_s // 20))
-    if len(s.get("sfx") or []) < noetig_sfx:
-        offen.append(f"{len(s.get('sfx') or [])} von {noetig_sfx} Impacts "
-                     f"(add_sfx auf einer Betonung)")
+
     return {"fertig": not offen, "offen": offen, "fehler": fehler,
             "ebenen_ohne_facecam": len(deko),
             "uebernahmen": len(uebern), "uebernahmen_noetig": noetig_u,
             "material_offen": _material_offen(s),
             "schnitte": _schnitte, "pausen": _pausen_s,
             "pausen_ohne_schnitt": _ohne,
-            "impacts": len(s.get("sfx") or []), "impacts_noetig": noetig_sfx,
+            "impacts": len(s.get("sfx") or []),
             "bewegung_ab_null": bewegung,
             "groesste_luecke_s": round(luecke_f / FPS, 1),
             "luecke_ab_s": round(luecke_ab / FPS, 1),
@@ -9175,11 +9220,17 @@ def _material_offen(s: dict) -> list:
         u = ((l.get("source") or {}).get("url") or "")
         if u:
             gesetzt.add(u)
-    abgelehnt = set((s.get("material_abgelehnt") or {}).keys())
+    # Ueber den Dateinamen, nicht die ganze URL: ein Zeichen Unterschied —
+    # ein Query-Parameter, ein anderer Host — und die Ablehnung zaehlte
+    # nicht. Am 05.08. hat der Agent abgelehnt und es kam nicht an.
+    def _name(u):
+        return str(u or "").rsplit("/", 1)[-1].split("?")[0]
+    gesetzt = {_name(g) for g in gesetzt}
+    abgelehnt = {_name(a) for a in (s.get("material_abgelehnt") or {})}
     offen = []
     for m in (s.get("material") or []):
         u = (m or {}).get("url")
-        if u and u not in gesetzt and u not in abgelehnt:
+        if u and _name(u) not in gesetzt and _name(u) not in abgelehnt:
             offen.append(u)
     return offen
 
@@ -9210,6 +9261,19 @@ def tool_place_layer(req: PlaceLayerRequest):
         raise HTTPException(status_code=422, detail={
             "abgelehnt": "alle", "fehler": [{"regel": "doppelte_id",
                                              "text": "zwei Ebenen im selben Aufruf teilen sich eine id"}]})
+    # Wird eine Pflichtebene ersetzt, wandern ihre Modifier mit. Der Agent
+    # hat am 05.08. die Facecam mit place_layer ueberschrieben und dabei
+    # handheld, grade und punch verloren — danach schlug jeder cut mit 400
+    # fehl, viermal hintereinander, ohne dass irgendwo ein Zusammenhang
+    # sichtbar war.
+    alt_mods = {l["id"]: l.get("modifiers") for l in s["layers"]
+                if _ist_pflicht(l)}
+    for n in neue:
+        if n["id"] in alt_mods and alt_mods[n["id"]]:
+            behalten = dict(alt_mods[n["id"]])
+            behalten.update({k: v for k, v in (n.get("modifiers") or {}).items()
+                             if v not in (None, False)})
+            n["modifiers"] = behalten
     kandidat = [l for l in s["layers"] if l["id"] not in neue_ids] + neue
     fehler = _hard_check(kandidat, s.get("face") or {})
     if fehler:

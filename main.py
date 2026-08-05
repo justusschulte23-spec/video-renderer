@@ -7657,6 +7657,27 @@ SEKUNDEN_PRO_EBENE = 15.0   # grosszuegig — die Lueckenregel macht die Arbeit
 MIN_LAYERS_ABSOLUT = 3
 
 
+PAUSE_MIN_S = 0.35          # kuerzere Luecken sind Sprechrhythmus, keine Pause
+SCHNITT_FENSTER_S = 0.5     # so nah muss der Schnitt an der Pause liegen
+
+
+def _pausen(words: list, duration: float = 0.0) -> list:
+    """Mitte jeder Sprechpause, in Sekunden.
+
+    Dieselbe Schwelle wie im Silence-Trimmer (_compute_keep_segments):
+    Luecken bis 0,3-0,35 s sind natuerliche Kadenz, alles darueber ist eine
+    Pause. Hier wird nichts neu erfunden — nur das gelesen, was ohnehin in
+    den Wortzeiten steht.
+    """
+    aus = []
+    for i in range(len(words or []) - 1):
+        e = float(words[i].get("end") or words[i].get("start") or 0)
+        a = float(words[i + 1].get("start") or 0)
+        if a - e >= PAUSE_MIN_S:
+            aus.append(round((e + a) / 2, 2))
+    return aus
+
+
 def _min_ebenen(duration: float) -> int:
     """Boden, nicht Ziel. Fuenf Ebenen alle im ersten Drittel fallen trotzdem
     durch, drei gleichmaessig verteilte kommen durch — das entscheidet die
@@ -8305,16 +8326,25 @@ def _fertig(s: dict) -> dict:
     # Schnitt und Ton gehoeren zum Handwerk, nicht zur Kuer. Beide Befehle
     # gibt es seit Monaten; im Lauf vom 05.08. wurde keiner benutzt.
     dauer_s = s["frames"] / FPS
-    noetig_c = max(1, int(dauer_s // 25))
-    # cut schreibt in die Facecam-Ebene, nicht in s["cuts"] — eine Zaehlung
-    # auf s["cuts"] waere nie erfuellbar gewesen.
+    # cut schreibt in die Facecam-Ebene, nicht in s["cuts"].
     _cam = next((l for l in s["layers"]
                  if (l.get("source") or {}).get("kind") == "facecam"), None)
-    _schnitte = len((((_cam or {}).get("modifiers") or {}).get("punch")
-                     or {}).get("frames") or [])
-    if _schnitte < noetig_c:
-        offen.append(f"{_schnitte} von {noetig_c} harten Schnitten "
-                     f"(cut auf der Facecam, an der Stelle wo der Gedanke kippt)")
+    _frames = (((_cam or {}).get("modifiers") or {}).get("punch")
+               or {}).get("frames") or []
+    _schnitte = len(_frames)
+    # Geschnitten wird AN DEN PAUSEN, nicht im Takt. Ein Schnitt je 25
+    # Sekunden war eine erfundene Regel; die Konvention ist: wo Stille ist,
+    # wird geschnitten.
+    _pausen_s = _pausen(s.get("words") or [], dauer_s)
+    _gesetzt = [f / FPS for f in _frames]
+    _ohne = [p for p in _pausen_s
+             if not any(abs(p - g) <= SCHNITT_FENSTER_S for g in _gesetzt)]
+    noetig_c = len(_pausen_s)
+    if _ohne:
+        offen.append("%d von %d Pausen ohne Schnitt — bei %s%s"
+                     % (len(_ohne), noetig_c,
+                        ", ".join(f"{p:.1f}s" for p in _ohne[:6]),
+                        " …" if len(_ohne) > 6 else ""))
     noetig_sfx = max(1, int(dauer_s // 20))
     if len(s.get("sfx") or []) < noetig_sfx:
         offen.append(f"{len(s.get('sfx') or [])} von {noetig_sfx} Impacts "
@@ -8323,7 +8353,8 @@ def _fertig(s: dict) -> dict:
             "ebenen_ohne_facecam": len(deko),
             "uebernahmen": len(uebern), "uebernahmen_noetig": noetig_u,
             "material_offen": _material_offen(s),
-            "schnitte": _schnitte, "schnitte_noetig": noetig_c,
+            "schnitte": _schnitte, "pausen": _pausen_s,
+            "pausen_ohne_schnitt": _ohne,
             "impacts": len(s.get("sfx") or []), "impacts_noetig": noetig_sfx,
             "bewegung_ab_null": bewegung,
             "groesste_luecke_s": round(luecke_f / FPS, 1),
@@ -10505,9 +10536,15 @@ gestaucht, deshalb ist diese Zahl nicht verhandelbar.
 Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 
 SCHNITT UND TON GEHOEREN DAZU
-Ein Video ohne harten Schnitt ist eine Aufnahme, kein Schnitt. cut setzt
-einen auf der Facecam — an der Stelle, an der der Gedanke kippt, nicht im
-Takt. add_sfx legt einen Impact auf eine Betonung; die Zeiten stehen in
+Geschnitten wird AN DEN PAUSEN. Wo er Luft holt oder absetzt, sitzt der
+Schnitt — nicht in einem Takt und nicht nach Gefuehl. Das ist die
+Konvention dieses Kanals und keine Empfehlung.
+
+session_tick nennt dir die Pausen in Sekunden und sagt, an welcher noch
+kein Schnitt sitzt. cut rastet selbst auf die naechste Betonung, du musst
+den Frame nicht auf die Stelle genau treffen.
+
+add_sfx legt einen Impact auf eine Betonung; die Zeiten stehen in
 read_audio_peaks. Beides verlangt session_tick.
 
 VORHANDENES MATERIAL: SETZEN ODER BEGRUENDET ABLEHNEN

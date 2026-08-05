@@ -8684,6 +8684,201 @@ async def tool_screenshot_url(req: ScreenshotRequest):
         shutil.rmtree(job, ignore_errors=True)
 
 
+SCRAPE_TIMEOUT_S = 30       # harte Grenze je Aufruf
+
+
+class SchnappschussRequest(BaseModel):
+    session_id: str = ""
+    url:        str
+    ziel:       str = ""        # CSS-Selektor ODER Textstelle
+    zoom:       float = 1.0     # 1.0 - 3.0
+    breite:     int = 1280
+    hoehe:      int = 900
+    warten_ms:  int = 1200
+
+
+async def _ziel_finden(seite, ziel: str):
+    """Erst als Selektor lesen, dann als Textstelle.
+
+    Der Regisseur denkt in Inhalten ("der Abschnitt mit 'rate limit'"),
+    nicht in CSS. Beides muss gehen, sonst braucht er vorher einen Blick
+    in den Quelltext — und den hat er nicht.
+    """
+    ziel = (ziel or "").strip()
+    if not ziel:
+        return None, "sichtbarer Bereich"
+    if ziel.startswith((".", "#", "[")) or ziel.split()[0] in (
+            "main", "article", "section", "table", "pre", "code", "header"):
+        try:
+            el = await seite.query_selector(ziel)
+            if el:
+                return el, "Selektor " + ziel
+        except Exception:
+            pass
+    # Textstelle: der kleinste Block, der den Text enthaelt.
+    try:
+        el = seite.locator(
+            "css=p,li,td,th,pre,code,h1,h2,h3,h4,section,div"
+        ).filter(has_text=ziel).last
+        if await el.count() > 0:
+            return await el.element_handle(), "Textstelle '%s'" % ziel[:40]
+    except Exception:
+        pass
+    return None, "nicht gefunden: " + ziel[:60]
+
+
+@app.post("/tool/schnappschuss")
+async def tool_schnappschuss(req: SchnappschussRequest):
+    """Einen Ausschnitt einer oeffentlichen Seite holen."""
+    ok, grund = _url_erlaubt(req.url)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"URL abgelehnt: {grund}")
+    zoom = max(1.0, min(3.0, float(req.zoom or 1.0)))
+    schluessel = ("shot", req.url, req.ziel, round(zoom, 2), req.breite, req.hoehe)
+    if schluessel in SCREENSHOT_CACHE:
+        return {**SCREENSHOT_CACHE[schluessel], "aus_cache": True}
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Playwright fehlt")
+    job = Path(f"/tmp/shot_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    ziel_datei = job / "shot.png"
+
+    async def _holen():
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox"])
+            seite = await browser.new_page(
+                viewport={"width": req.breite, "height": req.hoehe},
+                device_scale_factor=2 * zoom)
+            try:
+                try:
+                    await seite.goto(req.url, timeout=20000, wait_until="networkidle")
+                except Exception:
+                    await seite.goto(req.url, timeout=20000,
+                                     wait_until="domcontentloaded")
+                await seite.wait_for_timeout(req.warten_ms)
+                el, was = await _ziel_finden(seite, req.ziel)
+                if req.ziel and el is None:
+                    raise HTTPException(status_code=404, detail=was)
+                if el is not None:
+                    await el.scroll_into_view_if_needed(timeout=5000)
+                    await seite.wait_for_timeout(250)
+                    await el.screenshot(path=str(ziel_datei))
+                else:
+                    # Ausdruecklich NICHT full_page: die ganze Seite ist auf
+                    # 9:16 unlesbar. Der sichtbare Bereich ist die Obergrenze.
+                    await seite.screenshot(path=str(ziel_datei), full_page=False)
+                return was
+            finally:
+                await browser.close()
+
+    try:
+        was = await asyncio.wait_for(_holen(), timeout=SCRAPE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        shutil.rmtree(job, ignore_errors=True)
+        raise HTTPException(status_code=504,
+                            detail=f"Seite hat laenger als {SCRAPE_TIMEOUT_S}s gebraucht")
+    try:
+        from PIL import Image
+        with Image.open(ziel_datei) as im:
+            qw, qh = im.size
+        url = upload_supabase(ziel_datei, f"shot_{uuid.uuid4().hex[:10]}",
+                              folder="screenshots")
+        if not url:
+            raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
+        _log_einheit("schnappschuss", "seite", 1, 0, status="ok")
+        treffer = {"ok": True, "url": url, "quelle_px": [qw, qh],
+                   "im_bild": was, "zoom": zoom,
+                   "layer_source": {"kind": "image", "url": url,
+                                    "quelle_px": [qw, qh]},
+                   "hinweis": "Setz die Ebene mit dem Verhaeltnis aus quelle_px."}
+        SCREENSHOT_CACHE[schluessel] = treffer
+        return treffer
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
+class MarkiereRequest(BaseModel):
+    session_id: str = ""
+    bild:       str                  # URL
+    bereich:    list                 # [x, y, w, h] als Anteil 0-1
+    art:        str = "rahmen"       # rahmen|unterstrich|lupe|abdunkeln
+    client_id:  str = "justus"
+
+
+@app.post("/tool/markiere")
+def tool_markiere(req: MarkiereRequest):
+    """Einen Bereich auf einem vorhandenen Bild hervorheben.
+
+    Auch auf einem, das Justus selbst geschickt hat. Die Farbe kommt aus
+    clients.brand_colors — bei Tim Petrol, bei Justus Amethyst. Rahmen 3px,
+    keine Neonraender.
+    """
+    from PIL import Image, ImageDraw
+    if req.art not in ("rahmen", "unterstrich", "lupe", "abdunkeln"):
+        raise HTTPException(status_code=400, detail="art unbekannt: " + req.art)
+    try:
+        x, y, bw, bh = [float(v) for v in (req.bereich or [])[:4]]
+    except Exception:
+        raise HTTPException(status_code=400,
+                            detail="bereich braucht [x, y, w, h] als Anteil 0-1")
+    # Dieselbe Quelle wie der Rest des Renderers: das Template des Kunden.
+    # brand_colors im Dashboard und colors im Template sind zwei Ablagen
+    # derselben Sache — hier zaehlt die, aus der auch die Captions kommen.
+    akzent = "#8B5CF6"
+    try:
+        farben = _tpl_colors(_load_template(req.client_id, None))
+        akzent = (farben.get("akzent") or farben.get("accent")
+                  or farben.get("primary") or akzent)
+    except Exception as exc:
+        log.warning("[MARK] Farbe nicht geladen (%s) — Rueckfall %s", exc, akzent)
+    job = Path(f"/tmp/mark_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    quelle = job / "in.png"
+    ziel = job / "out.png"
+    try:
+        with requests.get(req.bild, timeout=60, stream=True) as r:
+            r.raise_for_status()
+            quelle.write_bytes(r.content)
+        im = Image.open(quelle).convert("RGBA")
+        W0, H0 = im.size
+        kasten = (int(x * W0), int(y * H0), int((x + bw) * W0), int((y + bh) * H0))
+        if req.art == "abdunkeln":
+            # Alles ausser dem Bereich wird gedimmt — die Aufmerksamkeit
+            # kommt vom Kontrast, nicht von einem Rahmen.
+            dunkel = Image.new("RGBA", im.size, (0, 0, 0, 150))
+            aus = Image.alpha_composite(im, dunkel)
+            aus.paste(im.crop(kasten), kasten[:2])
+            im = aus
+        else:
+            d = ImageDraw.Draw(im)
+            if req.art == "rahmen":
+                d.rectangle(kasten, outline=akzent, width=3)
+            elif req.art == "unterstrich":
+                d.line([(kasten[0], kasten[3]), (kasten[2], kasten[3])],
+                       fill=akzent, width=4)
+            elif req.art == "lupe":
+                aus = im.crop(kasten)
+                faktor = min(2.0, W0 / max(1, aus.width))
+                aus = aus.resize((int(aus.width * faktor), int(aus.height * faktor)))
+                d2 = ImageDraw.Draw(aus)
+                d2.rectangle([(0, 0), (aus.width - 1, aus.height - 1)],
+                             outline=akzent, width=3)
+                im = aus
+        im.convert("RGB").save(ziel, "PNG")
+        url = upload_supabase(ziel, f"mark_{uuid.uuid4().hex[:10]}",
+                              folder="screenshots")
+        if not url:
+            raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
+        return {"ok": True, "url": url, "quelle_px": list(im.size),
+                "art": req.art, "akzent": akzent,
+                "layer_source": {"kind": "image", "url": url,
+                                 "quelle_px": list(im.size)}}
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
 # ── Bauen ─────────────────────────────────────────────────────────────────────
 class PlaceLayerRequest(BaseModel):
     session_id: str
@@ -10161,6 +10356,22 @@ def _tool_specs() -> list:
            "selektor": {"type": "string"},
            "breite": {"type": "integer"}, "hoehe": {"type": "integer"}},
           ["url"]),
+        T("schnappschuss",
+          "Ausschnitt einer OEFFENTLICHEN Seite holen. ziel ist ein CSS-Selektor ODER "
+          "eine Textstelle (\"der Abschnitt mit 'rate limit'\"). zoom 1.0-3.0 "
+          "vergroessert. Ohne ziel kommt der sichtbare Bereich — nie die ganze "
+          "Seite, die ist auf 9:16 unlesbar. Nicht fuer Seiten mit Login.",
+          {"url": {"type": "string"}, "ziel": {"type": "string"},
+           "zoom": {"type": "number"}},
+          ["url"]),
+        T("markiere",
+          "Einen Bereich auf einem vorhandenen Bild hervorheben — auch auf einem, "
+          "das er selbst geschickt hat. bereich ist [x,y,w,h] als Anteil 0-1. "
+          "art: rahmen | unterstrich | lupe | abdunkeln. Farbe kommt aus der Marke.",
+          {"bild": {"type": "string"}, "bereich": {"type": "array"},
+           "art": {"type": "string",
+                   "enum": ["rahmen", "unterstrich", "lupe", "abdunkeln"]}},
+          ["bild", "bereich"]),
         T("place_layer", "Ebenen setzen — eine in 'layer' ODER mehrere auf einmal in "
           "'layers'. Mehrere zusammen zu setzen ist der Normalfall: es wird alles "
           "zusammen geprueft, und entweder stehen alle oder keine. Das spart Turns.",

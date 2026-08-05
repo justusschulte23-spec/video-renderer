@@ -8504,6 +8504,84 @@ def tool_generate_image(req: GenerateImageRequest):
         shutil.rmtree(job, ignore_errors=True)
 
 
+@app.get("/tool/diag/playwright")
+async def diag_playwright():
+    """Was der vorhandene Stack wirklich kann — gemessen, nicht angenommen.
+
+    Die letzten drei Fehlschlaege lagen an einer Annahme ueber die Umgebung.
+    Bevor ein Beschaffer mit Video-Aufnahme gebaut wird, steht hier, ob der
+    Container das ueberhaupt hergibt.
+    """
+    import platform
+    aus = {"python": platform.python_version()}
+    try:
+        aus["cpus"] = os.cpu_count()
+        with open("/proc/meminfo") as f:
+            mi = {a.split(":")[0]: a.split()[1] for a in f if ":" in a}
+        aus["mem_total_mb"] = int(mi.get("MemTotal", 0)) // 1024
+        aus["mem_frei_mb"] = int(mi.get("MemAvailable", 0)) // 1024
+    except Exception as e:
+        aus["mem_fehler"] = str(e)[:80]
+    try:
+        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+        aus["ffmpeg"] = (r.stdout or "").splitlines()[0][:60]
+    except Exception as e:
+        aus["ffmpeg"] = "fehlt: " + str(e)[:60]
+    try:
+        import playwright
+        aus["playwright"] = getattr(playwright, "__version__", "?")
+    except Exception as e:
+        return {**aus, "playwright": "fehlt: " + str(e)[:80]}
+
+    job = Path(f"/tmp/diag_{uuid.uuid4().hex[:6]}")
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        from playwright.async_api import async_playwright
+        t0 = time.time()
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox"])
+            aus["chromium"] = browser.version
+            aus["start_ms"] = int((time.time() - t0) * 1000)
+            # Video-Aufnahme: Playwright schreibt webm ueber den Browser
+            # selbst. Ob das im Container laeuft, zeigt nur der Versuch.
+            ctx = await browser.new_context(
+                viewport={"width": 640, "height": 480},
+                record_video_dir=str(job),
+                record_video_size={"width": 640, "height": 480})
+            seite = await ctx.new_page()
+            await seite.set_content(
+                "<body style='margin:0'><div id=x "
+                "style='width:100px;height:100px;background:#8B5CF6'></div>"
+                "<script>let i=0;setInterval(()=>{document.getElementById('x')"
+                ".style.marginLeft=(i=(i+7)%400)+'px'},33)</script></body>")
+            await seite.wait_for_timeout(1500)
+            await ctx.close()
+            await browser.close()
+        vids = list(job.glob("*.webm"))
+        if vids:
+            v = vids[0]
+            aus["video"] = {"ok": True, "bytes": v.stat().st_size}
+            try:
+                pr = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries",
+                     "format=duration:stream=width,height,codec_name",
+                     "-of", "default=nw=1", str(v)],
+                    capture_output=True, text=True)
+                aus["video"]["ffprobe"] = " ".join((pr.stdout or "").split())[:120]
+            except Exception as e:
+                aus["video"]["ffprobe"] = "fehler " + str(e)[:60]
+        else:
+            aus["video"] = {"ok": False, "grund": "keine webm geschrieben"}
+    except Exception as e:
+        aus["playwright_fehler"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+    # Laeuft der Render-Loop gerade? Ein Scrape darf ihn nicht blockieren.
+    aus["loop_jobs_aktiv"] = len([j for j in LOOP_JOBS.values()
+                                  if (j or {}).get("status") == "processing"])
+    return aus
+
+
 # ── Echte Seiten ──────────────────────────────────────────────────────────────
 class ScreenshotRequest(BaseModel):
     session_id: str = ""

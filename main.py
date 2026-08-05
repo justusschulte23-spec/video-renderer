@@ -8770,22 +8770,26 @@ async def _warten_auf_inhalt(seite, ziel: str, max_ms: int = 10000) -> bool:
         return False
 
 
-async def _ziel_finden(seite, ziel: str, wert: bool = False):
-    """Erst als Selektor lesen, dann als Textstelle.
+MAX_BLOCK_PX = 1200          # darueber ist es ein Wrapper, kein Block
 
-    Der Regisseur denkt in Inhalten ("der Abschnitt mit 'rate limit'"),
-    nicht in CSS. Beides muss gehen, sonst braucht er vorher einen Blick
-    in den Quelltext — und den hat er nicht.
+
+async def _ziele_finden(seite, ziel: str, wert: bool = False):
+    """Alle brauchbaren Bloecke zum Suchbegriff — nicht einen.
+
+    Rueckgabe: (liste, hinweis). Jeder Eintrag ist
+    {el, y, h, b, text}. Die Auswahl trifft der Regisseur.
     """
     ziel = (ziel or "").strip()
     if not ziel:
-        return None, "sichtbarer Bereich", ""
+        return [], ""
     if ziel.startswith((".", "#", "[")) or ziel.split()[0] in (
             "main", "article", "section", "table", "pre", "code", "header"):
         try:
             el = await seite.query_selector(ziel)
             if el:
-                return el, "Selektor " + ziel, ""
+                k = await el.bounding_box() or {}
+                return ([{"el": el, "y": k.get("y", 0), "h": k.get("height", 0),
+                          "b": k.get("width", 0), "text": "Selektor " + ziel}], "")
         except Exception:
             pass
     # Wortgrenze, sonst trifft "Starter" das Wort "Firestarters".
@@ -8794,55 +8798,67 @@ async def _ziel_finden(seite, ziel: str, wert: bool = False):
         treffer = seite.locator(
             "css=section,article,table,pre,div,li,p,h1,h2,h3"
         ).filter(has_text=muster)
-        n = min(await treffer.count(), 12)
+        n = min(await treffer.count(), 24)
     except Exception:
-        return None, "Suche fehlgeschlagen", ""
-    # Von oben nach unten, nicht von unten: '.last' war immer der Footer.
-    bester, bester_rang = None, None
+        return [], "Suche fehlgeschlagen"
+    roh, zu_gross = [], 0
     for i in range(n):
         el = treffer.nth(i)
         try:
             if not await el.is_visible():
                 continue
-            kasten = await el.bounding_box()
-            if not kasten:
+            k = await el.bounding_box()
+            if not k:
                 continue
             text = (await el.inner_text())[:400]
         except Exception:
             continue
         if BANNER_WORT.search(text):
             continue
-        # Wert-Modus: nur Bloecke, in denen das Wort MIT einer Zahl steht.
-        # "credits" allein steht auf jeder Zeile der Seite, "5,000 credits"
-        # genau einmal.
         if wert and not re.search(r"\d", text):
             continue
-        h, b = kasten["height"], kasten["width"]
-        if h < 120 or b < 200:          # Menuezeile, Badge, Fussnote
+        h, br = k["height"], k["width"]
+        if h < 120 or br < 200:              # Menuezeile, Badge, Fussnote
             continue
-        # Der kleinste Block, der den Text traegt und noch lesbar ist —
-        # ein <div> um die halbe Seite ist kein Beleg.
-        if h > 1600:
+        if h > MAX_BLOCK_PX or br > MAX_BLOCK_PX:
+            zu_gross += 1
             continue
-        rang = (h, kasten["y"]) if wert else (kasten["y"], h)
-        if bester_rang is None or rang < bester_rang:
-            bester, bester_rang = el, rang
-    if bester is None:
-        return None, "nichts Brauchbares zu '%s' gefunden" % ziel[:40], (
-            "Kein sichtbarer Block mit diesem Wort, der gross genug und kein "
-            "Banner ist. Anderer Suchbegriff oder ein CSS-Selektor.")
-    return await bester.element_handle(), "Textstelle '%s'" % ziel[:40], ""
+        roh.append({"el": el, "y": k["y"], "h": h, "b": br, "text": text})
+    if not roh:
+        rat = ("Kein Block dieser Groesse. " + (
+            "%d Treffer waren groesser als %dpx — das sind Wrapper, keine "
+            "Bloecke. Such enger: die konkrete Zahl oder den Preis, nicht den "
+            "Tarifnamen." % (zu_gross, MAX_BLOCK_PX) if zu_gross else
+            "Anderer Suchbegriff oder ein CSS-Selektor."))
+        return [], rat
+    # Verschachtelte Treffer entfernen: liegen zwei Bloecke fast
+    # uebereinander, ist der aeussere nur die Huelle des inneren.
+    roh.sort(key=lambda x: (x["y"], x["h"]))
+    aus = []
+    for r in roh:
+        if any(abs(r["y"] - g["y"]) < 12 and r["h"] >= g["h"] for g in aus):
+            continue
+        aus.append(r)
+        if len(aus) >= 5:
+            break
+    return aus, ""
 
 
 @app.post("/tool/schnappschuss")
 async def tool_schnappschuss(req: SchnappschussRequest):
-    """Einen Ausschnitt einer oeffentlichen Seite holen."""
+    """Ausschnitte einer OEFFENTLICHEN Seite holen.
+
+    Passt genau ein Block, kommt er direkt zurueck. Passen mehrere, kommen
+    ALLE als Kandidaten — der Regisseur waehlt. Auf einer Tarifliste sind
+    das drei bis fuenf Karten; die Information, welche gemeint ist, steht
+    im Skript und nicht auf der Seite.
+    """
     ok, grund = _url_erlaubt(req.url)
     if not ok:
         raise HTTPException(status_code=400, detail=f"URL abgelehnt: {grund}")
     zoom = max(1.0, min(3.0, float(req.zoom or 1.0)))
     schluessel = ("shot", req.url, req.ziel, bool(req.wert),
-              round(zoom, 2), req.breite, req.hoehe)
+                  round(zoom, 2), req.breite, req.hoehe)
     if schluessel in SCREENSHOT_CACHE:
         return {**SCREENSHOT_CACHE[schluessel], "aus_cache": True}
     try:
@@ -8851,9 +8867,9 @@ async def tool_schnappschuss(req: SchnappschussRequest):
         raise HTTPException(status_code=500, detail="Playwright fehlt")
     job = Path(f"/tmp/shot_{uuid.uuid4().hex[:8]}")
     job.mkdir(parents=True, exist_ok=True)
-    ziel_datei = job / "shot.png"
 
     async def _holen():
+        aus = []
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(args=["--no-sandbox"])
             seite = await browser.new_page(
@@ -8872,46 +8888,62 @@ async def tool_schnappschuss(req: SchnappschussRequest):
                     raise HTTPException(status_code=404, detail={
                         "grund": "'%s' war nach 10s nicht auf der Seite" % req.ziel[:60],
                         "rat": "Die Seite rendert clientseitig oder das Wort steht "
-                               "dort anders. Bei einem Wert: wert=true und nach der "
-                               "Einheit suchen (credits, Preis), nicht nach dem Namen."})
-                el, was, rat = await _ziel_finden(seite, req.ziel, bool(req.wert))
-                if req.ziel and el is None:
-                    # Lieber nichts als etwas Halbpassendes: ein irrelevanter
-                    # Beleg im Video ist schlechter als gar keiner.
-                    raise HTTPException(status_code=404,
-                                        detail={"grund": was, "rat": rat})
-                if el is not None:
-                    await el.scroll_into_view_if_needed(timeout=5000)
-                    await seite.wait_for_timeout(250)
-                    await el.screenshot(path=str(ziel_datei))
-                else:
-                    # Ausdruecklich NICHT full_page: die ganze Seite ist auf
-                    # 9:16 unlesbar. Der sichtbare Bereich ist die Obergrenze.
-                    await seite.screenshot(path=str(ziel_datei), full_page=False)
-                return was
+                               "dort anders. Bei einem Wert: nach der konkreten Zahl "
+                               "oder dem Preis suchen, nicht nach dem Tarifnamen."})
+                if not req.ziel:
+                    p = job / "shot_0.png"
+                    await seite.screenshot(path=str(p), full_page=False)
+                    aus.append((p, "sichtbarer Bereich"))
+                    return aus
+                treffer, rat = await _ziele_finden(seite, req.ziel, bool(req.wert))
+                if not treffer:
+                    raise HTTPException(status_code=404, detail={
+                        "grund": "nichts Brauchbares zu '%s'" % req.ziel[:50],
+                        "rat": rat})
+                for i, t in enumerate(treffer):
+                    p = job / f"shot_{i}.png"
+                    try:
+                        await t["el"].scroll_into_view_if_needed(timeout=5000)
+                        await seite.wait_for_timeout(200)
+                        await t["el"].screenshot(path=str(p))
+                        aus.append((p, " ".join(t["text"].split())[:110]))
+                    except Exception:
+                        continue
+                return aus
             finally:
                 await browser.close()
 
     try:
-        was = await asyncio.wait_for(_holen(), timeout=SCRAPE_TIMEOUT_S)
+        bilder = await asyncio.wait_for(_holen(), timeout=SCRAPE_TIMEOUT_S)
     except asyncio.TimeoutError:
         shutil.rmtree(job, ignore_errors=True)
         raise HTTPException(status_code=504,
                             detail=f"Seite hat laenger als {SCRAPE_TIMEOUT_S}s gebraucht")
     try:
         from PIL import Image
-        with Image.open(ziel_datei) as im:
-            qw, qh = im.size
-        url = upload_supabase(ziel_datei, f"shot_{uuid.uuid4().hex[:10]}",
-                              folder="screenshots")
-        if not url:
+        kandidaten = []
+        for p, was in bilder:
+            with Image.open(p) as im:
+                qw, qh = im.size
+            url = upload_supabase(p, f"shot_{uuid.uuid4().hex[:10]}",
+                                  folder="screenshots")
+            if not url:
+                continue
+            kandidaten.append({"url": url, "quelle_px": [qw, qh], "im_bild": was,
+                               "layer_source": {"kind": "image", "url": url,
+                                                "quelle_px": [qw, qh]}})
+        if not kandidaten:
             raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
-        _log_einheit("schnappschuss", "seite", 1, 0, status="ok")
-        treffer = {"ok": True, "url": url, "quelle_px": [qw, qh],
-                   "im_bild": was, "zoom": zoom,
-                   "layer_source": {"kind": "image", "url": url,
-                                    "quelle_px": [qw, qh]},
-                   "hinweis": "Setz die Ebene mit dem Verhaeltnis aus quelle_px."}
+        _log_einheit("schnappschuss", "seite", len(kandidaten), 0, status="ok")
+        if len(kandidaten) == 1:
+            treffer = {"ok": True, **kandidaten[0], "zoom": zoom,
+                       "hinweis": "Setz die Ebene mit dem Verhaeltnis aus quelle_px."}
+        else:
+            treffer = {"ok": True, "kandidaten": kandidaten, "zoom": zoom,
+                       "hinweis": "%d Bloecke passen. Sieh sie dir an und nimm den, "
+                                  "der zum Skript gehoert — auf einer Tarifliste "
+                                  "steht im Skript, welcher Tarif gemeint ist, nicht "
+                                  "auf der Seite." % len(kandidaten)}
         SCREENSHOT_CACHE[schluessel] = treffer
         return treffer
     finally:

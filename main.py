@@ -8751,6 +8751,17 @@ async def _banner_wegklicken(seite) -> None:
         pass
 
 
+TAG_SELEKTOREN = ("main", "article", "section", "table", "pre", "code", "header")
+
+
+def _ist_selektor(ziel: str) -> bool:
+    """Eine Regel fuer alle. Vorher hatte _warten_auf_inhalt eine eigene und
+    hielt 'main' fuer einen Suchtext — die Wartezeit lief dann ins Leere,
+    obwohl die Suche danach den Selektor verstanden haette."""
+    z = (ziel or "").strip()
+    return bool(z) and (z.startswith((".", "#", "[")) or z.split()[0] in TAG_SELEKTOREN)
+
+
 async def _warten_auf_inhalt(seite, ziel: str, max_ms: int = 10000) -> bool:
     """Auf den Zielinhalt warten, nicht auf ein Netz-Ereignis.
 
@@ -8760,7 +8771,7 @@ async def _warten_auf_inhalt(seite, ziel: str, max_ms: int = 10000) -> bool:
     if not ziel:
         return True
     try:
-        if ziel.startswith((".", "#", "[")):
+        if _ist_selektor(ziel):
             await seite.wait_for_selector(ziel, timeout=max_ms, state="visible")
         else:
             await seite.get_by_text(ziel, exact=False).first.wait_for(
@@ -8782,8 +8793,7 @@ async def _ziele_finden(seite, ziel: str, wert: bool = False):
     ziel = (ziel or "").strip()
     if not ziel:
         return [], ""
-    if ziel.startswith((".", "#", "[")) or ziel.split()[0] in (
-            "main", "article", "section", "table", "pre", "code", "header"):
+    if _ist_selektor(ziel):
         try:
             el = await seite.query_selector(ziel)
             if el:

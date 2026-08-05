@@ -8697,6 +8697,33 @@ class SchnappschussRequest(BaseModel):
     warten_ms:  int = 1200
 
 
+BANNER_WEG = [
+    "button:has-text('Accept')", "button:has-text('Alle akzeptieren')",
+    "button:has-text('Akzeptieren')", "button:has-text('Allow all')",
+    "button:has-text('I agree')", "button:has-text('Got it')",
+    "[aria-label='Accept cookies']", "#onetrust-accept-btn-handler",
+]
+BANNER_WORT = re.compile(r"cookie|consent|datenschutz|privacy|newsletter|"
+                         r"abonnier|subscribe", re.I)
+
+
+async def _banner_wegklicken(seite) -> None:
+    """Cookie-Zustimmung wegklicken, bevor gesucht wird.
+
+    Ein Banner liegt ueber allem und wird zuerst gefunden — der erste
+    Beleg-Versuch war ein Fetzen '...ebsite uses cookies'.
+    """
+    for sel in BANNER_WEG:
+        try:
+            el = seite.locator(sel).first
+            if await el.count() > 0 and await el.is_visible():
+                await el.click(timeout=1500)
+                await seite.wait_for_timeout(400)
+                return
+        except Exception:
+            continue
+
+
 async def _ziel_finden(seite, ziel: str):
     """Erst als Selektor lesen, dann als Textstelle.
 
@@ -8706,25 +8733,54 @@ async def _ziel_finden(seite, ziel: str):
     """
     ziel = (ziel or "").strip()
     if not ziel:
-        return None, "sichtbarer Bereich"
+        return None, "sichtbarer Bereich", ""
     if ziel.startswith((".", "#", "[")) or ziel.split()[0] in (
             "main", "article", "section", "table", "pre", "code", "header"):
         try:
             el = await seite.query_selector(ziel)
             if el:
-                return el, "Selektor " + ziel
+                return el, "Selektor " + ziel, ""
         except Exception:
             pass
-    # Textstelle: der kleinste Block, der den Text enthaelt.
+    # Wortgrenze, sonst trifft "Starter" das Wort "Firestarters".
+    muster = re.compile(r"(?<![\w])" + re.escape(ziel) + r"(?![\w])", re.I)
     try:
-        el = seite.locator(
-            "css=p,li,td,th,pre,code,h1,h2,h3,h4,section,div"
-        ).filter(has_text=ziel).last
-        if await el.count() > 0:
-            return await el.element_handle(), "Textstelle '%s'" % ziel[:40]
+        treffer = seite.locator(
+            "css=section,article,table,pre,div,li,p,h1,h2,h3"
+        ).filter(has_text=muster)
+        n = min(await treffer.count(), 12)
     except Exception:
-        pass
-    return None, "nicht gefunden: " + ziel[:60]
+        return None, "Suche fehlgeschlagen", ""
+    # Von oben nach unten, nicht von unten: '.last' war immer der Footer.
+    bester, bester_rang = None, None
+    for i in range(n):
+        el = treffer.nth(i)
+        try:
+            if not await el.is_visible():
+                continue
+            kasten = await el.bounding_box()
+            if not kasten:
+                continue
+            text = (await el.inner_text())[:400]
+        except Exception:
+            continue
+        if BANNER_WORT.search(text):
+            continue
+        h, b = kasten["height"], kasten["width"]
+        if h < 120 or b < 200:          # Menuezeile, Badge, Fussnote
+            continue
+        # Der kleinste Block, der den Text traegt und noch lesbar ist —
+        # ein <div> um die halbe Seite ist kein Beleg.
+        if h > 1600:
+            continue
+        rang = (kasten["y"], h)
+        if bester_rang is None or rang < bester_rang:
+            bester, bester_rang = el, rang
+    if bester is None:
+        return None, "nichts Brauchbares zu '%s' gefunden" % ziel[:40], (
+            "Kein sichtbarer Block mit diesem Wort, der gross genug und kein "
+            "Banner ist. Anderer Suchbegriff oder ein CSS-Selektor.")
+    return await bester.element_handle(), "Textstelle '%s'" % ziel[:40], ""
 
 
 @app.post("/tool/schnappschuss")
@@ -8758,9 +8814,13 @@ async def tool_schnappschuss(req: SchnappschussRequest):
                     await seite.goto(req.url, timeout=20000,
                                      wait_until="domcontentloaded")
                 await seite.wait_for_timeout(req.warten_ms)
-                el, was = await _ziel_finden(seite, req.ziel)
+                await _banner_wegklicken(seite)
+                el, was, rat = await _ziel_finden(seite, req.ziel)
                 if req.ziel and el is None:
-                    raise HTTPException(status_code=404, detail=was)
+                    # Lieber nichts als etwas Halbpassendes: ein irrelevanter
+                    # Beleg im Video ist schlechter als gar keiner.
+                    raise HTTPException(status_code=404,
+                                        detail={"grund": was, "rat": rat})
                 if el is not None:
                     await el.scroll_into_view_if_needed(timeout=5000)
                     await seite.wait_for_timeout(250)

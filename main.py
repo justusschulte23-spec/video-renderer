@@ -8692,16 +8692,24 @@ class SchnappschussRequest(BaseModel):
     url:        str
     ziel:       str = ""        # CSS-Selektor ODER Textstelle
     zoom:       float = 1.0     # 1.0 - 3.0
+    wert:       bool = False    # ziel ist ein Wert-Wort (credits, Preis, €)
     breite:     int = 1280
     hoehe:      int = 900
     warten_ms:  int = 1200
 
 
 BANNER_WEG = [
+    # Text-Treffer sind case-insensitiv: der n8n-Dialog schreibt "ACCEPT ALL"
+    # in Grossbuchstaben und wurde von der ersten Liste nicht gefunden.
     "button:has-text('Accept')", "button:has-text('Alle akzeptieren')",
     "button:has-text('Akzeptieren')", "button:has-text('Allow all')",
+    "button:has-text('Decline')", "button:has-text('Ablehnen')",
     "button:has-text('I agree')", "button:has-text('Got it')",
-    "[aria-label='Accept cookies']", "#onetrust-accept-btn-handler",
+    "button:has-text('Zustimmen')", "button:has-text('Verstanden')",
+    "[aria-label*='ccept']", "[aria-label*='onsent']",
+    "#onetrust-accept-btn-handler", ".cc-dismiss",
+    "#CybotCookiebotDialogBodyButtonDecline",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
 ]
 BANNER_WORT = re.compile(r"cookie|consent|datenschutz|privacy|newsletter|"
                          r"abonnier|subscribe", re.I)
@@ -8711,7 +8719,8 @@ async def _banner_wegklicken(seite) -> None:
     """Cookie-Zustimmung wegklicken, bevor gesucht wird.
 
     Ein Banner liegt ueber allem und wird zuerst gefunden — der erste
-    Beleg-Versuch war ein Fetzen '...ebsite uses cookies'.
+    Belegversuch war ein Fetzen '...ebsite uses cookies', der zweite hatte
+    den n8n-Dialog mitten im Bild.
     """
     for sel in BANNER_WEG:
         try:
@@ -8719,12 +8728,49 @@ async def _banner_wegklicken(seite) -> None:
             if await el.count() > 0 and await el.is_visible():
                 await el.click(timeout=1500)
                 await seite.wait_for_timeout(400)
-                return
+                break
         except Exception:
             continue
+    # Rueckfall: was sich nicht wegklicken laesst, wird entfernt. Ein
+    # Consent-Dialog liegt praktisch immer fixed mit hohem z-index.
+    try:
+        await seite.evaluate("""() => {
+            const weg = [];
+            for (const el of document.querySelectorAll('div,section,aside')) {
+                const st = getComputedStyle(el);
+                if (st.position !== 'fixed' && st.position !== 'sticky') continue;
+                if (parseInt(st.zIndex || '0', 10) < 100) continue;
+                const t = (el.innerText || '').slice(0, 400);
+                if (/cookie|consent|datenschutz|privacy|zustimm/i.test(t)) weg.push(el);
+            }
+            weg.forEach(el => el.remove());
+            return weg.length;
+        }""")
+        await seite.wait_for_timeout(200)
+    except Exception:
+        pass
 
 
-async def _ziel_finden(seite, ziel: str):
+async def _warten_auf_inhalt(seite, ziel: str, max_ms: int = 10000) -> bool:
+    """Auf den Zielinhalt warten, nicht auf ein Netz-Ereignis.
+
+    'networkidle' war bei firecrawl.dev/pricing erreicht, bevor die
+    Preistabelle im DOM stand — der Schuss landete dreimal im FAQ.
+    """
+    if not ziel:
+        return True
+    try:
+        if ziel.startswith((".", "#", "[")):
+            await seite.wait_for_selector(ziel, timeout=max_ms, state="visible")
+        else:
+            await seite.get_by_text(ziel, exact=False).first.wait_for(
+                timeout=max_ms, state="visible")
+        return True
+    except Exception:
+        return False
+
+
+async def _ziel_finden(seite, ziel: str, wert: bool = False):
     """Erst als Selektor lesen, dann als Textstelle.
 
     Der Regisseur denkt in Inhalten ("der Abschnitt mit 'rate limit'"),
@@ -8766,6 +8812,11 @@ async def _ziel_finden(seite, ziel: str):
             continue
         if BANNER_WORT.search(text):
             continue
+        # Wert-Modus: nur Bloecke, in denen das Wort MIT einer Zahl steht.
+        # "credits" allein steht auf jeder Zeile der Seite, "5,000 credits"
+        # genau einmal.
+        if wert and not re.search(r"\d", text):
+            continue
         h, b = kasten["height"], kasten["width"]
         if h < 120 or b < 200:          # Menuezeile, Badge, Fussnote
             continue
@@ -8773,7 +8824,7 @@ async def _ziel_finden(seite, ziel: str):
         # ein <div> um die halbe Seite ist kein Beleg.
         if h > 1600:
             continue
-        rang = (kasten["y"], h)
+        rang = (h, kasten["y"]) if wert else (kasten["y"], h)
         if bester_rang is None or rang < bester_rang:
             bester, bester_rang = el, rang
     if bester is None:
@@ -8790,7 +8841,8 @@ async def tool_schnappschuss(req: SchnappschussRequest):
     if not ok:
         raise HTTPException(status_code=400, detail=f"URL abgelehnt: {grund}")
     zoom = max(1.0, min(3.0, float(req.zoom or 1.0)))
-    schluessel = ("shot", req.url, req.ziel, round(zoom, 2), req.breite, req.hoehe)
+    schluessel = ("shot", req.url, req.ziel, bool(req.wert),
+              round(zoom, 2), req.breite, req.hoehe)
     if schluessel in SCREENSHOT_CACHE:
         return {**SCREENSHOT_CACHE[schluessel], "aus_cache": True}
     try:
@@ -8815,7 +8867,14 @@ async def tool_schnappschuss(req: SchnappschussRequest):
                                      wait_until="domcontentloaded")
                 await seite.wait_for_timeout(req.warten_ms)
                 await _banner_wegklicken(seite)
-                el, was, rat = await _ziel_finden(seite, req.ziel)
+                da = await _warten_auf_inhalt(seite, req.ziel)
+                if req.ziel and not da:
+                    raise HTTPException(status_code=404, detail={
+                        "grund": "'%s' war nach 10s nicht auf der Seite" % req.ziel[:60],
+                        "rat": "Die Seite rendert clientseitig oder das Wort steht "
+                               "dort anders. Bei einem Wert: wert=true und nach der "
+                               "Einheit suchen (credits, Preis), nicht nach dem Namen."})
+                el, was, rat = await _ziel_finden(seite, req.ziel, bool(req.wert))
                 if req.ziel and el is None:
                     # Lieber nichts als etwas Halbpassendes: ein irrelevanter
                     # Beleg im Video ist schlechter als gar keiner.

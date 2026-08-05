@@ -7552,11 +7552,16 @@ def _element_box_angleichen(lay: dict) -> Optional[str]:
     if t["w"] <= 0:
         return None
     h_soll = t["w"] * W / sv / H
-    # Vollbild gemeint, aber das Element ist nicht 9:16: die Angleichung wuerde
-    # daraus stillschweigend ein Banner machen, das anschliessend an der
-    # Randregel scheitert. Der Agent sah 26 Ablehnungen und nie den Grund.
-    # Also sagen, was zu bestellen ist, statt umzuformen.
-    if t["w"] > 0.95 and t["h"] > 0.95 and h_soll < 0.95:
+    # Eine Uebernahme wird NICHT angeglichen. Der Zweig unten haelt den
+    # Sicherheitsrand ein und staucht dafuer w und h auf 0.94 — einen Hauch
+    # unter die 0.95-Schwelle, ab der etwas als vollflaechig gilt. Damit war
+    # jedes Vollbild-Element hinterher kein Vollbild mehr und fiel durch
+    # genau die Randregel, von der ein Vollbild ausgenommen ist.
+    if t["w"] > 0.95 and t["h"] > 0.95:
+        if h_soll >= 0.95:
+            return None                 # 9:16 gebaut, passt genau — stehen lassen
+        # Nicht 9:16: die Angleichung wuerde daraus ein Banner machen. Sagen,
+        # was zu bestellen ist, statt still umzuformen.
         return (f"{lay['id']}: als Vollbild gesetzt, aber das Element wurde "
                 f"{masse[0]}x{masse[1]} gebaut ({sv:.2f}:1). Auf voller Breite "
                 f"waere es nur h={h_soll:.2f} hoch — ein Banner, kein Vollbild, "

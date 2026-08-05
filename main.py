@@ -10099,15 +10099,27 @@ def _historie_kuerzen(messages: list, meta: dict, gekuerzt: set, turn: int) -> i
     gekuerzt wird, war noch nie im Cache.
     """
     gespart = 0
-    for i, (t, name) in meta.items():
+    for i, (t, name) in list(meta.items()):
         if i in gekuerzt or turn - t < HISTORIE_VOLL_TURNS:
             continue
-        alt = messages[i].get("content") or ""
+        # Kuerzen ist eine Sparmassnahme, kein Muss. Was hier nicht passt,
+        # wird uebersprungen und gemeldet — ein Lauf darf nicht daran
+        # sterben, dass eine Nachricht anders aussieht als erwartet.
+        m = messages[i] if 0 <= i < len(messages) else None
+        if not isinstance(m, dict):
+            log.warning("[HIST] Index %d ist %s, nicht dict — uebersprungen",
+                        i, type(m).__name__)
+            gekuerzt.add(i)
+            continue
+        alt = m.get("content")
+        if not isinstance(alt, str):
+            gekuerzt.add(i)
+            continue
         neu = _kurzfassung(name, alt)
         if len(neu) >= len(alt):
             gekuerzt.add(i)
             continue
-        messages[i]["content"] = neu
+        m["content"] = neu
         gekuerzt.add(i)
         gespart += len(alt) - len(neu)
     return gespart
@@ -10211,9 +10223,15 @@ def _loop_impl(s: dict, model: str) -> dict:
             letzter = _tool_call("session_tick", {}, s)
             if not letzter.get("weiter", True):
                 break
-        weg = _historie_kuerzen(messages, hist_meta, hist_kurz, s["turns_used"])
-        if weg:
-            hist_gespart += weg
+        try:
+            hist_gespart += _historie_kuerzen(messages, hist_meta, hist_kurz,
+                                              s["turns_used"])
+        except Exception as exc:
+            # Sparen darf den Lauf nie kosten. Lauf 5 ist genau daran
+            # gestorben: eine AttributeError im Kuerzen hat 30 Turns Arbeit
+            # weggeworfen, obwohl das Video fertig gewesen waere.
+            log.error("[HIST] Kuerzen fehlgeschlagen, laeuft ungekuerzt weiter: %s",
+                      exc)
     _checkpoint(s, "rendert")
     erg = tool_session_render(SessionRef(session_id=s["id"]))
     _checkpoint(s, "fertig")

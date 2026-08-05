@@ -8504,6 +8504,108 @@ def tool_generate_image(req: GenerateImageRequest):
         shutil.rmtree(job, ignore_errors=True)
 
 
+# ── Echte Seiten ──────────────────────────────────────────────────────────────
+class ScreenshotRequest(BaseModel):
+    session_id: str = ""
+    url:        str
+    selektor:   str = ""        # CSS-Selektor; leer = sichtbarer Bereich
+    breite:     int = 1280
+    hoehe:      int = 800
+    warten_ms:  int = 1200
+
+
+# Derselbe Ausschnitt derselben Seite wird einmal geholt. Ohne das laedt der
+# Agent im Zweifel zehnmal dieselbe Repo-Seite und wartet jedes Mal.
+SCREENSHOT_CACHE: dict = {}
+
+# Der Agent waehlt die URL. Damit ist sie ein Eingabewert wie jeder andere:
+# interne Adressen und Metadaten-Endpunkte gehoeren nicht dazu.
+_PRIVAT = re.compile(
+    r"^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|::1|"
+    r"172\.(1[6-9]|2\d|3[01])\.|metadata\.|.*\.internal$)", re.I)
+
+
+def _url_erlaubt(url: str) -> tuple:
+    """(ok, grund). Nur oeffentliches http/https."""
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(url)
+    except Exception:
+        return False, "URL nicht lesbar"
+    if u.scheme not in ("http", "https"):
+        return False, "nur http und https"
+    host = (u.hostname or "").strip()
+    if not host or _PRIVAT.match(host):
+        return False, "interne Adresse"
+    return True, ""
+
+
+@app.post("/tool/screenshot-url")
+async def tool_screenshot_url(req: ScreenshotRequest):
+    """Eine oeffentliche Seite abfotografieren.
+
+    Fuer das, was es wirklich gibt: Repo-Seiten, Doku, Preisseiten,
+    Changelogs. Ein echter Schuss traegt mehr als jede nachgebaute Karte —
+    dieselbe Regel wie bei den Visual-Anforderungen.
+
+    Nicht dafuer gedacht: alles, was Login oder einen echten Zustand
+    braucht. Das dreht er selbst, dafuer gibt es die Visual-Anforderung.
+    """
+    ok, grund = _url_erlaubt(req.url)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"URL abgelehnt: {grund}")
+    schluessel = (req.url, req.selektor, req.breite, req.hoehe)
+    if schluessel in SCREENSHOT_CACHE:
+        treffer = SCREENSHOT_CACHE[schluessel]
+        return {**treffer, "aus_cache": True}
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Playwright fehlt")
+    job = Path(f"/tmp/shot_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    ziel = job / "shot.png"
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox"])
+            seite = await browser.new_page(
+                viewport={"width": req.breite, "height": req.hoehe},
+                device_scale_factor=2)
+            try:
+                await seite.goto(req.url, timeout=30000, wait_until="networkidle")
+            except Exception:
+                # networkidle scheitert an Seiten, die dauernd nachladen.
+                # Ein Schuss vom halb geladenen Zustand ist besser als keiner.
+                await seite.goto(req.url, timeout=30000, wait_until="domcontentloaded")
+            await seite.wait_for_timeout(req.warten_ms)
+            if req.selektor:
+                el = await seite.query_selector(req.selektor)
+                if not el:
+                    await browser.close()
+                    raise HTTPException(status_code=404,
+                                        detail=f"Selektor '{req.selektor}' nicht gefunden")
+                await el.screenshot(path=str(ziel))
+            else:
+                await seite.screenshot(path=str(ziel))
+            await browser.close()
+        from PIL import Image
+        with Image.open(ziel) as im:
+            qw, qh = im.size
+        url = upload_supabase(ziel, f"shot_{uuid.uuid4().hex[:10]}", folder="screenshots")
+        if not url:
+            raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
+        _log_einheit("screenshot-url", "seite", 1, 0, status="ok")
+        treffer = {"ok": True, "url": url, "quelle_px": [qw, qh],
+                   "layer_source": {"kind": "image", "url": url,
+                                    "quelle_px": [qw, qh]},
+                   "hinweis": "Echte Seite. Setz sie als Ebene mit dem "
+                              "Seitenverhaeltnis aus quelle_px."}
+        SCREENSHOT_CACHE[schluessel] = treffer
+        return treffer
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
 # ── Bauen ─────────────────────────────────────────────────────────────────────
 class PlaceLayerRequest(BaseModel):
     session_id: str
@@ -9777,6 +9879,18 @@ rechts von right ist frei, auch auf Augenhoehe.
 Nutze beides. Wenn drei Elemente hintereinander dieselbe Breite und dieselbe
 Hoehe haben, hast du aufgehoert zu komponieren.
 
+ECHTES MATERIAL SCHLAEGT GEBAUTES
+Redet er ueber ein Werkzeug, ein Repo, eine Preisseite, einen Changelog —
+dann zeig DAS, nicht eine Karte darueber. screenshot_url holt die Seite.
+Ein Nachbau derselben Zahl in einem Kasten ist immer die schwaechere Fassung:
+der Zuschauer sieht sofort, ob etwas echt ist.
+
+Die Grenze: alles mit Login oder eigenem Zustand — sein n8n, seine Rechnung,
+sein Dashboard — kannst du nicht holen. Das dreht er selbst, dafuer steht die
+Visual-Anforderung im Skript. Versuch es gar nicht erst.
+
+Du entscheidest Ausschnitt und Groesse, nicht OB echtes Material vorkommt.
+
 GRAFIKELEMENTE BESTELLST DU, DU BAUST SIE NICHT
 render_html nimmt keine HTML mehr. Du beschreibst, WAS du brauchst — Art,
 Hauptwert, Beschriftung, Einordnung, worauf der Akzent liegt, was sich bewegt.
@@ -9958,6 +10072,17 @@ def _tool_specs() -> list:
            "w_px": {"type": "integer"}, "h_px": {"type": "integer"},
            "dauer_s": {"type": "number"}},
           ["auftrag", "w_px", "h_px", "dauer_s"]),
+        T("screenshot_url",
+          "Eine OEFFENTLICHE Seite abfotografieren: Repo, Doku, Preisseite, "
+          "Changelog. Ein echter Schuss schlaegt jede nachgebaute Karte. "
+          "selektor schneidet auf ein Element zu, sonst kommt der ganze "
+          "sichtbare Bereich. Derselbe Ausschnitt wird nur einmal geholt. "
+          "NICHT fuer Seiten mit Login oder eigenem Zustand — die dreht er "
+          "selbst.",
+          {"url": {"type": "string"},
+           "selektor": {"type": "string"},
+           "breite": {"type": "integer"}, "hoehe": {"type": "integer"}},
+          ["url"]),
         T("place_layer", "Ebenen setzen — eine in 'layer' ODER mehrere auf einmal in "
           "'layers'. Mehrere zusammen zu setzen ist der Normalfall: es wird alles "
           "zusammen geprueft, und entweder stehen alle oder keine. Das spart Turns.",

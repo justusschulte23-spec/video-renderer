@@ -8107,6 +8107,7 @@ def tool_session_open(req: OpenSessionRequest):
         "brand": _brand_fuer(req.client_id, tpl),
         "caption_stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
         "briefing": req.briefing, "sfx": [],
+        "material": req.material or [], "material_abgelehnt": {},
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
         "gelesen": set(), "verlauf": [],
@@ -8165,6 +8166,7 @@ class SessionRef(BaseModel):
 # entweder wiederherstellbar oder gehoert nicht in eine Datenbank.
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
+                "material", "material_abgelehnt",
                 "layers", "turns_used", "turn_budget", "abbruch_grund",
                 "prefix", "prefix_sha", "gelesen", "verlauf", "tokens",
                 "brand", "caption_stil")
@@ -8294,9 +8296,35 @@ def _fertig(s: dict) -> dict:
     if luecke_f / FPS > grenze:
         offen.append(f"{luecke_f / FPS:.1f}s ohne sichtbares Ereignis ab "
                      f"{luecke_ab / FPS:.1f}s (erlaubt {grenze:.1f}s)")
+    # Bereitgestelltes Material: setzen ODER mit Grund ablehnen. Am
+    # 05.08. lag ein Fundstueck im Praefix, wurde gelesen und ignoriert —
+    # der Regisseur baute stattdessen eine Karte mit derselben Aussage.
+    for u in _material_offen(s):
+        offen.append(f"Fundstueck {u.rsplit('/', 1)[-1][:28]} liegt bereit, "
+                     f"nicht genutzt (setzen oder material_ablehnen mit Grund)")
+    # Schnitt und Ton gehoeren zum Handwerk, nicht zur Kuer. Beide Befehle
+    # gibt es seit Monaten; im Lauf vom 05.08. wurde keiner benutzt.
+    dauer_s = s["frames"] / FPS
+    noetig_c = max(1, int(dauer_s // 25))
+    # cut schreibt in die Facecam-Ebene, nicht in s["cuts"] — eine Zaehlung
+    # auf s["cuts"] waere nie erfuellbar gewesen.
+    _cam = next((l for l in s["layers"]
+                 if (l.get("source") or {}).get("kind") == "facecam"), None)
+    _schnitte = len((((_cam or {}).get("modifiers") or {}).get("punch")
+                     or {}).get("frames") or [])
+    if _schnitte < noetig_c:
+        offen.append(f"{_schnitte} von {noetig_c} harten Schnitten "
+                     f"(cut auf der Facecam, an der Stelle wo der Gedanke kippt)")
+    noetig_sfx = max(1, int(dauer_s // 20))
+    if len(s.get("sfx") or []) < noetig_sfx:
+        offen.append(f"{len(s.get('sfx') or [])} von {noetig_sfx} Impacts "
+                     f"(add_sfx auf einer Betonung)")
     return {"fertig": not offen, "offen": offen, "fehler": fehler,
             "ebenen_ohne_facecam": len(deko),
             "uebernahmen": len(uebern), "uebernahmen_noetig": noetig_u,
+            "material_offen": _material_offen(s),
+            "schnitte": _schnitte, "schnitte_noetig": noetig_c,
+            "impacts": len(s.get("sfx") or []), "impacts_noetig": noetig_sfx,
             "bewegung_ab_null": bewegung,
             "groesste_luecke_s": round(luecke_f / FPS, 1),
             "luecke_ab_s": round(luecke_ab / FPS, 1),
@@ -9079,6 +9107,50 @@ def tool_markiere(req: MarkiereRequest):
                                  "quelle_px": list(im.size)}}
     finally:
         shutil.rmtree(job, ignore_errors=True)
+
+
+class MaterialAblehnenRequest(BaseModel):
+    session_id: str
+    url:        str
+    grund:      str
+
+
+@app.post("/tool/material-ablehnen")
+def tool_material_ablehnen(req: MaterialAblehnenRequest):
+    """Ein Fundstueck bewusst nicht verwenden — mit Grund.
+
+    Der Unterschied zum harten Zwang: der Regisseur darf waehlen. Er darf
+    es nur nicht schweigend uebergehen. Ein Screenshot der echten Doku ist
+    Belegstufe 3, eine nachgebaute Karte mit derselben Aussage Stufe 5 —
+    also die schwaechere Fassung. Wer die staerkere weglaesst, sagt warum.
+    """
+    s = _sess(req.session_id)
+    grund = (req.grund or "").strip()
+    if len(grund) < 8:
+        raise HTTPException(status_code=400, detail={
+            "grund": "Der Grund fehlt oder ist zu knapp.",
+            "beispiele": ["unlesbar auf 9:16", "passt zu keinem Block",
+                          "zeigt den falschen Tarif"]})
+    s.setdefault("material_abgelehnt", {})[req.url] = grund[:200]
+    log.info("[MATERIAL] %s abgelehnt: %s — %s", s["id"], req.url[-40:], grund[:80])
+    return {"ok": True, "abgelehnt": req.url, "grund": grund[:200],
+            "offen_danach": len(_material_offen(s))}
+
+
+def _material_offen(s: dict) -> list:
+    """Fundstuecke, die weder gesetzt noch abgelehnt wurden."""
+    gesetzt = set()
+    for l in s.get("layers") or []:
+        u = ((l.get("source") or {}).get("url") or "")
+        if u:
+            gesetzt.add(u)
+    abgelehnt = set((s.get("material_abgelehnt") or {}).keys())
+    offen = []
+    for m in (s.get("material") or []):
+        u = (m or {}).get("url")
+        if u and u not in gesetzt and u not in abgelehnt:
+            offen.append(u)
+    return offen
 
 
 # ── Bauen ─────────────────────────────────────────────────────────────────────
@@ -10432,6 +10504,17 @@ sagt dir im Hinweis, was daraus wurde. Ebenen werden beschnitten und nicht
 gestaucht, deshalb ist diese Zahl nicht verhandelbar.
 Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 
+SCHNITT UND TON GEHOEREN DAZU
+Ein Video ohne harten Schnitt ist eine Aufnahme, kein Schnitt. cut setzt
+einen auf der Facecam — an der Stelle, an der der Gedanke kippt, nicht im
+Takt. add_sfx legt einen Impact auf eine Betonung; die Zeiten stehen in
+read_audio_peaks. Beides verlangt session_tick.
+
+VORHANDENES MATERIAL: SETZEN ODER BEGRUENDET ABLEHNEN
+Liegt ein Fundstueck bereit, gehoert es ins Video — es ist der staerkere
+Beleg als jede Karte, die du selbst baust. Passt es wirklich nicht, ruf
+material_ablehnen mit einem Grund. Schweigend uebergehen geht nicht.
+
 WANN DU FERTIG BIST
 Das entscheidest nicht du. session_tick sagt es dir: keine offenen Verstoesse,
 mindestens drei Ebenen ausser der Facecam, eine Bewegung in den ersten 15
@@ -10574,6 +10657,12 @@ def _tool_specs() -> list:
            "art": {"type": "string",
                    "enum": ["rahmen", "unterstrich", "lupe", "abdunkeln"]}},
           ["bild", "bereich"]),
+        T("material_ablehnen",
+          "Ein bereitgestelltes Fundstueck bewusst NICHT verwenden. Nur mit "
+          "Grund. Du darfst ablehnen — du darfst es nur nicht schweigend "
+          "uebergehen.",
+          {"url": {"type": "string"}, "grund": {"type": "string"}},
+          ["url", "grund"]),
         T("place_layer", "Ebenen setzen — eine in 'layer' ODER mehrere auf einmal in "
           "'layers'. Mehrere zusammen zu setzen ist der Normalfall: es wird alles "
           "zusammen geprueft, und entweder stehen alle oder keine. Das spart Turns.",
@@ -10865,7 +10954,10 @@ def _loop_impl(s: dict, model: str) -> dict:
              {"art": "llm", "modell": model, "dauer_ms": int((time.time() - _t_loop) * 1000),
               "session": s["id"], "turns": s["turns_used"], **t})
     return {**erg, "plan": plan, "turns": s["turns_used"],
-            "grund": s.get("abbruch_grund") or "fertig", "tokens": t}
+            # NICHT auf "fertig" schoenen: 'fertig' war bisher der Default,
+            # wenn kein Abbruchgrund gesetzt war. Ein Lauf mit 21 offenen
+            # Verstoessen sah damit aus wie ein gelungener.
+            "grund": s.get("abbruch_grund") or "loop_ende", "tokens": t}
 
 
 class LoopRequest(BaseModel):

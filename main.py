@@ -10050,6 +10050,69 @@ def _tool_call(name: str, args: dict, s: dict) -> dict:
 TURN_MAX_TOKENS = 8000
 
 
+HISTORIE_VOLL_TURNS = 5     # so viele Turns bleiben wortwoertlich stehen
+
+
+def _kurzfassung(name: str, inhalt: str) -> str:
+    """Aus einem Werkzeug-Ergebnis eine Zeile machen.
+
+    Der Agent braucht das vollstaendige JSON eines Aufrufs von vor zehn Turns
+    nicht — er braucht zu wissen, DASS er es getan hat und ob es geklappt hat.
+    Gemessen am Lauf vom 04.08.: die Historie war 25.392 Token je Turn, 77 %
+    der gesamten Eingabe, weil jeder Turn alle vorherigen Ergebnisse erneut
+    mitschickt.
+    """
+    try:
+        d = json.loads(inhalt)
+    except Exception:
+        return "%s → %s" % (name, (inhalt or "")[:80])
+    if not isinstance(d, dict):
+        return "%s → %s" % (name, str(d)[:80])
+    # Ablehnungen kommen als HTTP-Fehler zurueck und stecken darum eine Ebene
+    # tiefer in "detail". Genau die sind der Teil, aus dem der Agent lernt —
+    # ohne dieses Auspacken fiele ausgerechnet er in den Sammelzweig.
+    if isinstance(d.get("detail"), dict):
+        d = d["detail"]
+    if d.get("abgelehnt"):
+        regeln = sorted({f.get("regel", "?") for f in (d.get("fehler") or [])})
+        return "%s → abgelehnt (%s): %s" % (name, ", ".join(d["abgelehnt"])[:60],
+                                            ", ".join(regeln)[:80])
+    if d.get("gesetzt"):
+        return "%s → ok: %s" % (name, ", ".join(d["gesetzt"])[:80])
+    if name == "session_tick":
+        return "session_tick → Turn %s, %d offen" % (d.get("turns_used"),
+                                                     len(d.get("offen") or []))
+    if d.get("url"):
+        return "%s → ok, %s" % (name, str(d["url"])[-46:])
+    if d.get("ok") is False:
+        return "%s → nein: %s" % (name, str(d.get("grund") or d.get("hinweis"))[:80])
+    if d.get("ok"):
+        return "%s → ok" % name
+    return "%s → %s" % (name, json.dumps(d, ensure_ascii=False)[:80])
+
+
+def _historie_kuerzen(messages: list, meta: dict, gekuerzt: set, turn: int) -> int:
+    """Werkzeug-Ergebnisse aelter als HISTORIE_VOLL_TURNS eindampfen.
+
+    Ruehrt den Cache-Praefix nicht an: gecacht sind System-Prompt und der
+    eingefrorene Kontext-Block, beide stehen VOR jeder Historie. Was hier
+    gekuerzt wird, war noch nie im Cache.
+    """
+    gespart = 0
+    for i, (t, name) in meta.items():
+        if i in gekuerzt or turn - t < HISTORIE_VOLL_TURNS:
+            continue
+        alt = messages[i].get("content") or ""
+        neu = _kurzfassung(name, alt)
+        if len(neu) >= len(alt):
+            gekuerzt.add(i)
+            continue
+        messages[i]["content"] = neu
+        gekuerzt.add(i)
+        gespart += len(alt) - len(neu)
+    return gespart
+
+
 def _openrouter_turn(messages: list, tools: list, model: str) -> tuple:
     body = {"model": model, "max_tokens": TURN_MAX_TOKENS, "tools": tools,
             "messages": messages}
@@ -10083,6 +10146,9 @@ def _loop_impl(s: dict, model: str) -> dict:
                 {"role": "user", "content": erst}]
 
     plan, letzter = "", {}
+    # Index im Nachrichtenband -> (Turn, Werkzeug). Braucht es, weil ein
+    # tool-Ergebnis selbst nicht sagt, aus welchem Turn es stammt.
+    hist_meta, hist_kurz, hist_gespart = {}, set(), 0
     while True:
         if s["turns_used"] >= s["turn_budget"]:
             s["abbruch_grund"] = "turn_budget"
@@ -10136,6 +10202,7 @@ def _loop_impl(s: dict, model: str) -> dict:
                 letzter = res
             messages.append({"role": "tool", "tool_call_id": c.get("id"),
                              "content": json.dumps(res, ensure_ascii=False)[:2500]})
+            hist_meta[len(messages) - 1] = (s["turns_used"], fn.get("name", ""))
         if letzter and not letzter.get("weiter", True):
             break
         # Turn ist vorbei: zaehlen und sichern, auch wenn der Agent nicht
@@ -10144,13 +10211,19 @@ def _loop_impl(s: dict, model: str) -> dict:
             letzter = _tool_call("session_tick", {}, s)
             if not letzter.get("weiter", True):
                 break
+        weg = _historie_kuerzen(messages, hist_meta, hist_kurz, s["turns_used"])
+        if weg:
+            hist_gespart += weg
     _checkpoint(s, "rendert")
     erg = tool_session_render(SessionRef(session_id=s["id"]))
     _checkpoint(s, "fertig")
     t = s["tokens"]
     log.info("[LOOP] %s Tokens: %d ein (%d aus Cache), %d aus, %d Turns abgeschnitten. "
-             "Pro Werkzeug: %s", s["id"], t["ein"], t["cached"], t["aus"],
-             t["abgeschnitten"], t["pro_werkzeug"])
+             "Historie gekuerzt: %d Zeichen in %d Ergebnissen. Pro Werkzeug: %s",
+             s["id"], t["ein"], t["cached"], t["aus"], t["abgeschnitten"],
+             hist_gespart, len(hist_kurz), t["pro_werkzeug"])
+    t["hist_gespart_zeichen"] = hist_gespart
+    t["hist_gekuerzt"] = len(hist_kurz)
     # art/modell/dauer_ms machen die Zeile fuer /tool/stats/kosten lesbar. Die
     # Summe ueber alle Turns reicht: abgerechnet wird ohnehin pro Turn, und der
     # Cache-Anteil ist erst ueber den ganzen Lauf aussagekraeftig.

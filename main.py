@@ -9400,6 +9400,11 @@ MIN_TECHNISCH_S = 1.0
 # Diese bewegen sich von sich aus, sie brauchen keine zusaetzliche Bewegung,
 # um eine lange Strecke zu tragen.
 EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_kippt")
+# Schmal heisst: die Flaeche traegt keinen Fliesstext. seite_rechts hat im
+# Testlauf "1 Funktion / 2 Funktionen . 3 Funktionen" gezeigt — Flaeche, keine
+# Gestaltung. Was dort steht, muss OHNE Satz funktionieren.
+SCHMALE = ("seite_links", "seite_rechts", "bubble", "bubble_wandert")
+SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
 MAX_UEBERNAHMEN = 2
 LANG_OHNE_BEWEGUNG_S = 10.0
@@ -9522,10 +9527,15 @@ ER TEILT SICH DAS BILD
                   → Zahlen, die sich ueber die Dauer veraendern
   seite_links     er auf zwei Drittel seitlich beschnitten, daneben ein Element
   seite_rechts    dasselbe zur anderen Seite
+                  SCHMAL: daneben ist eine Spalte, keine Buehne. Dort passt nur,
+                  was ohne Fliesstext wirkt — eine Zahl mit Beschriftung, ein
+                  Balken, ein Zaehler, ein Symbol, ein Vorher/Nachher-Wert.
+                  Hoechstens DREI Woerter je Zeile
   haelften        Bild geteilt, er auf einer Seite
                   → Vergleiche: vorher/nachher, Option A gegen B
   bubble          er klein in der Ecke, dahinter laeuft etwas
                   → NUR wenn dahinter wirklich etwas LAEUFT
+                  auch schmal gedacht: hoechstens drei Woerter je Zeile
   bubble_wandert  wie bubble, aber er wechselt die Ecke
                   braucht zusaetzlich: {"zielecke": "..."}
 
@@ -9587,6 +9597,9 @@ HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
 - hoechstens ZWEI uebernahme im ganzen Video — er soll nicht dauernd
   verschwinden
 - text ohne bewegung und ohne eine Zahl ist eine Folie und wird abgelehnt
+- in seite_links, seite_rechts, bubble und bubble_wandert hoechstens DREI
+  Woerter je Textzeile. Aufzaehlungen, Vergleiche und ganze Saetze gehoeren in
+  unten_aufbau, haelften oder uebernahme — dort ist Platz dafuer
 - jedes vorhandene Material kommt in einem Abschnitt vor ODER steht in
   "material_abgelehnt" mit Grund
 - vollbild hat "braucht": null; alles andere hat einen Auftrag
@@ -9781,6 +9794,21 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         if k in ENDZUSTAND_PFLICHT and not str(b.get("endzustand") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' baut etwas auf, aber "
                           f"'endzustand' fehlt — was steht am Ende da?")
+        if k in SCHMALE:
+            t_ = b.get("text")
+            zeilen_ = (t_ if isinstance(t_, list) else
+                       list(t_.values()) if isinstance(t_, dict) else
+                       [t_] if t_ else [])
+            for z_ in zeilen_:
+                if len(str(z_).split()) > SCHMAL_MAX_WORTE:
+                    fehler.append(
+                        f"Abschnitt {i} ({von:.1f}s): '{k}' ist schmal, "
+                        f"'{str(z_)[:40]}' hat {len(str(z_).split())} Woerter. "
+                        f"Dort passt nur, was ohne Fliesstext funktioniert: eine "
+                        f"Zahl mit Beschriftung, ein Balken, ein Zaehler, ein "
+                        f"Symbol, ein Vorher/Nachher-Wert. Aufzaehlungen und "
+                        f"Vergleiche gehoeren in unten_aufbau, haelften oder "
+                        f"uebernahme")
         # D1: Text ohne Bewegung und ohne Zahl ist eine Folie.
         txt = b.get("text")
         if txt and not bewegt and not _hat_zahl(txt):
@@ -10695,7 +10723,17 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
 
 # Deckel aus dem Umbau-Papier. Er ist eine Zusage, kein Richtwert: wird er
 # erreicht, werden Abschnitte zurueckgestuft — nicht das Budget erhoeht.
-DECKEL_USD = float(os.environ.get("VIDEO_DECKEL_USD", "0.80"))
+# Der Deckel steht in EUR, weil das Geschaeft in EUR rechnet — umgerechnet im
+# Code, nicht im Kopf. Der Kurs ist bewusst KONSERVATIV (1,10 statt der ~1,17
+# vom Markt): bei einem starken Euro laege der Deckel sonst heimlich hoeher,
+# als er gemeint war.
+DECKEL_EUR = float(os.environ.get("VIDEO_DECKEL_EUR", "1.10"))
+USD_JE_EUR = float(os.environ.get("USD_JE_EUR", "1.10"))
+DECKEL_USD = round(DECKEL_EUR * USD_JE_EUR, 4)
+
+
+def _eur(usd: float) -> float:
+    return round(float(usd) / max(0.01, USD_JE_EUR), 2)
 # Gemessen an a956ba3ff98c: 0,637 USD fuer sechs gebaute Elemente.
 # Gemessen: 0,637/6 = 0,106 im ersten Lauf, 0,907/7 = 0,130 im zweiten. Die
 # Schaetzung muss die teurere Seite treffen — zu niedrig geschaetzt heisst,
@@ -10885,11 +10923,25 @@ async def _build_impl(req: BuildRequest):
         _duck.append([int(round(float(_p["von"]) * FPS)),
                       int(round(float(_p["bis"]) * FPS))])
     if _duck:
+        # WOHIN geduckt wird, hing bisher an einer Konstante (0.62) — und der
+        # Renderer nahm davon auch noch das Minimum, schob die Zeile also nach
+        # OBEN, mitten ins Element. Der freie Platz liegt UNTER dem tiefsten
+        # gebauten Element; der wird jetzt ausgerechnet.
+        _tief = 0.0
+        for _l in s["layers"]:
+            if _ist_pflicht(_l) or not str(_l.get("herkunft", "")).startswith("plan:"):
+                continue
+            _t = _l.get("transform") or {}
+            if any(a < _l["to"] and b > _l["from"] for a, b in _duck):
+                _tief = max(_tief, float(_t.get("y", 0)) + float(_t.get("h", 0)))
+        _duck_y = round(min(0.88, max(0.62, _tief + 0.02)), 3)
         for _l in s["layers"]:
             if (_l.get("source") or {}).get("kind") == "captions":
                 _l["source"]["duckFor"] = _duck
-                log.info("[BAU] %s: Untertitel ducken in %d Abschnitten",
-                         s["id"], len(_duck))
+                _l["source"]["duckY"] = _duck_y
+                _l["source"]["duckFontSize"] = 54
+                log.info("[BAU] %s: Untertitel ducken in %d Abschnitten, y=%.2f",
+                         s["id"], len(_duck), _duck_y)
 
     gesamt = round(kosten + float(s.get("kosten_plan") or 0.0), 4)
     log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD "
@@ -10898,14 +10950,27 @@ async def _build_impl(req: BuildRequest):
     _log_run(s["client_id"], "build", "ok" if not abweichungen else "warn",
              {"session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
               "ebenen": len(s["layers"]), "kosten_usd": kosten,
-              "kosten_gesamt_usd": gesamt, "zurueckgestuft": len(zurueckgestuft),
+              "kosten_gesamt_usd": gesamt, "kosten_gesamt_eur": _eur(gesamt),
+              "zurueckgestuft": len(zurueckgestuft),
               "abweichungen": abweichungen,
               "sekunden": round(time.time() - t0, 1)})
-    aus = {"ok": True, "session_id": s["id"], "protokoll": protokoll,
+    # Eine Zeile, die die ganze Rechnung zeigt. Im Log stand sie schon; im
+    # Ergebnis sieht man sofort, ob der Deckel Qualitaet kostet oder nur
+    # Verschwendung abschneidet.
+    _zurueck = sum(1 for pz in protokoll if "Kostendeckel" in
+                   str((pz.get("abweichung") or {}).get("grund", "")))
+    bilanz = ("%d geplant, %d gebaut, %d zurueckgestuft — %.2f USD = %.2f EUR "
+              "von %.2f EUR" % (geplant, umgesetzt, _zurueck, gesamt,
+                                _eur(gesamt), DECKEL_EUR))
+    log.info("[BAU] %s: %s", s["id"], bilanz)
+    aus = {"ok": True, "session_id": s["id"], "bilanz": bilanz,
+           "protokoll": protokoll,
            "umgesetzt": umgesetzt, "geplant": geplant,
            "abweichungen": abweichungen,
            "ebenen": len(s["layers"]), "kosten_usd": kosten,
-           "kosten_gesamt_usd": gesamt, "deckel_usd": DECKEL_USD,
+           "kosten_gesamt_usd": gesamt, "kosten_gesamt_eur": _eur(gesamt),
+           "deckel_usd": DECKEL_USD, "deckel_eur": DECKEL_EUR,
+           "kurs_usd_je_eur": USD_JE_EUR,
            "zurueckgestuft": len(zurueckgestuft),
            "sekunden": round(time.time() - t0, 1)}
     if req.rendern:

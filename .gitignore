@@ -13,3 +13,15 @@ add_trim_node.py
 upload_sfx.py
 __pycache__/
 *.pyc
+
+# Secrets. Nichts davon gehoert je in einen Commit — die Push-Regel von
+# GitHub greift nur auf GitHub, ein anderer Weg haette den PAT durchgelassen.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets*.json
+migrate_*.py
+rw5.json
+*.har

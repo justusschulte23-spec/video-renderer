@@ -10199,12 +10199,14 @@ def tool_plan(req: PlanRequest):
             plan, fehler = plan2, fehler2
 
     s["plan"] = plan
+    s["kosten_plan"] = 0.0      # wird gleich gesetzt, sobald der Preis steht
     dauer_s = round(time.time() - t0, 1)
     # Preis nach der oeffentlichen Gemini-Liste, damit der Deckel aus F
     # ueberhaupt messbar ist statt geschaetzt.
     preise = {"gemini-2.5-pro": (1.25, 10.0)}.get(modell, (0.30, 2.50))
     kosten = round(tok.get("ein", 0) / 1e6 * preise[0]
                    + tok.get("aus", 0) / 1e6 * preise[1], 4)
+    s["kosten_plan"] = kosten
     _log_run(s["client_id"], "plan", "ok" if not fehler else "warn",
              {"session_id": s["id"], "modell": modell, "runden": runden,
               "abschnitte": len(plan.get("abschnitte") or []), "offen": fehler,
@@ -10582,16 +10584,107 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     return aus
 
 
+# Deckel aus dem Umbau-Papier. Er ist eine Zusage, kein Richtwert: wird er
+# erreicht, werden Abschnitte zurueckgestuft — nicht das Budget erhoeht.
+DECKEL_USD = float(os.environ.get("VIDEO_DECKEL_USD", "0.80"))
+# Gemessen an a956ba3ff98c: 0,637 USD fuer sechs gebaute Elemente.
+GESTALTER_SCHAETZUNG_USD = 0.11
+# Was traegt ein Abschnitt? Hoch = traegt viel und wird zuletzt geopfert. Ein
+# Beleg ist der staerkste Baustein im Video (echt, nicht gebaut) und kostet
+# ausserdem nichts; ein wanderndes Overlay ist Beiwerk.
+TRAGKRAFT = {"beleg": 6, "durchforsten": 5, "uebernahme": 5,
+             "unten_aufbau": 4, "oben_unterbau": 4, "haelften": 4,
+             "metapher": 3, "seite_links": 3, "seite_rechts": 3,
+             "bubble": 2, "bubble_wandert": 2,
+             "flaeche_kippt": 1, "overlay_wandert": 1}
+
+
+def _kostet_modell(s: dict, a: dict) -> bool:
+    """Kostet dieser Abschnitt einen Gestalter-Aufruf? Vorhandenes Material und
+    Stock sind umsonst — die duerfen bleiben, egal wie eng es wird."""
+    k = _komposition(a)
+    if k in OHNE_MATERIAL:
+        return False
+    b = a.get("braucht") or {}
+    if _material_treffer(s, b) or b.get("url"):
+        return False
+    return True
+
+
+def _deckel_plan(s: dict, plan: dict, schon_ausgegeben: float) -> dict:
+    """Welche Abschnitte muessen zurueckgestuft werden, damit der Deckel haelt.
+
+    Nicht die zuerst gebauten gewinnen — das waere Zufall. Geopfert wird von
+    unten nach Tragkraft: was am wenigsten traegt, wird zuerst Vollbild."""
+    teuer = [(i, a) for i, a in enumerate(plan.get("abschnitte") or [])
+             if _kostet_modell(s, a)]
+    frei = max(0.0, DECKEL_USD - schon_ausgegeben)
+    passt = int(frei // GESTALTER_SCHAETZUNG_USD)
+    if passt >= len(teuer):
+        return {}
+    # aufsteigend nach Tragkraft, bei Gleichstand der kuerzere Abschnitt zuerst
+    rang = sorted(teuer, key=lambda t: (TRAGKRAFT.get(_komposition(t[1]), 2),
+                                        float(t[1].get("bis", 0)) - float(t[1].get("von", 0))))
+    weg = rang[:len(teuer) - max(0, passt)]
+    return {i: (f"Kostendeckel {DECKEL_USD:.2f} USD: {len(teuer)} gebaute Elemente "
+                f"passen nicht, {_komposition(a)} traegt am wenigsten")
+            for i, a in weg}
+
+
 class BuildRequest(BaseModel):
     session_id: str
     plan:       Optional[dict] = None
     rendern:    bool = True
 
 
+BUILD_JOBS: dict = {}
+_build_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _build_job(job_id: str, req: "BuildRequest"):
+    """Eigener Thread mit eigener Schleife. Der Bau dauert Minuten, und der
+    Renderpfad darunter ist blockierend — auf der Hauptschleife wuerde er den
+    ganzen Dienst anhalten."""
+    try:
+        BUILD_JOBS[job_id] = {"status": "processing", "session_id": req.session_id,
+                              **asyncio.run(_build_impl(req))}
+        BUILD_JOBS[job_id]["status"] = "done"
+    except HTTPException as exc:
+        BUILD_JOBS[job_id] = {"status": "error", "error": str(exc.detail)[:600]}
+    except Exception as exc:
+        log.exception("[BAU] %s", job_id)
+        BUILD_JOBS[job_id] = {"status": "error", "error": str(exc)[:600]}
+
+
 @app.post("/tool/build")
-async def tool_build(req: BuildRequest):
-    """STUFE 2: den Plan ausfuehren. Keine Geschmacksentscheidung, kein Turn-
-    Budget, keine Fertig-Bedingungen — der Plan hat entschieden."""
+def tool_build(req: BuildRequest):
+    """STUFE 2 anstossen. Gibt sofort einen Job zurueck.
+
+    Synchron ging das nicht mehr: 295 Sekunden Bau ueberschreiten das
+    HTTP-Limit am Railway-Edge, der Aufrufer bekam `upstream error` 502,
+    waehrend der Server sauber weiterlief und das Video ablieferte. Ein
+    stiller Erfolg, der wie ein Ausfall aussieht — und mit mehr Elementen
+    wird es schlimmer, nicht besser."""
+    if not req.session_id:
+        raise HTTPException(status_code=400, detail="session_id noetig")
+    job_id = str(uuid.uuid4())
+    BUILD_JOBS[job_id] = {"status": "processing", "session_id": req.session_id}
+    _build_executor.submit(_build_job, job_id, req)
+    return {"ok": True, "job_id": job_id, "status": "processing",
+            "session_id": req.session_id}
+
+
+@app.get("/tool/build/status/{job_id}")
+def tool_build_status(job_id: str):
+    j = BUILD_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="unbekannter Job")
+    return j
+
+
+async def _build_impl(req: BuildRequest):
+    """Der Plan ausgefuehrt. Keine Geschmacksentscheidung, kein Turn-Budget,
+    keine Fertig-Bedingungen — der Plan hat entschieden."""
     s = _sess(req.session_id)
     plan = req.plan or s.get("plan")
     if not plan or not (plan.get("abschnitte") or []):
@@ -10615,11 +10708,31 @@ async def tool_build(req: BuildRequest):
     # zerlegt. Im Plan-Pfad meldet sie nur noch; korrigiert wird in Stufe 3.
     s["plan_pfad"] = True
 
+    # Vor dem ersten Aufruf entscheiden, was nicht mehr hineinpasst. Waehrend
+    # des Baus zu merken, dass das Geld alle ist, hiesse: die spaeten Abschnitte
+    # fallen aus, egal wie wichtig sie sind.
+    zurueckgestuft = _deckel_plan(s, plan, float(s.get("kosten_plan") or 0.0))
+    if zurueckgestuft:
+        log.warning("[BAU] Kostendeckel: %d Abschnitte werden vollbild (%s)",
+                    len(zurueckgestuft), ", ".join(str(i) for i in zurueckgestuft))
     protokoll = []
     for i, a in enumerate(plan["abschnitte"]):
         kopf = {"nr": i, "von": a.get("von"), "bis": a.get("bis"),
                 "komposition": _komposition(a), "block": a.get("block", "")}
         try:
+            if i in zurueckgestuft:
+                protokoll.append(_abweichung(kopf, _komposition(a), "vollbild",
+                                             zurueckgestuft[i]))
+                continue
+            # Nachziehen, falls die Schaetzung zu niedrig lag: der Deckel ist
+            # eine Zusage, kein Richtwert.
+            bisher = (float(s.get("kosten_plan") or 0.0)
+                      + sum(float(p.get("kosten") or 0) for p in protokoll))
+            if bisher >= DECKEL_USD and _kostet_modell(s, a):
+                protokoll.append(_abweichung(
+                    kopf, _komposition(a), "vollbild",
+                    f"Kostendeckel erreicht ({bisher:.2f} von {DECKEL_USD:.2f} USD)"))
+                continue
             protokoll.append(await _abschnitt_bauen(s, a, i))
         except Exception as exc:
             # Ein gescheiterter Abschnitt ist eine Abweichung, kein Abbruch:
@@ -10632,17 +10745,22 @@ async def tool_build(req: BuildRequest):
     kosten = round(sum(float(p.get("kosten") or 0) for p in protokoll), 4)
     umgesetzt = sum(1 for p in protokoll if p.get("umgesetzt") != "vollbild")
     geplant = sum(1 for a in plan["abschnitte"] if _komposition(a) != "vollbild")
-    log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD, %.1fs",
-             s["id"], umgesetzt, geplant, len(s["layers"]), kosten, time.time() - t0)
+    gesamt = round(kosten + float(s.get("kosten_plan") or 0.0), 4)
+    log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD "
+             "(mit Plan %.4f von %.2f), %.1fs", s["id"], umgesetzt, geplant,
+             len(s["layers"]), kosten, gesamt, DECKEL_USD, time.time() - t0)
     _log_run(s["client_id"], "build", "ok" if not abweichungen else "warn",
              {"session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
               "ebenen": len(s["layers"]), "kosten_usd": kosten,
+              "kosten_gesamt_usd": gesamt, "zurueckgestuft": len(zurueckgestuft),
               "abweichungen": abweichungen,
               "sekunden": round(time.time() - t0, 1)})
     aus = {"ok": True, "session_id": s["id"], "protokoll": protokoll,
            "umgesetzt": umgesetzt, "geplant": geplant,
            "abweichungen": abweichungen,
            "ebenen": len(s["layers"]), "kosten_usd": kosten,
+           "kosten_gesamt_usd": gesamt, "deckel_usd": DECKEL_USD,
+           "zurueckgestuft": len(zurueckgestuft),
            "sekunden": round(time.time() - t0, 1)}
     if req.rendern:
         aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))

@@ -10264,7 +10264,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
             min(sek, HTML_TOOL_MAX_S), s["client_id"],
             s.get("model") or HTML_AGENT_MODELL)
         if res.get("url"):
+            # Der Gestalter MELDET Ueberlauf, Stufe 2 hat ihn verschluckt: im
+            # Durchstich stand "oud Cod" im Bild, an beiden Raendern
+            # abgeschnitten. Das Element wird trotzdem gesetzt — aber laut.
+            if res.get("ueberlauf"):
+                log.warning("[BAU] plan_abweichung: Element laeuft aus der "
+                            "Leinwand — %s", str(res.get("hinweis"))[:160])
             return {"quelle_art": "gestalter", "runden": res.get("runden"),
+                    "ueberlauf": bool(res.get("ueberlauf")),
+                    "hinweis": str(res.get("hinweis") or "")[:200],
                     "kosten": float(res.get("kosten_usd") or 0.0),
                     "sekunden_material": float(res.get("seconds") or sek),
                     "layer_source": {"kind": "video", "url": res["url"],
@@ -10370,6 +10378,10 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     s["layers"].extend(neu)
     aus = {**kopf, "umgesetzt": a["zustand"], "quelle_art": res["quelle_art"],
            "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
+    if res.get("ueberlauf"):
+        aus["abweichung"] = {"geplant": a["zustand"], "tatsaechlich": a["zustand"],
+                             "grund": "Element laeuft aus der Leinwand: "
+                                      + str(res.get("hinweis") or "")[:120]}
     if verkuerzt > 0.4:
         aus["abweichung"] = {"geplant": a["zustand"], "tatsaechlich": a["zustand"],
                              "grund": f"Element {verkuerzt:.1f}s kuerzer als der Abschnitt"}

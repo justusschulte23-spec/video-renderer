@@ -9604,6 +9604,7 @@ ER IST DA, ABER ETWAS PASSIERT
   overlay_wandert Vollbild, ein Element zieht durchs Bild und verschwindet
                   → nebenbei genannte Zahlen, Namen, Werkzeuge
   flaeche_kippt   Vollbild, die FARBE des Bildes kippt mit der Aussage.
+                  "braucht": null — das legt das System selbst.
                   KEIN Text, KEIN Muster, KEINE Kacheln — es liegt ueber seinem
                   Gesicht. Nur Farbe. Willst du Worte zeigen, nimm eine andere
                   Komposition
@@ -9851,6 +9852,10 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             if b:
                 fehler.append(f"Abschnitt {i} ({von:.1f}s): vollbild braucht nichts")
             continue
+        if k == "flaeche_kippt":
+            # Die Flaeche legt das System selbst — sie braucht keinen Auftrag,
+            # und einen Text darf sie ohnehin nicht tragen.
+            continue
         if not b:
             fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' ohne 'braucht' — die "
                           f"Ausfuehrung wuesste nicht, was sie bauen soll")
@@ -9989,6 +9994,15 @@ def _plan_verankern(plan: dict, s: dict) -> list:
         b = a.get("braucht") or {}
         begriff = str(b.get("zeigt") or b.get("was") or "")
         quelle = str(b.get("quelle") or "")
+        # Auch ueber das Fundstueck selbst: im Lauf 7a1589b6c722 hatte der
+        # Beleg-Abschnitt gar keinen Text, also fand der Abgleich nichts und
+        # der Screenshot landete wieder bei Sekunde 5.
+        if not begriff.strip():
+            for m in (s.get("material") or []):
+                if _dateiname(m.get("url", "")).lower() in quelle.lower() \
+                        or quelle.startswith("vorhanden"):
+                    begriff = str(m.get("was") or "")
+                    break
         for schl, eintrag in belege.items():
             if schl and (schl in begriff.lower() or _dateiname(eintrag.get("url", "")).lower() in quelle.lower()):
                 begriff = schl
@@ -10767,7 +10781,11 @@ KOMP_BOXEN = {
 BRAUCHT_FLAECHE = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                    "haelften", "bubble", "bubble_wandert")
 # Diese holen kein Material — sie sind reine Kamerabewegung auf ihm selbst.
-OHNE_MATERIAL = ("vollbild", "punch", "drift")
+# flaeche_kippt ist eine FARBE ueber seinem Gesicht. Dafuer braucht es keinen
+# Gestalter: eine Flaeche in der Markenfarbe kann das System selbst legen —
+# kostenlos, deterministisch, und sie kann nicht danebengehen. Bestellt man sie,
+# kommt ein Punktemuster mit Text zurueck und deckt das Gesicht zu.
+OHNE_MATERIAL = ("vollbild", "punch", "drift", "flaeche_kippt")
 # Kompositionen, deren Element eigenen Text ins Bild bringt. Nur dort ducken
 # die Untertitel — bei einem Stockclip ohne Schrift waere es unnoetig.
 TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
@@ -10851,6 +10869,26 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             "block": a.get("block", "")}
     if k == "vollbild" or bis_f - von_f < 2:
         return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam"}
+    if k == "flaeche_kippt":
+        # Eine Toenung in der Markenfarbe, die kommt und wieder geht. Die
+        # Deckkraft-Kurve steht schon in _komp_animate.
+        farben = s.get("colors") or {}
+        akzent = (farben.get("akzent") or farben.get("accent")
+                  or farben.get("primary") or "#8B5CF6")
+        _, el_anim = _komp_animate(k, b, von_f, bis_f)
+        s["layers"].append(_layer_defaults({
+            "id": f"kippt_{i}", "z": Z_ELEMENT,
+            "source": {"kind": "html", "markup":
+                       "<div style=\"position:absolute;inset:0;background:"
+                       "linear-gradient(160deg,%s 0%%,transparent 70%%)\"></div>"
+                       % akzent},
+            "from": von_f, "to": bis_f,
+            "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+            "animate": el_anim,
+            "herkunft": "plan:flaeche", "konzept": str(a.get("block") or "")[:80],
+        }, frames))
+        return {**kopf, "umgesetzt": k, "quelle_art": "flaeche",
+                "ebenen": [f"kippt_{i}"], "kosten": 0.0}
     if k not in KOMP_BOXEN:
         return _abweichung(kopf, k, "vollbild", "unbekannte Komposition")
     # D2: eine Bubble ohne echte Bewegung dahinter ist schlechter als Vollbild.

@@ -1,14 +1,33 @@
-/* ── count-up ── */
-/* count-up.css — motion-anything recipe · category: emphasis
- * Tabular figures keep the width steady while the number animates. */
+/* attention-pulse */
+/* attention-pulse.css — motion-anything recipe · category: attention
+ * A soft expanding ring to draw the eye to ONE element. Transform + opacity only.
+ * reduced-motion: no pulse. */
 
-[data-count] {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
+[data-pulse] { position: relative; }
+[data-pulse]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--pulse-color, #8b7cf6);
+  opacity: 0;
+  transform: scale(1);
+  animation: ma-pulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+@keyframes ma-pulse {
+  0%   { opacity: 0.5; transform: scale(1); }
+  70%  { opacity: 0;   transform: scale(1.5); }
+  100% { opacity: 0;   transform: scale(1.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pulse]::after { animation: none; display: none; }
 }
 
 
-/* ── blur-text ── */
+/* blur-text */
 /* blur-text.css — text-kinetic · words resolve from blur, staggered. filter/opacity only. */
 [data-blur-text] .bt-w { display:inline-block; opacity:0; filter:blur(8px); transition: opacity .62s ease-out, filter .62s ease-out; transition-delay: var(--bt-d,0ms); }
 [data-blur-text].in .bt-w { opacity:1; filter:blur(0); }
@@ -16,27 +35,7 @@
 @media (prefers-reduced-motion: reduce){ [data-blur-text] .bt-w{ opacity:1; filter:none; transition:none } }
 
 
-/* ── shiny-text ── */
-/* shiny-text.css — motion-anything recipe · category: text-kinetic
- * A highlight band sweeps across muted text (text-clipped gradient). GPU-safe; static under reduced-motion. */
-.shiny {
-  --shiny-base: #8a8a94;
-  --shiny-hi: #ffffff;
-  background: linear-gradient(100deg, var(--shiny-base) 40%, var(--shiny-hi) 50%, var(--shiny-base) 60%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  animation: shiny-sweep 3s linear infinite;
-}
-@keyframes shiny-sweep { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .shiny { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--shiny-base); }
-}
-
-
-/* ── border-beam ── */
+/* border-beam */
 /* border-beam.css — motion-anything recipe · category: ambient
  * A small bright comet travels the border via a rotating conic-gradient masked to a thin ring.
  * Livelier than shine-border. Compositor-friendly; fully static under reduced-motion. */
@@ -91,26 +90,7 @@
 }
 
 
-/* ── star-border ── */
-/* star-border.css — category: ambient · a light rotates around the border. Compositor-friendly; static under reduced-motion. */
-@property --star-a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
-.star {
-  --star-color: #8b7cf6; --star-w: 1.6px; --star-a: 0deg;
-  position: relative; border-radius: 999px; border: 0; cursor: pointer;
-  background: #14151c; color: #e7e8ee; font: 600 15px/1 ui-sans-serif, system-ui, sans-serif; padding: 13px 24px; isolation: isolate;
-}
-.star::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; padding: var(--star-w);
-  background: conic-gradient(from var(--star-a), transparent 0 60%, var(--star-color) 78%, #fff 82%, var(--star-color) 86%, transparent 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
-  animation: star-spin 4s linear infinite;
-}
-@keyframes star-spin { to { --star-a: 360deg; } }
-@media (prefers-reduced-motion: reduce) { .star::before { animation: none; background: none; border: var(--star-w) solid rgba(139,124,246,.45); } }
-
-
-/* ── bounce-cards ── */
+/* bounce-cards */
 /* bounce-cards.css — entrance · cards spring + fan out on load, staggered. transform/opacity only. */
 .bcards{ position:relative; width:220px; height:150px; }
 .bcards .bc{ position:absolute; inset:0; margin:auto; width:180px; height:120px; border-radius:14px; box-shadow:0 12px 30px rgba(0,0,0,.4);
@@ -122,36 +102,162 @@
 @media (prefers-reduced-motion: reduce){ .bcards .bc{ transition:none; opacity:1 } }
 
 
-/* ── attention-pulse ── */
-/* attention-pulse.css — motion-anything recipe · category: attention
- * A soft expanding ring to draw the eye to ONE element. Transform + opacity only.
- * reduced-motion: no pulse. */
+/* card-lift-hover */
+/* card-lift-hover.css — motion-anything recipe · category: hover-press
+ * Pure CSS. Transform + shadow only. Static under reduced-motion. */
 
-[data-pulse] { position: relative; }
-[data-pulse]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  border: 2px solid var(--pulse-color, #8b7cf6);
-  opacity: 0;
-  transform: scale(1);
-  animation: ma-pulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
-  pointer-events: none;
-  will-change: transform, opacity;
+.lift-card {
+  transform: translateY(0);
+  box-shadow: 0 2px 10px rgba(20, 18, 14, 0.06);
+  /* fast band, ease-out */
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
 }
-@keyframes ma-pulse {
-  0%   { opacity: 0.5; transform: scale(1); }
-  70%  { opacity: 0;   transform: scale(1.5); }
-  100% { opacity: 0;   transform: scale(1.5); }
+.lift-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 16px 32px rgba(20, 18, 14, 0.13);
+}
+.lift-card:active {
+  transform: translateY(-2px);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-pulse]::after { animation: none; display: none; }
+  .lift-card,
+  .lift-card:hover,
+  .lift-card:active { transform: none; transition: box-shadow 120ms ease; }
 }
 
 
-/* ── gradient-text ── */
+/* circular-text */
+/* circular-text.css — ambient · characters placed on a circle; the ring slowly rotates. transform only. */
+.circ{ position:relative; width:160px; height:160px; animation: circ-spin 12s linear infinite; }
+.circ .circ-c{ position:absolute; left:50%; top:0; transform-origin: 0 80px; font:600 14px ui-sans-serif,system-ui,sans-serif; color:#c8bdff; }
+@keyframes circ-spin{ to{ transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce){ .circ{ animation:none } }
+
+
+/* count-up */
+/* count-up.css — motion-anything recipe · category: emphasis
+ * Tabular figures keep the width steady while the number animates. */
+
+[data-count] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+
+/* counter */
+/* counter.css — emphasis · digits roll vertically to the target. transform only. */
+.counter{ display:inline-flex; font:800 56px ui-sans-serif,system-ui,sans-serif; line-height:1; }
+.counter .dig{ display:inline-block; height:1em; overflow:hidden; }
+.counter .dig .strip{ display:flex; flex-direction:column; transition: transform 1s cubic-bezier(.16,1,.3,1); }
+.counter .dig .strip span{ height:1em; }
+@media (prefers-reduced-motion: reduce){ .counter .dig .strip{ transition:none } }
+
+
+/* dock */
+/* dock.css — hover-press · dock icons scale toward the pointer. transform only. */
+.dock{ display:inline-flex; align-items:flex-end; gap:10px; padding:10px 14px; border-radius:18px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); backdrop-filter:blur(8px); }
+.dock .dk{ width:46px; height:46px; border-radius:12px; display:grid; place-items:center; font-size:22px; background:linear-gradient(135deg,#2a2551,#14151c); color:#e7e8ee; transition: transform .16s cubic-bezier(.16,1,.3,1); transform-origin:bottom; cursor:pointer; }
+@media (prefers-reduced-motion: reduce){ .dock .dk{ transition:none; transform:none !important } }
+
+
+/* elastic-slider */
+/* elastic-slider.css — feedback-delight · a slider with a springy fill. transform/width only. */
+.es{ width:260px; }
+.es .es-track{ position:relative; height:8px; border-radius:6px; background:#2a2b36; cursor:pointer; }
+.es .es-fill{ position:absolute; left:0; top:0; bottom:0; border-radius:6px; background:linear-gradient(90deg,#8b7cf6,#39d98a); width:40%; transition: width .12s cubic-bezier(.34,1.56,.64,1); }
+.es .es-knob{ position:absolute; top:50%; width:18px; height:18px; border-radius:50%; background:#fff; transform:translate(-50%,-50%); box-shadow:0 2px 8px rgba(0,0,0,.3); transition: transform .12s cubic-bezier(.34,1.56,.64,1); }
+@media (prefers-reduced-motion: reduce){ .es .es-fill,.es .es-knob{ transition:none } }
+
+
+/* electric-border */
+/* electric-border.css — ambient · a jittery dashed outline animates around a card. Static under reduced-motion. */
+.electric { --elec-color:#7cf; position:relative; border-radius:14px; background:#14151c; }
+.electric::before { content:""; position:absolute; inset:-2px; border-radius:16px; border:2px solid var(--elec-color);
+  filter: drop-shadow(0 0 4px var(--elec-color)); clip-path: inset(0 round 16px);
+  animation: elec-dash 0.9s linear infinite; opacity:.9; }
+.electric::before { border-style: dashed; stroke-dasharray: 6 6; }
+@keyframes elec-dash { to { transform: translateX(6px); } }
+@media (prefers-reduced-motion: reduce){ .electric::before{ animation:none; border-style:solid } }
+
+
+/* fade-content */
+/* fade-content.css — scroll-reveal · fade + gentle rise on view (once). opacity/transform only. */
+.fade-content { opacity: 0; transform: translateY(16px) scale(.985); transition: opacity .6s ease-out, transform .6s ease-out; transition-delay: var(--fc-delay, 0ms); will-change: opacity, transform; }
+.fade-content.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce){ .fade-content{ opacity:1; transform:none; transition:none } }
+
+
+/* fade-in-up */
+/* fade-in-up.css — motion-anything recipe · category: entrance
+ * Transform + opacity only. Ships a prefers-reduced-motion fallback. */
+
+[data-fade] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 460ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 460ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--fade-delay, 0ms);
+  will-change: opacity, transform;
+}
+[data-fade].is-in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-fade] { opacity: 1; transform: none; transition: none; }
+}
+
+
+/* falling-text */
+/* falling-text.css — text-kinetic · letters drop in, staggered with a soft bounce. transform/opacity only. */
+[data-falling] .fl-c { display:inline-block; opacity:0; transform: translateY(-.7em); transition: opacity .5s ease-out, transform .6s cubic-bezier(.34,1.56,.64,1); transition-delay: var(--fl-d,0ms); }
+[data-falling].in .fl-c { opacity:1; transform:none; }
+@media (prefers-reduced-motion: reduce){ [data-falling] .fl-c{ opacity:1; transform:none; transition:none } }
+
+
+/* glare-hover */
+/* glare-hover.css — category: hover-press · a glare tracks the cursor across a card. Paint only; off on touch/reduced-motion. */
+.glare { --gx: 50%; --gy: 50%; position: relative; overflow: hidden; border-radius: 16px; isolation: isolate; }
+.glare::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 220ms ease-out;
+  background: radial-gradient(240px circle at var(--gx) var(--gy), rgba(255,255,255,.22), transparent 55%);
+}
+.glare:hover::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .glare::after { display: none; } }
+@media (hover: none) { .glare::after { display: none; } }
+
+
+/* glass-icons */
+/* glass-icons.css — hover-press · glassmorphic icon buttons that lift + glow on hover. transform/opacity only. */
+.gi{ display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; border-radius:16px;
+  background:linear-gradient(135deg, rgba(255,255,255,.14), rgba(255,255,255,.04)); border:1px solid rgba(255,255,255,.18);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); color:#fff; font-size:22px; cursor:pointer;
+  transition: transform .2s cubic-bezier(.16,1,.3,1), box-shadow .2s; }
+.gi:hover{ transform: translateY(-4px) scale(1.05); box-shadow: 0 14px 30px rgba(139,124,246,.4); }
+@media (prefers-reduced-motion: reduce){ .gi{ transition:none } .gi:hover{ transform:none } }
+
+
+/* glitch-text */
+/* glitch-text.css — text-kinetic · RGB-split glitch. transform/clip only. Steady under reduced-motion. */
+.glitch { position: relative; color: #e7e8ee; font-weight: 800; letter-spacing: .02em; }
+.glitch::before, .glitch::after { content: attr(data-text); position: absolute; inset: 0; }
+.glitch::before { color: #ff2d78; animation: glitch-x 2.6s infinite steps(2); clip-path: inset(0 0 55% 0); }
+.glitch::after { color: #2de2ff; animation: glitch-x 3.1s infinite reverse steps(2); clip-path: inset(55% 0 0 0); }
+@keyframes glitch-x { 0%,92%,100%{transform:translate(0)} 93%{transform:translate(-2px,1px)} 95%{transform:translate(2px,-1px)} 97%{transform:translate(-1px,-1px)} }
+@media (prefers-reduced-motion: reduce){ .glitch::before,.glitch::after{ display:none } }
+
+
+/* gooey-nav */
+/* gooey-nav.css — hover-press · a pill slides under the active item. transform only. */
+.gnav{ position:relative; display:inline-flex; gap:4px; padding:5px; border-radius:999px; background:#14151c; border:1px solid #2a2b36; }
+.gnav .gn-pill{ position:absolute; top:5px; bottom:5px; border-radius:999px; background:linear-gradient(90deg,#8b7cf6,#6d54e6); transition: transform .35s cubic-bezier(.34,1.4,.5,1), width .35s cubic-bezier(.34,1.4,.5,1); z-index:0; }
+.gnav button{ position:relative; z-index:1; border:0; background:none; color:#c8c9d4; font:600 14px ui-sans-serif,system-ui,sans-serif; padding:9px 18px; border-radius:999px; cursor:pointer; transition:color .2s; }
+.gnav button.on{ color:#fff; }
+@media (prefers-reduced-motion: reduce){ .gnav .gn-pill{ transition:none } }
+
+
+/* gradient-text */
 /* gradient-text.css — motion-anything recipe · category: text-kinetic
  * A gradient clipped to the text drifts slowly. Reserve for one short headline.
  * Animates background-position only — GPU-safe; solid color under reduced-motion. */
@@ -182,3 +288,575 @@
     color: var(--g1);                 /* fall back to a solid brand color */
   }
 }
+
+
+/* gradual-blur */
+/* gradual-blur.css — ambient · progressive blur toward the bottom edge (backdrop-filter + mask). */
+.grad-blur { position: relative; }
+.grad-blur::after { content:""; position:absolute; left:0; right:0; bottom:0; height:90px; pointer-events:none;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  -webkit-mask: linear-gradient(to top, #000 30%, transparent); mask: linear-gradient(to top, #000 30%, transparent); }
+@media (prefers-reduced-motion: reduce){ .grad-blur::after{ } }
+
+
+/* kinetic-headline */
+/* kinetic-headline.css — motion-anything recipe · category: text-kinetic
+ * Words/letters stagger in. The STYLE is chosen by data-kinetic-anim (→ .k-anim-* class in JS),
+ * mirroring the video engine's kinetic presets. Transform/opacity/filter only. Reduced-motion safe. */
+
+[data-kinetic] { display: inline-block; }
+
+/* base: hidden units that transition to their resting state on .is-in */
+[data-kinetic] .k-unit {
+  display: inline-block;
+  opacity: 0;
+  transition: opacity 520ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 520ms cubic-bezier(0.16, 1, 0.3, 1),
+              filter 520ms ease-out;
+  transition-delay: var(--k-delay, 0ms);
+  will-change: opacity, transform, filter;
+}
+[data-kinetic].is-in .k-unit { opacity: 1; transform: none; filter: none; }
+
+/* preserve spaces between word units */
+[data-kinetic] .k-space { display: inline-block; width: 0.28em; }
+
+/* ── presets: the initial (pre-reveal) state per style ───────────────────────── */
+.k-anim-rise  .k-unit { transform: translateY(0.5em); }
+.k-anim-drop  .k-unit { transform: translateY(-0.5em); }
+.k-anim-fade  .k-unit { transform: none; }
+.k-anim-slide .k-unit { transform: translateX(0.6em); }
+.k-anim-pop   .k-unit { transform: scale(0.4);
+  transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1); }   /* overshoot */
+.k-anim-blur  .k-unit { transform: none; filter: blur(10px); }
+.k-anim-flip  .k-unit { transform: rotateX(-90deg); transform-origin: bottom; }
+.k-anim-spin  .k-unit { transform: rotate(-18deg) scale(0.6); }
+.k-anim-typewriter .k-unit { transform: none; transition-duration: 1ms; }  /* hard, staggered = typing */
+
+/* continuous, ambient — no reveal; each unit rides a slow wave */
+.k-anim-wave .k-unit {
+  opacity: 1;
+  animation: kh-wave 1.8s ease-in-out infinite;
+  animation-delay: var(--k-delay, 0ms);
+}
+@keyframes kh-wave { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.22em); } }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-kinetic] .k-unit {
+    opacity: 1 !important; transform: none !important; filter: none !important;
+    transition: none; animation: none !important;
+  }
+}
+
+
+/* like-burst */
+/* like-burst.css — motion-anything recipe · category: feedback-delight
+ * Timing/easing pulled from MOTION-SPEC.md. Transforms + opacity only (GPU-safe).
+ * Always ships a prefers-reduced-motion fallback. */
+
+.like-btn {
+  --lb-size: 56px;
+  --lb-on: #ff4d6d;
+  --lb-off: #c9ccd3;
+  width: var(--lb-size);
+  height: var(--lb-size);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--lb-off);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  /* fast band (140–220ms), ease-out default for user-responsive UI */
+  transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.like-btn:hover { transform: scale(1.06); }
+.like-btn:active { transform: scale(0.92); }
+.like-btn.is-liked { color: var(--lb-on); }
+
+/* Icon "pop" on toggle — a punchy scale that settles. */
+@keyframes lb-pop {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(0.8); }
+  60%  { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+.like-btn.lb-pop { animation: lb-pop 420ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Particle layer is appended to <body>, positioned at the burst origin. */
+.lb-particles {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 9999;
+}
+.lb-particle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px;
+  border-radius: 50%;
+  /* deliberate band (~600ms) for a celebratory moment */
+  animation: lb-fly 600ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes lb-fly {
+  0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+  70%  { opacity: 1; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(0.2); opacity: 0; }
+}
+
+/* Accessibility: honor reduced-motion. Keep only a minimal color/scale cue. */
+@media (prefers-reduced-motion: reduce) {
+  .like-btn,
+  .like-btn:hover,
+  .like-btn:active { transition: color 120ms ease; transform: none; }
+  .like-btn.lb-pop { animation: none; }
+  .lb-particles { display: none; }
+}
+
+
+/* loading-shimmer */
+/* loading-shimmer.css — motion-anything recipe · category: loading
+ * Skeleton placeholders with a soft sweeping highlight.
+ * The sweep is a pseudo-element moved with transform (GPU-safe — no layout/paint thrash).
+ * reduced-motion: static skeleton, no sweep. */
+
+[data-skeleton] {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #e9eaee;
+}
+[data-skeleton]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.6) 50%,
+    rgba(255, 255, 255, 0) 100%);
+  animation: ma-shimmer 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes ma-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-skeleton]::after { animation: none; display: none; }
+}
+
+
+/* magnet-lines */
+/* magnet-lines.css — ambient · a grid of lines that rotate toward the pointer. transform only. */
+.mag-lines{ display:grid; gap:10px; }
+.mag-lines .ml{ width:6px; height:26px; border-radius:3px; background:linear-gradient(#8b7cf6,#3a2f63); margin:auto; transition: transform .12s ease-out; }
+@media (prefers-reduced-motion: reduce){ .mag-lines .ml{ transition:none; transform:none !important } }
+
+
+/* magnetic-button */
+/* magnetic-button.css — motion-anything recipe · category: hover-press
+ * Transform only (GPU-safe). Static under reduced-motion / touch. */
+
+.magnetic {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: #8b7cf6;
+  color: #fff;
+  font: 600 15px/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 14px 22px;
+  border-radius: 12px;
+  cursor: pointer;
+  /* fast band; snappy spring-like settle back to rest */
+  transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+  -webkit-tap-highlight-color: transparent;
+}
+.magnetic:active { transform: scale(0.97); }
+
+@media (prefers-reduced-motion: reduce) {
+  .magnetic { transition: none; }
+}
+
+
+/* pixel-card */
+/* pixel-card.css — hover-press · pixel overlay shimmers on hover. opacity only. */
+.pxc{ position:relative; overflow:hidden; border-radius:14px; }
+.pxc .pxc-grid{ position:absolute; inset:0; display:grid; pointer-events:none; }
+.pxc .pxc-grid i{ background:var(--pxc-color,rgba(139,124,246,.5)); opacity:0; transition:opacity .4s ease; }
+.pxc:hover .pxc-grid i{ opacity:1; transition-delay:var(--d,0ms); }
+@media (prefers-reduced-motion: reduce){ .pxc:hover .pxc-grid i{ transition:none } }
+
+
+/* pixel-transition */
+/* pixel-transition.css — hover-press · pixel tiles flip in to reveal the back face on hover. opacity only. */
+.pixt{ position:relative; overflow:hidden; border-radius:14px; }
+.pixt .pixt-back{ position:absolute; inset:0; display:grid; opacity:0; }
+.pixt .px{ background:var(--pixt-color,#8b7cf6); opacity:0; transition:opacity .01s; }
+.pixt:hover .pixt-back{ opacity:1; }
+.pixt:hover .px{ opacity:1; transition-delay:var(--d,0ms); }
+@media (prefers-reduced-motion: reduce){ .pixt .pixt-back{ transition:none } .pixt:hover .px{ transition:none; opacity:1 } }
+
+
+/* ripple-press */
+/* ripple.css — motion-anything recipe · category: feedback-delight
+ * A ripple span spawned at the press point scales + fades. Transform/opacity only — GPU-safe. */
+
+.ripple {
+  position: relative;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+.ripple > .ripple-wave {
+  position: absolute;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0.35;
+  background: currentColor;          /* inherits a tint from the button's text color */
+  pointer-events: none;
+  animation: ripple-bloom 600ms ease-out forwards;
+}
+@keyframes ripple-bloom {
+  to { transform: scale(1); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ripple > .ripple-wave { display: none; }   /* rely on native :active feedback */
+}
+
+
+/* rotating-text */
+/* rotating-text.css — text-kinetic · word swaps in place (up-and-in). transform/opacity only. */
+.rot { display:inline-block; overflow:hidden; vertical-align:bottom; }
+.rot > .rot-w { display:inline-block; transition: transform .45s cubic-bezier(.16,1,.3,1), opacity .45s; }
+.rot.swap > .rot-w { transform: translateY(-100%); opacity: 0; }
+@media (prefers-reduced-motion: reduce){ .rot > .rot-w{ transition:none } }
+
+
+/* scroll-float */
+/* scroll-float.css — text-kinetic · words rise + fade on view, staggered. transform/opacity only. */
+[data-scroll-float] .sf-w{ display:inline-block; opacity:0; transform:translateY(24px); transition:opacity .6s ease-out, transform .6s cubic-bezier(.16,1,.3,1); transition-delay:var(--sf-d,0ms); }
+[data-scroll-float].in .sf-w{ opacity:1; transform:none; }
+[data-scroll-float] .sf-sp{ display:inline-block; width:.28em; }
+@media (prefers-reduced-motion: reduce){ [data-scroll-float] .sf-w{ opacity:1; transform:none; transition:none } }
+
+
+/* scroll-reveal */
+/* scroll-reveal.css — motion-anything recipe · category: scroll-reveal
+ * Transforms + opacity only (GPU-safe). Ships a prefers-reduced-motion fallback. */
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(16px);
+  /* base band (~520ms), ease-out for content entering toward the user */
+  transition: opacity 520ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+[data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] { opacity: 1; transform: none; transition: none; }
+}
+
+
+/* shimmer-button */
+/* shimmer-button.css — motion-anything recipe · category: feedback-delight
+ * A masked highlight sweeps across a CTA. Transform of a pseudo-element only — GPU-safe.
+ * Reserve for one primary button; static under reduced-motion. */
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  background: #8b7cf6;
+  color: #fff;
+  font: 600 15px/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 14px 24px;
+  border-radius: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform: translateX(-130%) skewX(-18deg);
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%);
+  animation: shimmer-sweep 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+.shimmer:hover::after { animation-duration: 1.1s; }   /* quicken on hover */
+
+@keyframes shimmer-sweep {
+  0%, 55% { transform: translateX(-130%) skewX(-18deg); }
+  100%    { transform: translateX(130%) skewX(-18deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after { animation: none; display: none; }
+}
+
+
+/* shine-border */
+/* shine-border.css — motion-anything recipe · category: ambient
+ * A light travels around the border via a rotating conic-gradient masked to a thin ring.
+ * Compositor-friendly; fully static under reduced-motion. */
+
+@property --shine-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.shine {
+  --shine-angle: 0deg;
+  --shine-width: 1.5px;
+  --shine-color: #8b7cf6;
+  position: relative;
+  border-radius: 16px;
+  background: #14151c;
+  color: #e7e8ee;
+  isolation: isolate;
+}
+.shine::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  padding: var(--shine-width);
+  background: conic-gradient(
+    from var(--shine-angle),
+    transparent 0%,
+    var(--shine-color) 12%,
+    transparent 28%,
+    transparent 100%
+  );
+  /* mask to just the border ring */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: shine-spin 4s linear infinite;
+}
+@keyframes shine-spin {
+  to { --shine-angle: 360deg; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shine::before { animation: none; background: none; border: var(--shine-width) solid rgba(139, 124, 246, 0.4); }
+}
+
+
+/* shiny-text */
+/* shiny-text.css — motion-anything recipe · category: text-kinetic
+ * A highlight band sweeps across muted text (text-clipped gradient). GPU-safe; static under reduced-motion. */
+.shiny {
+  --shiny-base: #8a8a94;
+  --shiny-hi: #ffffff;
+  background: linear-gradient(100deg, var(--shiny-base) 40%, var(--shiny-hi) 50%, var(--shiny-base) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: shiny-sweep 3s linear infinite;
+}
+@keyframes shiny-sweep { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .shiny { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--shiny-base); }
+}
+
+
+/* spotlight-card */
+/* spotlight-card.css — motion-anything recipe · category: hover-press
+ * A radial spotlight painted at the cursor (--mx/--my set by JS). Paint only — GPU-safe. */
+
+.spotlight {
+  position: relative;
+  --mx: 50%;
+  --my: 50%;
+  border-radius: 16px;
+  background: #14151c;
+  color: #e7e8ee;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 240ms ease-out;
+}
+/* the moving glow */
+.spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+  background: radial-gradient(
+    260px circle at var(--mx) var(--my),
+    rgba(139, 124, 246, 0.18),
+    transparent 60%
+  );
+}
+.spotlight:hover { border-color: rgba(139, 124, 246, 0.45); }
+.spotlight:hover::before { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight::before { display: none; }          /* no moving light */
+  .spotlight { transition: none; }
+}
+@media (hover: none) {
+  .spotlight::before { display: none; }           /* no cursor to follow */
+}
+
+
+/* stagger-list */
+/* stagger-list.css — motion-anything recipe · category: entrance · target: list
+ * Direct children rise + fade in, staggered. Transform + opacity only.
+ * Ships a prefers-reduced-motion fallback. */
+
+[data-stagger] > * {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 440ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 440ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--st-delay, 0ms);
+  will-change: opacity, transform;
+}
+[data-stagger].is-in > * { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-stagger] > * { opacity: 1; transform: none; transition: none; }
+}
+
+
+/* star-border */
+/* star-border.css — category: ambient · a light rotates around the border. Compositor-friendly; static under reduced-motion. */
+@property --star-a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.star {
+  --star-color: #8b7cf6; --star-w: 1.6px; --star-a: 0deg;
+  position: relative; border-radius: 999px; border: 0; cursor: pointer;
+  background: #14151c; color: #e7e8ee; font: 600 15px/1 ui-sans-serif, system-ui, sans-serif; padding: 13px 24px; isolation: isolate;
+}
+.star::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; padding: var(--star-w);
+  background: conic-gradient(from var(--star-a), transparent 0 60%, var(--star-color) 78%, #fff 82%, var(--star-color) 86%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
+  animation: star-spin 4s linear infinite;
+}
+@keyframes star-spin { to { --star-a: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .star::before { animation: none; background: none; border: var(--star-w) solid rgba(139,124,246,.45); } }
+
+
+/* stepper */
+/* stepper.css — feedback-delight · connectors fill + dots pop as steps complete. transform/color only. */
+.stepper{ display:inline-flex; align-items:center; }
+.stepper .st{ width:30px; height:30px; border-radius:50%; display:grid; place-items:center; font:600 13px ui-sans-serif; background:#2a2b36; color:#8b909a; transition: background .3s, color .3s, transform .3s cubic-bezier(.34,1.56,.64,1); }
+.stepper .st.done{ background:#8b7cf6; color:#fff; transform:scale(1.08); }
+.stepper .bar{ width:56px; height:3px; background:#2a2b36; margin:0 4px; border-radius:2px; position:relative; overflow:hidden; }
+.stepper .bar::after{ content:""; position:absolute; inset:0; width:0; background:#8b7cf6; transition: width .4s ease; }
+.stepper .bar.fill::after{ width:100%; }
+@media (prefers-reduced-motion: reduce){ .stepper .st,.stepper .bar::after{ transition:none } }
+
+
+/* tilt-3d */
+/* tilt-3d.css — motion-anything recipe · category: hover-press
+ * Pointer-driven 3D tilt (rotateX/rotateY) with a soft glare. Transform only — GPU-safe.
+ * Flat under reduced-motion / touch. */
+
+.tilt {
+  --rx: 0deg;
+  --ry: 0deg;
+  --gx: 50%;
+  --gy: 50%;
+  position: relative;
+  transform-style: preserve-3d;
+  transform: perspective(800px) rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform 200ms ease-out;
+  will-change: transform;
+  border-radius: 16px;
+  overflow: hidden;
+}
+/* soft glare that tracks the pointer */
+.tilt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+  background: radial-gradient(200px circle at var(--gx) var(--gy), rgba(255, 255, 255, 0.22), transparent 60%);
+}
+.tilt:hover::after { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tilt { transform: none; transition: none; }
+  .tilt::after { display: none; }
+}
+@media (hover: none) {
+  .tilt { transform: none; }
+  .tilt::after { display: none; }
+}
+
+
+/* toggle-spring */
+/* toggle-spring.css — motion-anything recipe · category: feedback-delight · target: button
+ * A switch whose knob springs across on toggle. Transform only (GPU-safe).
+ * reduced-motion: quick linear slide, no overshoot. */
+
+.ms-toggle {
+  display: inline-flex;
+  align-items: center;
+  width: 52px;
+  height: 30px;
+  border-radius: 999px;
+  background: #d8d6cf;
+  border: 0;
+  padding: 3px;
+  cursor: pointer;
+  transition: background 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ms-toggle .knob {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  transform: translateX(0);
+  transition: transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1); /* spring overshoot */
+  will-change: transform;
+}
+.ms-toggle.on { background: #8b7cf6; }
+.ms-toggle.on .knob { transform: translateX(22px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ms-toggle .knob { transition: transform 0.15s linear; }
+}
+
+
+/* true-focus */
+/* true-focus.css — text-kinetic · words blurred except the focused one. filter only. */
+.tf { display:inline-flex; gap:.4em; flex-wrap:wrap; }
+.tf > .tf-w { filter: blur(5px); opacity:.6; transition: filter .5s ease, opacity .5s ease; }
+.tf > .tf-w.on { filter: blur(0); opacity:1; }
+@media (prefers-reduced-motion: reduce){ .tf > .tf-w{ filter:none; opacity:1 } }

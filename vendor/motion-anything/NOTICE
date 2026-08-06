@@ -1,22 +1,14 @@
-Diese Dateien stammen aus nexu-io/motion-anything und stehen unter der
-Apache License 2.0. Der Lizenztext liegt daneben (LICENSE), die Herkunft
-der einzelnen Effekte in ATTRIBUTION.md.
+Aus nexu-io/motion-anything, Apache License 2.0 (LICENSE daneben,
+Herkunft der einzelnen Effekte in ATTRIBUTION.md).
 
-Uebernommen am 2026-08-06, unveraendert, folgende Rezepte:
-  - count-up
-  - decrypted-text
-  - blur-text
-  - shiny-text
-  - border-beam
-  - star-border
-  - bounce-cards
-  - attention-pulse
-  - gradient-text
-  - aurora
-  - dot-grid
-  - _fx/shaderbg.js (WebGL-Laeufer)
+Uebernommen am 2026-08-06, unveraendert:
+  - alle 84 Web-Rezepte aus recipes/web plus _fx/shaderbg.js
+  - 1121 Icons aus reicon (MIT, (c) Dev Chauhan) als SVG-Sprite
 
-Geaendert wurde nichts am Code der Rezepte. Der Renderer stellt lediglich
-die Uhr: requestAnimationFrame und performance.now werden waehrend der
-Aufnahme durch eine Frame-Uhr ersetzt, damit die Bewegung deterministisch
-aufgenommen werden kann.
+NICHT uebernommen: die 112 'HTML-Vorlagen' — html-templates.json enthaelt
+nur Titel, Zusammenfassung und einen Link auf ein anderes Repo, kein
+Markup. Als Vorlage unbrauchbar.
+
+Geaendert wurde am Code der Rezepte nichts. Der Renderer stellt nur die
+Uhr: requestAnimationFrame und performance.now werden waehrend der
+Aufnahme durch eine Frame-Uhr ersetzt.

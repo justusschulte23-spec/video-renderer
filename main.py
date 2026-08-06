@@ -768,6 +768,50 @@ SEEK_JS = """(t) => {
 FX_DIR = Path("vendor/motion-anything")
 FX_JS = FX_DIR / "fx.js"
 FX_CSS = FX_DIR / "fx.css"
+FX_ICONS = FX_DIR / "icons.svg"
+FX_ICON_LISTE = FX_DIR / "icons.txt"
+_ICONS: dict = {}
+
+
+def _icons_laden() -> dict:
+    """Das Sprite einmal in Einzelsymbole zerlegen. 2,5 MB in jede Seite zu
+    haengen wuerde die Aufnahme ausbremsen — eingebettet wird nur, was das
+    Markup wirklich benutzt."""
+    if _ICONS or not FX_ICONS.exists():
+        return _ICONS
+    roh = FX_ICONS.read_text(encoding="utf-8")
+    for m in re.finditer(r'<symbol id="(ic-[^"]+)"([^>]*)>(.*?)</symbol>', roh, re.S):
+        _ICONS[m.group(1)] = '<symbol id="%s"%s>%s</symbol>' % (m.group(1), m.group(2), m.group(3))
+    log.info("[FX] %d Icons geladen", len(_ICONS))
+    return _ICONS
+
+
+def _icon_sprite(markup: str) -> str:
+    """Nur die benutzten Symbole, als kleines Sprite vor das Markup."""
+    alle = _icons_laden()
+    ids = set(re.findall(r'href="#(ic-[a-z0-9_\-]+)"', markup or "", re.I))
+    teile = [alle[i] for i in sorted(ids) if i in alle]
+    if not teile:
+        return ""
+    return ('<svg xmlns="http://www.w3.org/2000/svg" style="display:none" '
+            'aria-hidden="true">' + "".join(teile) + "</svg>")
+
+
+def _icon_namen(n: int = 150) -> str:
+    """Ein Ausschnitt der Namen fuer den Prompt — nach Kategorie gruppiert."""
+    if not FX_ICON_LISTE.exists():
+        return ""
+    nach_kat: dict = {}
+    for zeile in FX_ICON_LISTE.read_text(encoding="utf-8").splitlines():
+        if "\t" not in zeile:
+            continue
+        kat, name = zeile.split("\t", 1)
+        nach_kat.setdefault(kat, []).append(name)
+    zeilen = []
+    for kat in sorted(nach_kat):
+        namen = nach_kat[kat][:12]
+        zeilen.append("  %-14s %s" % (kat, " ".join(namen)))
+    return "\n".join(zeilen[:24])
 
 
 async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
@@ -801,7 +845,7 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
         f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}"
         f"</style><style>{fx_css}</style></head>"
-        f"<body>{markup}"
+        f"<body>{_icon_sprite(markup)}{markup}"
         # Die Rezepte NACH dem Markup, damit ihr init die Elemente findet.
         f"<script>{fx_js}</script>"
         "</body></html>"
@@ -9668,6 +9712,8 @@ HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
 - keine Komposition zweimal hintereinander, keine mehr als dreimal im Video
 - die Vollbild-Familie (vollbild, punch, drift, overlay_wandert,
   flaeche_kippt) traegt mindestens 35 Prozent der Laufzeit
+- hoechstens ZWEI beleg im ganzen Video — drei Vollbild-Dokumente sind eine
+  Diashow. Ein weiterer Fund gehoert neben ihn oder hinter ihn
 - hoechstens ZWEI uebernahme im ganzen Video — er soll nicht dauernd
   verschwinden
 - text ohne bewegung und ohne eine Zahl ist eine Folie und wird abgelehnt
@@ -9921,6 +9967,13 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         if n > MAX_JE_KOMPOSITION:
             fehler.append(f"'{k}' kommt {n}-mal vor, hoechstens "
                           f"{MAX_JE_KOMPOSITION}-mal — du hast 16 zur Auswahl")
+    # Drei Vollbild-Belege hintereinander sind ein Dokument-Slideshow, kein
+    # Video. Zweimal reicht; der dritte Fund gehoert in eine Komposition, in
+    # der er NEBEN ihm steht.
+    if zaehler.get("beleg", 0) > 2:
+        fehler.append(f"{zaehler['beleg']} Belege, hoechstens 2 — der dritte "
+                      f"Fund gehoert neben ihn (seite_links/seite_rechts) oder "
+                      f"hinter ihn (bubble), nicht noch einmal formatfuellend")
     if zaehler.get("uebernahme", 0) > MAX_UEBERNAHMEN:
         fehler.append(f"{zaehler['uebernahme']} Uebernahmen, hoechstens "
                       f"{MAX_UEBERNAHMEN} — er soll nicht dauernd verschwinden")
@@ -11819,39 +11872,52 @@ def _letzte_html_elemente(client_id: str, n: int = 5) -> list:
 # Code — die Liste steht hier als LATTE: das ist das Niveau, auf dem heute
 # Bewegung gebaut wird. Wer sie kopieren wollte, muesste die Lizenz beachten;
 # wer sich daran misst, nicht.
-HTML_AGENT_REZEPTE = """DU HAST EINE EFFEKTBIBLIOTHEK. BENUTZ SIE.
-Elf Rezepte liegen in der Seite, ohne dass du etwas laden musst. Du schreibst
-nur das Element und haengst das Attribut oder die Klasse dran — der Rest
-laeuft. Alles davon ist aufnahmefest: die Bewegung wird Frame fuer Frame
+HTML_AGENT_REZEPTE = """DU HAST EINE EFFEKTBIBLIOTHEK UND 1100 ICONS. BENUTZ SIE.
+84 Rezepte und die Icons liegen in der Seite, ohne dass du etwas laden musst.
+Du schreibst das Element und haengst die Klasse oder das Attribut dran — der
+Rest laeuft. Alles ist aufnahmefest: die Bewegung wird Frame fuer Frame
 gestellt, nichts zittert.
 
 ZAHLEN UND SCHRIFT
-  <span data-count="70" data-count-suffix=" Shops">0</span>
-        zaehlt hoch statt dazustehen. IMMER bei einer Zahl benutzen.
-        data-count-prefix, data-count-suffix, data-count-duration (ms)
-  <span class="decrypt" data-text="LIMIT ERREICHT">LIMIT ERREICHT</span>
-        Zeichen wuerfeln sich in den Text hinein
-  <span class="blur-text">Zeile</span>      kommt aus der Unschaerfe
-  <span class="shiny">Zeile</span>          Lichtstreifen wandert durch
-  <span class="gradient-text">Zeile</span>  Farbverlauf wandert durch
+  <span data-count="70" data-count-suffix=" Shops">0</span>  zaehlt hoch
+  <span class="decrypt" data-text="LIMIT">LIMIT</span>       Zeichen wuerfeln sich
+  <span class="blur-text">Zeile</span>                       aus der Unschaerfe
+  <span class="shiny">Zeile</span>                           Licht wandert durch
+  <span class="gradient-text">Zeile</span>                   Verlauf wandert
+  <span class="circular-text">…</span>  <span class="text-pressure">…</span>
 
-RAHMEN UND AUFTRITT
-  <div class="beam">…</div>     Lichtpunkt laeuft am Rahmen entlang
-  <button class="star">…</button>  Sternenrand, gut fuer EIN Schlagwort
-  <div class="bcards">…</div>   Kinder federn nacheinander herein
-  <button class="cta" data-pulse>…</button>  pulst ruhig weiter
+RAHMEN, KARTEN, AUFTRITT
+  <div class="beam">…</div>        Lichtpunkt laeuft am Rahmen entlang
+  <button class="star">…</button>  Sternenrand
+  <div class="bcards">…</div>      Kinder federn nacheinander herein
+  <div class="card-lift-hover">…</div>   <div class="glass-icons">…</div>
+  <button class="cta" data-pulse>…</button>
 
-FLAECHEN (nur als Hintergrund, nie ueber Text)
+FLAECHEN — nur als Hintergrund, nie ueber Text
   <div class="aurora" data-colors="#8B5CF6,#A78BFA,#8B5CF6"></div>
-  <div class="dot-grid"></div>
+  <div class="dot-grid"></div>   <div class="dark-veil"></div>
+  <div class="silk"></div>       <div class="waves"></div>
 
-REGELN DAZU
+ICONS — 1100 Stueck, als Sprite in der Seite
+  <svg class="ic" width="48" height="48"><use href="#ic-NAME"/></svg>
+  Die Farbe kommt aus currentColor. Namen (Auszug, es gibt viel mehr):
+{ICONS}
+
+GEGEN LEERE BILDER — das ist der haeufigste Fehler
+Ein Element mit einer Ueberschrift und einer grauen Zeile darunter ist kein
+Element, das ist eine Folie. Jedes Element hat MINDESTENS:
+  - eine Hierarchie aus drei Stufen: Kicker klein, Hauptwert gross, Beleg klein
+  - EIN Icon oder eine Zahl, die traegt
+  - eine Flaeche, Kante oder Trennlinie, die die Teile ordnet
+  - eine Bewegung aus der Liste oben
+Kein zentrierter Satz auf leerer Flaeche. Weissraum ist Ordnung, nicht Leere:
+gefuellt wird mit Hierarchie und Struktur, nicht mit mehr Text.
+
+REGELN
 - Eine Zahl ohne data-count ist eine verschenkte Zahl.
-- Hoechstens ZWEI Effekte je Element. Drei sind Jahrmarkt.
-- data-colors und jede Farbe kommen aus den Markentokens, nicht aus dem
-  Beispiel oben.
-- Die Effekte ersetzen keine Gestaltung: Weissraum, Kontrast und EINE Aussage
-  je Element gelten weiter."""
+- Hoechstens ZWEI Bewegungen je Element. Drei sind Jahrmarkt.
+- Farben nur aus den Markentoken. Auch data-colors.
+- Icons sparsam: eines, das traegt, nicht fuenf, die dekorieren."""
 
 
 FX_KLASSEN = ("decrypt", "blur-text", "shiny", "gradient-text", "beam",
@@ -11977,6 +12043,8 @@ def _html_agent_prompt(art: str, client_id: str) -> str:
             teile += ["", "SCHNITTSTIL DES KUNDEN:", str(sg["edit_style"])[:600]]
     except Exception as exc:
         log.warning("[HTMLAGENT] Style-Guide: %s", exc)
+    teile = [t.replace("{ICONS}", _icon_namen() or "  (keine Liste gefunden)")
+             if "{ICONS}" in t else t for t in teile]
     bsp = _few_shot_overlays()
     if bsp:
         teile += ["", bsp]

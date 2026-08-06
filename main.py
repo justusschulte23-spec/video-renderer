@@ -10156,6 +10156,11 @@ HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
 - jedes gebaute Element braucht "art_element". Ohne das bekommt der Gestalter
   fuer eine Zahl dasselbe Layout wie fuer ein Zitat — und genau so sieht es
   dann auch aus
+- unten_aufbau und oben_unterbau brauchen ZWINGEND "endzustand": was steht am
+  Ende da, wenn der Aufbau fertig ist. Ohne das faellt der Abschnitt auf
+  vollbild zurueck — er hat schon einmal einen bezahlten Abschnitt gekostet
+- durchforsten braucht "url" und "ziel", KEIN "zeigt". Ohne url gibt es
+  nichts zu durchsuchen; dann nimm beleg oder eine andere Komposition
 - in seite_links, seite_rechts, bubble und bubble_wandert hoechstens DREI
   Woerter je Textzeile. Aufzaehlungen, Vergleiche und ganze Saetze gehoeren in
   unten_aufbau, haelften oder uebernahme — dort ist Platz dafuer
@@ -10346,7 +10351,15 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             fehler.append(f"Abschnitt {i} ({von:.1f}s): punch ohne 'wort'")
         elif k == "drift" and not str(b.get("richtung") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): drift ohne 'richtung'")
-        elif k not in ("punch", "drift") and not str(b.get("zeigt") or "").strip():
+        elif k == "durchforsten" and not str(b.get("url") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): durchforsten ohne 'url' — "
+                          f"es gibt nichts zu durchsuchen")
+        # durchforsten beschreibt sein Bild ueber url+ziel, nicht ueber 'zeigt'.
+        # Genau das kostete am 06.08. einen bezahlten Abschnitt: der Plan war
+        # baubar, der Pruefer verlangte ein Feld, das die Komposition gar nicht
+        # kennt, und der Abschnitt fiel auf vollbild.
+        elif (k not in ("punch", "drift", "durchforsten")
+                and not str(b.get("zeigt") or "").strip()):
             fehler.append(f"Abschnitt {i} ({von:.1f}s): 'braucht.zeigt' fehlt — was "
                           f"ist konkret zu sehen?")
         if k in BEWEGUNG_PFLICHT and not bewegt:
@@ -12250,6 +12263,15 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     p("Es steht etwas im Bild", len(eigene) >= 1, True,
       "%d Ebenen ausser Facecam und Untertiteln" % len(eigene))
 
+    # Tote Strecke. Der erste Lauf hatte 21,3s am Stueck ohne ein einziges
+    # Element — die Kennzahlen sagten trotzdem "sieben von zehn gebaut". Wo
+    # nichts passiert, sieht man nicht, wie viel woanders passiert ist.
+    luecke_f, luecke_ab = _max_gap(s["layers"], s["frames"])
+    grenze = min(20.0, max(6.0, (s["frames"] / FPS) / 4))
+    p("Keine tote Strecke", luecke_f / FPS <= grenze, True,
+      "%.1fs ohne Element ab %.1fs (erlaubt %.1fs)"
+      % (luecke_f / FPS, luecke_ab / FPS, grenze))
+
     draussen = []
     for l in eigene:
         t = l.get("transform") or {}
@@ -13249,6 +13271,22 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                         "fehler": "Du hast das Geruest weggeworfen. Die Klassen "
                                   "wrap, flaeche und inhalt bleiben stehen — "
                                   "veredle es, bau es nicht neu."}
+            # ⚠️ DER WAECHTER PRUEFTE DIE FALSCHE SACHE. Er sah nach, ob die
+            # KLASSENNAMEN dastehen — nicht, ob der <style>-Block dazu noch da
+            # ist. Am 06.08. kam genau das heraus: Klassen behalten, Stylesheet
+            # geworfen, und der Browser rendert unformatierten Text in 16px auf
+            # eine 1080er Leinwand. Im Video war das ein Stapel 6-Pixel-Woerter
+            # in der Ecke, und keine Pruefung hat angeschlagen, weil formal
+            # alles dastand.
+            if _geruest and not ("<style" in mk and ".flaeche" in mk):
+                zustand["runden"] += 1
+                return {"ok": False, "runde": zustand["runden"],
+                        "fehler": "Der <style>-Block des Geruests fehlt. Die "
+                                  "Klassennamen allein tun nichts — ohne das "
+                                  "Stylesheet rendert der Browser rohen Text in "
+                                  "16px. Uebernimm das <style> aus dem Geruest "
+                                  "vollstaendig und haeng deine eigenen Regeln "
+                                  "hinten an."}
             mk, verdrahtet = _fx_verdrahten(mk)
             if verdrahtet:
                 log.info("[HTMLAGENT] verdrahtet: %s", ", ".join(verdrahtet))
@@ -13287,6 +13325,11 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                     "ueberlappungen": pr["ueberlappungen"],
                     "schrift_zu_klein": [f"{k['knoten']} {k['schrift_px']}px"
                                          for k in pr["zu_klein"]],
+                    # Die groesste Schrift ist die Kennzahl fuer Hierarchie.
+                    # Steht sie bei 16, ist das Stylesheet weg.
+                    "groesste_schrift_px": max((int(k.get("schrift_px") or 0)
+                                                for k in pr.get("knoten") or []),
+                                               default=0),
                     "js_fehler": pr["js_fehler"],
                     "fehlender_inhalt": pr["fehlender_inhalt"],
                     "runden_uebrig": HTML_AGENT_RUNDEN - zustand["runden"]}
@@ -13332,6 +13375,19 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             for f in pr.get("fehlender_inhalt", []):
                 maengel.append(f"'{f['erwartet']}' aus dem Feld {f['feld']} steht am Ende "
                                f"der Standzeit nicht im Element")
+            # KEINE HIERARCHIE = kein Element. Geprueft wird die GROESSTE
+            # Schrift, nicht die kleinste: eine kleine Fussnote ist erlaubt,
+            # aber wenn NICHTS im Element gross ist, gibt es keinen Hauptwert —
+            # und das ist genau der Abdruck eines verlorenen Stylesheets, wo
+            # alles in der Browser-Grundgroesse von 16px landet.
+            groesste = max((int(k.get("schrift_px") or 0)
+                            for k in pr.get("knoten") or []), default=0)
+            if pr.get("leinwand") and pr["leinwand"][0] >= 400 and 0 < groesste < 34:
+                maengel.append(
+                    f"groesste Schrift im Element ist {groesste}px auf "
+                    f"{pr['leinwand'][0]}px Leinwand — das hat keine Hierarchie "
+                    f"und ist auf dem Handy nicht lesbar. Sieht das Element nach "
+                    f"unformatiertem Text aus, fehlt dein <style>")
             uebrig = HTML_AGENT_RUNDEN - zustand["runden"]
             if maengel and uebrig > 0:
                 return {"ok": False, "abgelehnt": True,

@@ -9731,8 +9731,12 @@ VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_ki
 BEWEGUNG_PFLICHT = ("unten_aufbau", "oben_unterbau", "bubble", "bubble_wandert",
                     "overlay_wandert", "flaeche_kippt")
 ENDZUSTAND_PFLICHT = ("unten_aufbau", "oben_unterbau")
-# Diese drei duerfen kurz sein — ein Punch IST kurz.
+# Diese drei duerfen unter die 4 Sekunden — ein Punch IST kurz. Die 1,0 s sind
+# keine Gestaltungsregel, sondern die Grenze, unter der eine Komposition kein
+# Bild mehr ist, sondern ein Zucken. Vorher standen hier 3 s als Boden: damit
+# fiel ein 2,5-s-Punch am Videoende durch, den das Papier ausdruecklich erlaubt.
 KURZ_ERLAUBT = ("beleg", "punch", "overlay_wandert")
+MIN_TECHNISCH_S = 1.0
 # Diese bewegen sich von sich aus, sie brauchen keine zusaetzliche Bewegung,
 # um eine lange Strecke zu tragen.
 EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_kippt")
@@ -10055,7 +10059,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
 
         # Rhythmus: kein Takt, aber weder Hektik noch tote Strecke.
         letzter = i == len(ab) - 1
-        unten = MIN_KURZ_S if k in KURZ_ERLAUBT else MIN_ABSCHNITT_S
+        unten = MIN_TECHNISCH_S if k in KURZ_ERLAUBT else MIN_ABSCHNITT_S
         if laenge < unten - 1e-6 and not (letzter and laenge >= MIN_KURZ_S):
             fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {laenge:.1f}s — "
                           f"'{k}' braucht mindestens {unten:.0f}s"
@@ -10280,13 +10284,20 @@ def _auftrag_aus_braucht(a: dict) -> dict:
     ("...der 'Abo-Falle' und der A..."). Uebersetzung darf nichts erfinden und
     nichts durchreichen, was fuer den Zuschauer nie gedacht war."""
     b = a.get("braucht") or {}
-    t = b.get("text") or {}
+    t = b.get("text")
+    zeilen = ([str(x).strip() for x in t if str(x).strip()] if isinstance(t, list)
+              else [str(t).strip()] if t else [])
+    if isinstance(t, dict):     # alte Fassung: hauptwert/beschriftung/einordnung
+        zeilen = [str(t.get(f) or "").strip()
+                  for f in ("hauptwert", "beschriftung", "einordnung")
+                  if str(t.get(f) or "").strip()]
     return {"art": str(b.get("art_element") or "titel"),
-            "hauptwert": str(t.get("hauptwert") or "").strip()[:60],
-            "beschriftung": str(t.get("beschriftung") or "").strip()[:60],
-            "einordnung": str(t.get("einordnung") or "").strip()[:60],
+            "hauptwert": (zeilen[0] if zeilen else "")[:60],
+            "beschriftung": " · ".join(zeilen[1:])[:120],
+            "einordnung": str(b.get("endzustand") or "").strip()[:120],
+            "zeigt": str(b.get("zeigt") or "").strip()[:300],
             "akzent_auf": "hauptwert",
-            "bewegung": "ruhig einblenden, leichter Schub"}
+            "bewegung": str(b.get("bewegung") or "ruhig einblenden")[:200]}
 
 
 def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
@@ -10308,7 +10319,9 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     """Ein Auftrag, ein Ergebnis. Kein Ermessen darueber, OB etwas gebraucht
     wird — das hat der Plan entschieden."""
     b = a.get("braucht") or {}
-    zustand, was = a["zustand"], str(b.get("was") or "")
+    k = _komposition(a)
+    # "zeigt" ist der Auftrag, "was" war der alte Name dafuer.
+    was = str(b.get("zeigt") or b.get("was") or "").strip()
     quelle = str(b.get("quelle") or "").lower()
     sek = max(1.0, float(a["bis"]) - float(a["von"]))
 
@@ -10329,7 +10342,7 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         except Exception as exc:
             log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
 
-    if zustand == "metapher" and was:
+    if k == "metapher" and was:
         # NUR fuer die Metapher. Im ersten Durchstich lief Stock auch fuer
         # Bubble-Hintergruende und lieferte einen Maschendrahtzaun und eine
         # schmelzende Vase — fuer eine abstrakte Aussage vertretbar, hinter
@@ -10349,14 +10362,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         return {"quelle_art": "", "grund": "vorhandenes Material nicht gefunden"}
 
     try:
-        voll = zustand in ("uebernahme", "bubble", "beleg")
+        kasten = (KOMP_BOXEN.get(k) or (None, None))[1] or {"w": 1, "h": 1}
+        w_px = max(200, int(round(float(kasten.get("w", 1)) * W)))
+        h_px = max(160, int(round(float(kasten.get("h", 1)) * H)))
         # _html_subagent ruft intern asyncio.run fuer den Pruefstand. Direkt
         # aus diesem async-Endpoint heraus wirft das "cannot be called from a
         # running event loop" — im ersten Durchstich sind daran zwei
         # Abschnitte auf vollbild gefallen.
         res = await asyncio.to_thread(
-            _html_subagent, _auftrag_aus_braucht(a),
-            W if voll else 860, H if voll else 560,
+            _html_subagent, _auftrag_aus_braucht(a), w_px, h_px,
             min(sek, HTML_TOOL_MAX_S), s["client_id"],
             s.get("model") or HTML_AGENT_MODELL)
         if res.get("url"):
@@ -10390,96 +10404,180 @@ def _abweichung(kopf: dict, geplant: str, tatsaechlich: str, grund: str) -> dict
             "grund": str(grund)[:200]}
 
 
+# Name -> Geometrie. Der Renderer konnte das alles laengst: die Facecam ist eine
+# freie Ebene mit Transform. Hier steht, was ein Name bedeutet — als Tabelle,
+# nicht als sechzehn Sonderfaelle im Code.
+#   cam:  Kasten der Facecam-KOPIE im Fenster (None = Pflichtebene bleibt, wie sie ist)
+#   el:   Kasten des Elements
+# Warum eine Kopie und nicht die Facecam selbst: mehrere animate-Kurven auf
+# derselben Eigenschaft klemmen in applyAnimations auf ihren from-Wert — die
+# Pflichtebene waere schon VOR dem ersten Fenster verschoben. Die Kopie kostet
+# Dekodierung nur im Fenster.
+KOMP_BOXEN = {
+    "vollbild":        (None, None),
+    "punch":           ({"x": 0, "y": 0, "w": 1, "h": 1}, None),
+    "drift":           ({"x": 0, "y": 0, "w": 1, "h": 1}, None),
+    "unten_aufbau":    ({"x": 0, "y": 0.62, "w": 1, "h": 0.38},
+                        {"x": 0.06, "y": 0.06, "w": 0.88, "h": 0.50}),
+    "oben_unterbau":   ({"x": 0, "y": 0, "w": 1, "h": 0.62},
+                        {"x": 0.06, "y": 0.66, "w": 0.88, "h": 0.24}),
+    "seite_links":     ({"x": 0, "y": 0.19, "w": 0.62, "h": 0.62},
+                        {"x": 0.64, "y": 0.19, "w": 0.32, "h": 0.62}),
+    "seite_rechts":    ({"x": 0.38, "y": 0.19, "w": 0.62, "h": 0.62},
+                        {"x": 0.04, "y": 0.19, "w": 0.32, "h": 0.62}),
+    "haelften":        ({"x": 0, "y": 0, "w": 1, "h": 0.5},
+                        {"x": 0, "y": 0.5, "w": 1, "h": 0.5}),
+    "bubble":          ({"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
+                        {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "bubble_wandert":  ({"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
+                        {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "uebernahme":      (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "beleg":           (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "metapher":        (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "durchforsten":    (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    "overlay_wandert": (None, {"x": 0.08, "y": 0.30, "w": 0.52, "h": 0.16}),
+    "flaeche_kippt":   (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+}
+# Wer das Bild NICHT ganz fuer sich hat, braucht eine Flaeche hinter sich.
+BRAUCHT_FLAECHE = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
+                   "haelften", "bubble", "bubble_wandert")
+# Diese holen kein Material — sie sind reine Kamerabewegung auf ihm selbst.
+OHNE_MATERIAL = ("vollbild", "punch", "drift")
+
+
+def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
+    """Die Bewegung, die den Namen erst zur Komposition macht. Gibt
+    (Kurven fuer die Facecam-Kopie, Kurven fuer das Element) zurueck."""
+    d = max(2, bis_f - von_f)
+    rein = min(bis_f, von_f + max(3, int(0.25 * FPS)))
+    if k == "punch":
+        # Rein und wieder raus. Zwei Kurven auf derselben Eigenschaft gehen hier,
+        # weil die Ebene nur im Fenster existiert: davor gibt es sie nicht.
+        mitte = von_f + int(d * 0.35)
+        return ([{"property": "scale", "from": 1.0, "to": 1.28,
+                  "start": von_f, "end": min(mitte, von_f + 8), "easing": "spring"},
+                 {"property": "scale", "from": 1.28, "to": 1.0,
+                  "start": max(mitte, bis_f - 10), "end": bis_f, "easing": "easeOut"}], [])
+    if k == "drift":
+        richtung = str(b.get("richtung") or "rein").lower()
+        if richtung.startswith("rein"):
+            return ([{"property": "scale", "from": 1.0, "to": 1.14,
+                      "start": von_f, "end": bis_f, "easing": "linear"}], [])
+        if richtung.startswith("raus"):
+            return ([{"property": "scale", "from": 1.14, "to": 1.0,
+                      "start": von_f, "end": bis_f, "easing": "linear"}], [])
+        weite = 0.06 if richtung.startswith("rechts") else -0.06
+        return ([{"property": "scale", "from": 1.1, "to": 1.1,
+                  "start": von_f, "end": bis_f, "easing": "linear"},
+                 {"property": "x", "from": -weite / 2, "to": weite / 2,
+                  "start": von_f, "end": bis_f, "easing": "linear"}], [])
+    if k == "bubble_wandert":
+        ecke = str(b.get("zielecke") or "unten links").lower()
+        ziel_x = 0.06 if "link" in ecke else BUBBLE_X
+        ziel_y = 0.70 if "unten" in ecke else BUBBLE_Y
+        mitte = von_f + int(d * 0.45)
+        return ([{"property": "x", "from": BUBBLE_X, "to": ziel_x,
+                  "start": mitte, "end": min(bis_f, mitte + 18), "easing": "easeInOut"},
+                 {"property": "y", "from": BUBBLE_Y, "to": ziel_y,
+                  "start": mitte, "end": min(bis_f, mitte + 18), "easing": "easeInOut"}], [])
+    if k == "overlay_wandert":
+        return ([], [{"property": "x", "from": 0.72, "to": 0.06,
+                      "start": von_f, "end": bis_f, "easing": "easeInOut"},
+                     {"property": "opacity", "from": 0.0, "to": 1.0,
+                      "start": von_f, "end": rein, "easing": "easeOut"}])
+    if k == "flaeche_kippt":
+        # Die Flaeche legt sich UEBER ihn und wieder weg — das ist der Umschlag.
+        weg = max(rein, bis_f - max(3, int(0.4 * FPS)))
+        return ([], [{"property": "opacity", "from": 0.0, "to": 0.55,
+                      "start": von_f, "end": rein, "easing": "easeOut"},
+                     {"property": "opacity", "from": 0.55, "to": 0.0,
+                      "start": weg, "end": bis_f, "easing": "easeInOut"}])
+    # Alles, was sich aufbaut, kommt herein statt einfach dazustehen.
+    return ([], [{"property": "opacity", "from": 0.0, "to": 1.0,
+                  "start": von_f, "end": rein, "easing": "easeOut"}])
+
+
 async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     """Einen Abschnitt in Ebenen uebersetzen. Gibt das Protokoll zurueck —
     was geholt wurde, woher, und wenn nichts: warum."""
     frames = s["frames"]
+    k = _komposition(a)
+    b = a.get("braucht") or {}
     von_f = max(0, int(round(float(a["von"]) * FPS)))
     bis_f = min(frames, int(round(float(a["bis"]) * FPS)))
-    kopf = {"nr": i, "von": a["von"], "bis": a["bis"], "zustand": a["zustand"],
+    kopf = {"nr": i, "von": a["von"], "bis": a["bis"], "komposition": k,
             "block": a.get("block", "")}
-    if a["zustand"] == "vollbild" or bis_f - von_f < 2:
+    if k == "vollbild" or bis_f - von_f < 2:
         return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam"}
+    if k not in KOMP_BOXEN:
+        return _abweichung(kopf, k, "vollbild", "unbekannte Komposition")
+    # D2: eine Bubble ohne echte Bewegung dahinter ist schlechter als Vollbild.
+    if k.startswith("bubble") and not str(b.get("bewegung") or "").strip():
+        return _abweichung(kopf, k, "vollbild", "bubble ohne bewegung")
 
-    res = await _beschaffen(s, a, i)
-    if not res.get("quelle_art"):
-        # Vorgesehene Abweichung (Papier D): nichts gefunden → Vollbild. Aber
-        # sie MUSS laut sein. Im ersten Durchstich sind zwei Abschnitte still
-        # auf vollbild gefallen, weil der Gestalter an asyncio.run starb — im
-        # Protokoll stand es, im Log nicht, und im Video sucht man es.
-        return _abweichung(kopf, a["zustand"], "vollbild",
-                           res.get("grund") or "nichts gefunden")
+    cam_box, el_box = KOMP_BOXEN[k]
+    cam_anim, el_anim = _komp_animate(k, b, von_f, bis_f)
+    neu, res = [], {}
 
-    src = res["layer_source"]
-    durchsichtig = bool(src.get("transparent"))
-    # Ein bestelltes Element ist hoechstens HTML_TOOL_MAX_S lang. Es laenger
-    # stehen zu lassen als es Material hat, waere ein Standbild — der
-    # Hintergrund traegt den Rest des Abschnitts.
-    el_bis = bis_f
+    if k not in OHNE_MATERIAL:
+        res = await _beschaffen(s, a, i)
+        if not res.get("quelle_art"):
+            return _abweichung(kopf, k, "vollbild",
+                               res.get("grund") or "nichts gefunden")
+
     verkuerzt = 0.0
+    el_bis = bis_f
     if res.get("sekunden_material"):
         el_bis = min(bis_f, von_f + int(round(res["sekunden_material"] * FPS)))
         verkuerzt = round((bis_f - el_bis) / FPS, 2)
-        if verkuerzt > 0.4:
-            log.warning("[BAU] plan_abweichung Abschnitt %d (%.1f-%.1fs): %s steht "
-                        "nur %.1fs statt %.1fs — Element ist kuerzer als der "
-                        "Abschnitt", i, a["von"], a["bis"], a["zustand"],
-                        res["sekunden_material"], float(a["bis"]) - float(a["von"]))
-    neu = []
-    if durchsichtig or a["zustand"] == "bubble":
+
+    src = res.get("layer_source") or {}
+    if k in BRAUCHT_FLAECHE or (src.get("transparent") and k != "flaeche_kippt"):
         neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
 
-    if a["zustand"] == "bubble":
-        # Hintergrund vollflaechig, er selbst klein oben rechts. Die Facecam
-        # darunter laeuft weiter — eine zweite kleine Kopie kostet nur im
-        # Fenster, ein Umbau der Pflichtebene haette den ganzen Clip getroffen.
-        neu.append(_layer_defaults({
-            "id": f"bubble_{i}", "z": Z_ELEMENT + 1,
-            "source": {"kind": "video", "url": s["face_url"]},
-            "from": von_f, "to": bis_f, "mask": "circle",
-            "transform": {"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
-            "herkunft": "plan:bubble", "konzept": str(a.get("block") or "")[:80],
-        }, frames))
-        neu.insert(len(neu) - 1, _layer_defaults({
-            "id": f"hg_{i}", "z": Z_ELEMENT,
-            "source": src, "from": von_f, "to": el_bis,
-            "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
-            "herkunft": f"plan:{res['quelle_art']}",
-            "konzept": str((a.get("braucht") or {}).get("was") or "")[:80],
-        }, frames))
-    else:
-        # uebernahme, beleg, metapher: vollflaechig, das Gesicht ist bewusst weg.
-        # Ken-Burns nur auf Standbildern — ein Video bewegt sich selbst.
-        tf = (_passt_transform(res["quelle_px"]) if res.get("quelle_px")
-              else {"x": 0, "y": 0, "w": 1, "h": 1})
-        # Ken-Burns NUR auf einem Standbild, das ohnehin beschnitten wird. Auf
-        # einer passgenau gelegten Doku-Seite schneidet der Zoom genau den Text
-        # weg, wegen dem sie im Video steht — im Durchstich nachgesehen.
+    if src:
+        tf = dict(el_box or {"x": 0, "y": 0, "w": 1, "h": 1})
+        if res.get("quelle_px") and tf["w"] >= 0.99 and tf["h"] >= 0.99:
+            # Ein Beleg muss LESBAR sein: passgenau statt formatfuellend
+            # beschnitten. Nur da, wo die Ebene ohnehin das ganze Bild haette.
+            tf = _passt_transform(res["quelle_px"])
+            if tf["w"] < 0.99 or tf["h"] < 0.99:
+                neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
         randlos = tf["w"] >= 0.99 and tf["h"] >= 0.99
-        anim = ([{"property": "scale", "from": 1.02, "to": 1.12,
-                  "start": von_f, "end": bis_f, "easing": "easeInOut"}]
-                if src.get("kind") == "image" and randlos else [])
-        if tf["w"] < 0.99 or tf["h"] < 0.99:
-            # Passt es nicht randlos, braucht es eine Flaeche dahinter, sonst
-            # steht der Beleg vor dem Gesicht statt vor einem Hintergrund.
-            neu.insert(0, _backdrop_layer(a, von_f, bis_f, frames, i))
+        anim = list(el_anim)
+        if src.get("kind") == "image" and randlos and k in ("metapher", "uebernahme"):
+            anim.append({"property": "scale", "from": 1.02, "to": 1.12,
+                         "start": von_f, "end": bis_f, "easing": "easeInOut"})
         neu.append(_layer_defaults({
-            "id": f"{a['zustand']}_{i}", "z": Z_ELEMENT,
-            "source": src, "from": von_f, "to": el_bis,
-            "transform": tf, "animate": anim,
-            "herkunft": f"plan:{res['quelle_art']}",
-            "konzept": str((a.get("braucht") or {}).get("was") or "")[:80],
+            "id": f"{k}_{i}", "z": Z_ELEMENT, "source": src,
+            "from": von_f, "to": el_bis, "transform": tf, "animate": anim,
+            "herkunft": f"plan:{res.get('quelle_art')}",
+            "konzept": str(b.get("zeigt") or "")[:80],
+        }, frames))
+
+    if cam_box:
+        # Er selbst als Ebene im Fenster — beschnitten, verschoben, maskiert.
+        neu.append(_layer_defaults({
+            "id": f"cam_{i}", "z": Z_ELEMENT + 1,
+            "source": {"kind": "video", "url": s["face_url"]},
+            "from": von_f, "to": bis_f,
+            "mask": "circle" if k.startswith("bubble") else "none",
+            "transform": cam_box, "animate": cam_anim,
+            "herkunft": f"plan:{k}", "konzept": str(a.get("block") or "")[:80],
         }, frames))
 
     s["layers"].extend(neu)
-    aus = {**kopf, "umgesetzt": a["zustand"], "quelle_art": res["quelle_art"],
+    aus = {**kopf, "umgesetzt": k, "quelle_art": res.get("quelle_art") or "facecam",
            "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
     if res.get("ueberlauf"):
-        aus["abweichung"] = {"geplant": a["zustand"], "tatsaechlich": a["zustand"],
+        aus["abweichung"] = {"geplant": k, "tatsaechlich": k,
                              "grund": "Element laeuft aus der Leinwand: "
                                       + str(res.get("hinweis") or "")[:120]}
     if verkuerzt > 0.4:
-        aus["abweichung"] = {"geplant": a["zustand"], "tatsaechlich": a["zustand"],
+        log.warning("[BAU] plan_abweichung Abschnitt %d (%.1f-%.1fs): Element steht "
+                    "nur %.1fs statt %.1fs", i, a["von"], a["bis"],
+                    res.get("sekunden_material", 0.0), float(a["bis"]) - float(a["von"]))
+        aus["abweichung"] = {"geplant": k, "tatsaechlich": k,
                              "grund": f"Element {verkuerzt:.1f}s kuerzer als der Abschnitt"}
     return aus
 
@@ -10520,20 +10618,20 @@ async def tool_build(req: BuildRequest):
     protokoll = []
     for i, a in enumerate(plan["abschnitte"]):
         kopf = {"nr": i, "von": a.get("von"), "bis": a.get("bis"),
-                "zustand": a.get("zustand"), "block": a.get("block", "")}
+                "komposition": _komposition(a), "block": a.get("block", "")}
         try:
             protokoll.append(await _abschnitt_bauen(s, a, i))
         except Exception as exc:
             # Ein gescheiterter Abschnitt ist eine Abweichung, kein Abbruch:
             # die anderen acht sollen trotzdem stehen.
             log.exception("[BAU] Abschnitt %d", i)
-            protokoll.append(_abweichung(kopf, str(a.get("zustand")), "vollbild",
+            protokoll.append(_abweichung(kopf, _komposition(a), "vollbild",
                                          f"Ausnahme: {str(exc)[:160]}"))
     abweichungen = [{"nr": p["nr"], "von": p["von"], "bis": p["bis"], **p["abweichung"]}
                     for p in protokoll if p.get("abweichung")]
     kosten = round(sum(float(p.get("kosten") or 0) for p in protokoll), 4)
-    umgesetzt = sum(1 for p in protokoll if p["umgesetzt"] != "vollbild")
-    geplant = sum(1 for a in plan["abschnitte"] if a["zustand"] != "vollbild")
+    umgesetzt = sum(1 for p in protokoll if p.get("umgesetzt") != "vollbild")
+    geplant = sum(1 for a in plan["abschnitte"] if _komposition(a) != "vollbild")
     log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD, %.1fs",
              s["id"], umgesetzt, geplant, len(s["layers"]), kosten, time.time() - t0)
     _log_run(s["client_id"], "build", "ok" if not abweichungen else "warn",

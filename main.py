@@ -9652,6 +9652,19 @@ def _ad_kontext(s: dict) -> str:
                      "Transkript ab und benenne sie selbst.")
     teile.append("WORT-TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(s.get("words") or [],
                                                                     max_chars=14000))
+    belege = s.get("belege") or []
+    if belege:
+        zeilen = ["- %s → %s  (%s, Rang %d)%s" % (
+            b["begriff"], b["url"], b.get("quelle", ""), b.get("rang", 9),
+            ("  Fundstelle: " + b["fundstelle"]) if b.get("fundstelle") else "")
+            for b in belege]
+        teile.append(
+            "BELEGE, DIE ES WIRKLICH GIBT — jede Seite wurde abgerufen und "
+            "angesehen\n" + "\n".join(zeilen)
+            + "\nZu diesen Begriffen kannst du 'beleg' oder 'durchforsten' "
+              "waehlen. Bei durchforsten gehoert die url in braucht, bei beleg "
+              "auch. Was hier nicht steht, gibt es nicht — dann bau es nicht "
+              "nach, sondern nimm eine andere Komposition.")
     mat = s.get("material") or []
     if mat:
         zeilen = []
@@ -9850,6 +9863,225 @@ def _text_kuerzen(plan: dict) -> int:
     return n
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# B1 — FINDE_BELEG
+#
+# Der fehlende erste Schritt. Bisher hat der Art Director beleg und
+# durchforsten fast nie gewaehlt — nicht weil es nichts gaebe, sondern weil er
+# blind ist: er weiss nicht, ob es zu einem Begriff eine Quelle gibt. Und
+# Bastian hat Anker auf Seiten geraten, die er nie gesehen hat; bei Firecrawl
+# ist das dreimal danebengegangen.
+#
+# Deshalb: Begriff → Suche → Kandidaten → Seite ABRUFEN UND ANSEHEN
+# (Ueberschriften, Struktur) → dann erst waehlen. Der Blick vor der Auswahl
+# ist der Kern, nicht die Suche.
+# ══════════════════════════════════════════════════════════════════════════════
+FIRECRAWL_KEY = os.environ.get("FIRECRAWL_KEY", "")
+FIRECRAWL_API = "https://api.firecrawl.dev"
+BELEG_MIN_RANG = 4          # Rang 5 wird gemeldet, nicht geliefert
+
+# Titelmuster, die eine Seite unabhaengig von der Domain disqualifizieren.
+SEO_TITEL = re.compile(
+    r"(beste[nrs]?|best|top)\s*\d*\s*(ki|ai|tools?|werkzeuge|apps?|anbieter)?"
+    r"[^\n]{0,30}\b20\d\d|vergleich|alternativen zu|\bvs\.?\b.*\b20\d\d",
+    re.I)
+_SPERRE_CACHE: dict = {"zeit": 0.0, "domains": ()}
+
+
+def _beleg_sperre() -> tuple:
+    """Domain-Sperrliste aus Supabase, 10 Minuten gecacht. Eine Liste im Code
+    waere eine, die niemand pflegt."""
+    if time.time() - _SPERRE_CACHE["zeit"] < 600 and _SPERRE_CACHE["domains"]:
+        return _SPERRE_CACHE["domains"]
+    domains = ()
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/beleg_sperre", timeout=15,
+                         params={"select": "domain"},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"})
+        domains = tuple(str(z.get("domain", "")).lower() for z in (r.json() or []))
+    except Exception as exc:
+        log.warning("[BELEG] Sperrliste: %s", str(exc)[:140])
+    if domains:
+        _SPERRE_CACHE.update({"zeit": time.time(), "domains": domains})
+    return domains
+
+
+def _domain(url: str) -> str:
+    return re.sub(r"^www\.", "", str(url or "").split("//")[-1].split("/")[0].lower())
+
+
+def _quellenrang(url: str, titel: str, ueberschriften: list) -> tuple:
+    """Rang 1-5 nach Justus' Ordnung, 0 = ausgeschlossen.
+
+    Der Rang haengt an der Seite, die wir GESEHEN haben — Titel und
+    Ueberschriften, nicht am Treffertext der Suchmaschine."""
+    d, u = _domain(url), str(url or "").lower()
+    kopf = " ".join([str(titel or "")] + [str(h) for h in (ueberschriften or [])[:8]])
+    if any(sp and (d == sp or d.endswith("." + sp)) for sp in _beleg_sperre()):
+        return 0, f"{d} steht auf der Sperrliste"
+    if SEO_TITEL.search(str(titel or "")):
+        return 0, "Titel ist ein Listicle"
+    if "github.com" in d:
+        return 2, "GitHub"
+    if (d.startswith("docs.") or "/docs/" in u or "/documentation" in u
+            or d.startswith("developer.") or "readthedocs" in d):
+        return 1, "offizielle Doku"
+    if re.search(r"changelog|release-notes|/releases|/pricing|/preise", u):
+        return 3, "Changelog oder Preisseite"
+    if re.search(r"\b(rfc|spec|specification|standard)\b", u) or d in (
+            "developer.mozilla.org", "w3.org", "ietf.org", "iso.org"):
+        return 4, "Spezifikation"
+    if re.search(r"api|handbuch|guide|manual", kopf, re.I) and len(ueberschriften or []) >= 3:
+        return 4, "strukturierte technische Seite"
+    return 5, "technischer Blog oder unklar"
+
+
+def _fc(pfad: str, body: dict, timeout: int = 60) -> dict:
+    if not FIRECRAWL_KEY:
+        raise HTTPException(status_code=500, detail="FIRECRAWL_KEY fehlt")
+    r = requests.post(f"{FIRECRAWL_API}{pfad}", json=body, timeout=timeout,
+                      headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
+                               "Content-Type": "application/json"})
+    r.raise_for_status()
+    return r.json() or {}
+
+
+def _seite_ansehen(url: str) -> dict:
+    """Die Seite HOLEN und lesen: Titel, Ueberschriften, erster Absatz.
+
+    Das ist der Schritt, den Bastian bisher uebersprungen hat."""
+    try:
+        d = _fc("/v1/scrape", {"url": url, "formats": ["markdown"],
+                               "onlyMainContent": True, "timeout": 25000}, timeout=70)
+    except Exception as exc:
+        return {"ok": False, "grund": str(exc)[:140]}
+    daten = d.get("data") or d
+    md = str(daten.get("markdown") or "")
+    meta = daten.get("metadata") or {}
+    ueber = [z.lstrip("# ").strip() for z in md.splitlines()
+             if z.startswith("#") and len(z.strip()) > 2][:12]
+    return {"ok": bool(md), "titel": str(meta.get("title") or "")[:160],
+            "ueberschriften": ueber, "zeichen": len(md),
+            "anfang": " ".join(md.split())[:400]}
+
+
+def _fundstelle(begriff: str, seite: dict) -> str:
+    """Wo auf der Seite der Begriff steht — die Ueberschrift, unter der er faellt.
+    Ohne sie muesste der Renderer die ganze Seite zeigen."""
+    b = str(begriff or "").lower().strip()
+    for h in seite.get("ueberschriften") or []:
+        if b and b in str(h).lower():
+            return str(h)[:120]
+    for h in seite.get("ueberschriften") or []:
+        if any(w in str(h).lower() for w in b.split() if len(w) > 4):
+            return str(h)[:120]
+    return (seite.get("ueberschriften") or [""])[0][:120]
+
+
+class BelegRequest(BaseModel):
+    begriffe:   list
+    client_id:  str = "justus"
+    pro_begriff: int = 5
+
+
+@app.post("/tool/finde-beleg")
+def tool_finde_beleg(req: BelegRequest):
+    """Zu jedem Begriff eine Quelle, die wir angesehen haben. Findet sich nur
+    Rang 5 oder schlechter: melden, nicht liefern."""
+    aus, gesamt_gesehen = [], 0
+    for begriff in [str(b).strip() for b in (req.begriffe or []) if str(b).strip()][:6]:
+        try:
+            such = _fc("/v1/search", {"query": begriff + " documentation",
+                                      "limit": max(3, min(int(req.pro_begriff), 5))})
+        except Exception as exc:
+            aus.append({"begriff": begriff, "ok": False, "grund": f"Suche: {str(exc)[:120]}"})
+            continue
+        treffer = (such.get("data") or such.get("web") or [])[:5]
+        gesehen, abgelehnt, bester = [], [], None
+        for t in treffer:
+            url = str((t or {}).get("url") or "")
+            if not url:
+                continue
+            seite = _seite_ansehen(url)
+            gesamt_gesehen += 1
+            if not seite.get("ok"):
+                abgelehnt.append({"url": url, "grund": "nicht abrufbar"})
+                continue
+            rang, grund = _quellenrang(url, seite.get("titel"), seite.get("ueberschriften"))
+            eintrag = {"url": url, "titel": seite.get("titel"), "rang": rang,
+                       "grund": grund, "ueberschriften": seite.get("ueberschriften")[:6]}
+            if rang == 0:
+                abgelehnt.append({"url": url, "grund": grund})
+                continue
+            gesehen.append(eintrag)
+            if bester is None or rang < bester["rang"]:
+                bester = eintrag
+            if rang == 1:
+                break          # bessere Quelle als die offizielle Doku gibt es nicht
+        if bester and bester["rang"] <= BELEG_MIN_RANG:
+            aus.append({"begriff": begriff, "ok": True, "url": bester["url"],
+                        "rang": bester["rang"], "quelle": bester["grund"],
+                        "titel": bester["titel"],
+                        "fundstelle": _fundstelle(begriff, {"ueberschriften": bester["ueberschriften"]}),
+                        "gesehen": len(gesehen), "abgelehnt": abgelehnt[:4]})
+        else:
+            # Melden, nicht liefern. Ein schwacher Beleg ist schlechter als
+            # keiner: er sieht im Video aus wie ein starker.
+            aus.append({"begriff": begriff, "ok": False,
+                        "grund": ("nur Rang %d gefunden" % bester["rang"]) if bester
+                                 else "nichts Brauchbares",
+                        "gesehen": len(gesehen), "abgelehnt": abgelehnt[:4]})
+    _log_run(req.client_id, "finde-beleg",
+             "ok" if any(x.get("ok") for x in aus) else "warn",
+             {"begriffe": len(aus), "seiten_angesehen": gesamt_gesehen,
+              "gefunden": sum(1 for x in aus if x.get("ok"))})
+    return {"ok": True, "belege": aus, "seiten_angesehen": gesamt_gesehen}
+
+
+BEGRIFFE_SYS = """Aus einem gesprochenen Transkript die Begriffe ziehen, zu denen
+es eine NACHPRUEFBARE Quelle geben kann.
+
+Das sind: genannte Werkzeuge und Dienste, Versionen, Preise, Kontingente,
+Fehlermeldungen, Funktionsnamen, Normen. Also alles, was man auf einer Seite
+nachschlagen kann.
+
+Das sind NICHT: Meinungen, Gefuehle, Ratschlaege, allgemeine Behauptungen.
+
+Hoechstens vier, die staerksten zuerst. Antworte NUR mit JSON:
+{"begriffe": [{"begriff": "n8n Information Extractor", "warum": "Node in der Doku"}]}"""
+
+
+def _belege_sammeln(s: dict) -> list:
+    """Vor dem Planen: was gibt es ueberhaupt zu belegen? Der Art Director
+    waehlt beleg und durchforsten heute fast nie — nicht weil das Material
+    fehlt, sondern weil er nicht weiss, dass es welches gibt."""
+    if not FIRECRAWL_KEY:
+        return []
+    text = _timed_transcript(s.get("words") or [], max_chars=6000)
+    try:
+        raw = call_openrouter(BEGRIFFE_SYS, text, model=CHEAP_MODEL,
+                              max_tokens=400, tool="begriffe")
+        m = re.search(r"\{[\s\S]*\}", raw)
+        begriffe = [str(b.get("begriff") or "").strip()
+                    for b in (json.loads(m.group()).get("begriffe") if m else []) or []]
+    except Exception as exc:
+        log.warning("[BELEG] Begriffe: %s", str(exc)[:140])
+        return []
+    begriffe = [b for b in begriffe if b][:4]
+    if not begriffe:
+        return []
+    try:
+        res = tool_finde_beleg(BelegRequest(begriffe=begriffe, client_id=s["client_id"]))
+    except Exception as exc:
+        log.warning("[BELEG] Suche: %s", str(exc)[:140])
+        return []
+    gefunden = [b for b in (res.get("belege") or []) if b.get("ok")]
+    log.info("[BELEG] %s: %d Begriffe, %d Seiten angesehen, %d Belege",
+             s["id"], len(begriffe), res.get("seiten_angesehen", 0), len(gefunden))
+    return gefunden
+
+
 class PlanRequest(BaseModel):
     session_id: str = ""
     facecam:    str = ""
@@ -9875,6 +10107,9 @@ def tool_plan(req: PlanRequest):
 
     modelle = (req.modell,) if req.modell else AD_MODELLE
     t0 = time.time()
+    # B1 vor Stufe 1: erst wissen, was es an Quellen gibt, dann planen.
+    if not s.get("belege"):
+        s["belege"] = _belege_sammeln(s)
     uri = _gemini_upload(s["facecam_path"])
     kontext = _ad_kontext(s)
     plan, modell, tok = _gemini_plan_call(uri, AD_SYS + "\n\n" + kontext, modelle)

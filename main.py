@@ -9933,6 +9933,11 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
                 f"Flaeche liegt ueber seinem Gesicht — dort ist Text unlesbar "
                 f"und das Gesicht zugedeckt. Nur Farbe, oder eine andere "
                 f"Komposition")
+        if k in SCHMALE and str(b.get("quelle") or "").lower().startswith(("vorhanden", "shot")):
+            fehler.append(
+                f"Abschnitt {i} ({von:.1f}s): ein Fundstueck in '{k}'. Die Spalte "
+                f"ist 32% breit — ein Dokument wird darin unlesbar beschnitten. "
+                f"Belege gehoeren in beleg, uebernahme oder unten_aufbau")
         if k in SCHMALE:
             t_ = b.get("text")
             zeilen_ = (t_ if isinstance(t_, list) else
@@ -10042,9 +10047,16 @@ def _plan_verankern(plan: dict, s: dict) -> list:
 
     # (1) Ein Beleg gehoert an die Stelle, an der sein Begriff faellt.
     for i, a in enumerate(ab):
-        if _komposition(a) not in ("beleg", "durchforsten"):
-            continue
         b = a.get("braucht") or {}
+        quelle_roh = str(b.get("quelle") or "").lower()
+        nutzt_material = (quelle_roh.startswith("vorhanden")
+                          or any(_dateiname(m.get("url", "")).lower() in quelle_roh
+                                 for m in (s.get("material") or [])))
+        # Frueher nur beleg und durchforsten — und genau deshalb landete das
+        # Fundstueck als seite_rechts bei Sekunde 5, waehrend er von etwas
+        # ganz anderem sprach. Wer Material benutzt, wird verankert.
+        if _komposition(a) not in ("beleg", "durchforsten") and not nutzt_material:
+            continue
         begriff = str(b.get("zeigt") or b.get("was") or "")
         quelle = str(b.get("quelle") or "")
         # Auch ueber das Fundstueck selbst: im Lauf 7a1589b6c722 hatte der
@@ -10475,6 +10487,58 @@ def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
         "herkunft": "plan:hintergrund",
         "konzept": str(a.get("block") or "")[:80],
     }, frames)
+
+
+def _auf_kasten_schneiden(url: str, px, kasten: dict, job: Path,
+                          fokus: str = "oben") -> tuple:
+    """Ein Bild auf das Seitenverhaeltnis seines Kastens ZUSCHNEIDEN, statt es
+    von objectFit:cover blind beschneiden zu lassen.
+
+    Der Unterschied: cover schneidet mittig und nimmt einer Doku-Seite links
+    und rechts den Text. Hier wird bewusst gewaehlt, wo der Inhalt sitzt —
+    bei einer Seite oben links, nicht in der Mitte."""
+    try:
+        from PIL import Image
+    except Exception:
+        return url, px
+    try:
+        qw, qh = int(px[0]), int(px[1])
+    except Exception:
+        return url, px
+    kw = max(0.01, float(kasten.get("w", 1))) * W
+    kh = max(0.01, float(kasten.get("h", 1))) * H
+    ziel = kw / kh
+    ist = qw / max(1, qh)
+    if abs(ist - ziel) < 0.08:
+        return url, px
+    tmp = job / f"crop_{uuid.uuid4().hex[:8]}.png"
+    roh = job / f"roh_{uuid.uuid4().hex[:8]}"
+    if not download_file(url, roh):
+        return url, px
+    try:
+        with Image.open(roh) as im:
+            b, h = im.size
+            if ist > ziel:                      # zu breit → seitlich schneiden
+                neu_b = int(h * ziel)
+                links = 0 if fokus == "oben" else max(0, (b - neu_b) // 2)
+                kasten_px = (links, 0, min(b, links + neu_b), h)
+            else:                               # zu hoch → unten abschneiden
+                neu_h = int(b / ziel)
+                oben = 0 if fokus == "oben" else max(0, (h - neu_h) // 2)
+                kasten_px = (0, oben, b, min(h, oben + neu_h))
+            aus = im.crop(kasten_px)
+            aus.convert("RGB").save(tmp, "PNG")
+            neu_px = list(aus.size)
+    except Exception as exc:
+        log.warning("[BAU] Zuschnitt: %s", str(exc)[:120])
+        return url, px
+    neue_url = upload_supabase(tmp, tmp.stem, folder="screenshots")
+    if not neue_url:
+        return url, px
+    log.info("[BAU] Beleg auf %s zugeschnitten (%dx%d → %dx%d)",
+             "%.2fx%.2f" % (kasten.get("w", 1), kasten.get("h", 1)),
+             qw, qh, neu_px[0], neu_px[1])
+    return neue_url, neu_px
 
 
 def _passt_transform(px) -> dict:
@@ -11020,6 +11084,15 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         neu.insert(0, _backdrop_layer(a, von_f, bis_f, frames, i))
     elif src:
         tf = dict(el_box or {"x": 0, "y": 0, "w": 1, "h": 1})
+        if (res.get("quelle_px") and src.get("kind") == "image"
+                and not (tf["w"] >= 0.99 and tf["h"] >= 0.99)):
+            # Nicht formatfuellend: das Bild wird auf den Kasten ZUGESCHNITTEN,
+            # damit cover nichts Wichtiges wegnimmt.
+            neue_url, neue_px = _auf_kasten_schneiden(
+                src.get("url", ""), res["quelle_px"], tf, s["dir"])
+            if neue_url != src.get("url"):
+                src = {**src, "url": neue_url}
+                res["quelle_px"] = neue_px
         if res.get("quelle_px") and tf["w"] >= 0.99 and tf["h"] >= 0.99:
             # Ein Beleg muss LESBAR sein: passgenau statt formatfuellend
             # beschnitten. Nur da, wo die Ebene ohnehin das ganze Bild haette.

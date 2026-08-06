@@ -11920,6 +11920,7 @@ async def _build_impl(req: BuildRequest):
     if not req.rendern:
         return aus
 
+    s["bau_protokoll"] = protokoll
     aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))
 
     # ── STUFE 3: ABNAHME, genau eine Reparaturrunde ──────────────────────────
@@ -12137,6 +12138,37 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
     return getan
 
 
+class AbnahmeRequest(BaseModel):
+    session_id: str
+    url:        str = ""      # ein anderes Video als das zuletzt gerenderte
+
+
+@app.post("/tool/abnahme")
+def tool_abnahme(req: AbnahmeRequest):
+    """Die Abnahme einzeln, auf eine bestehende Sitzung.
+
+    Sie laeuft ohnehin am Ende von Stufe 2. Getrennt aufrufbar ist sie, weil
+    man ihren Befund sonst nur bekommt, indem man das ganze Video noch einmal
+    baut — und das kostet einen Euro, um eine Frage zu beantworten."""
+    s = _sess(req.session_id)
+    pfad = Path(req.url) if req.url and Path(req.url).exists() else None
+    if not pfad and req.url:
+        pfad = s["dir"] / "abnahme_extern.mp4"
+        if not download_file(req.url, pfad):
+            raise HTTPException(status_code=400, detail="Video nicht ladbar")
+    if not pfad:
+        treffer = sorted(s["dir"].glob("*.mp4"), key=lambda p: -p.stat().st_mtime)
+        pfad = next((p for p in treffer if p.name.startswith(("final_", "sfx",
+                                                             "tonpass", "endkarte"))),
+                    treffer[0] if treffer else None)
+    if not pfad:
+        raise HTTPException(status_code=404, detail="kein gerendertes Video in der Sitzung")
+    plan = s.get("plan") or {"abschnitte": []}
+    ab = _abnahme(pfad, plan, s.get("bau_protokoll") or [], s["frames"] / FPS)
+    return {"ok": True, "video": pfad.name, "abnahme": ab,
+            "qc": _qc(pfad, s, plan)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # QC — die mechanische Liste vor der Auslieferung
 #
@@ -12303,6 +12335,13 @@ def _video_job(job_id: str, req: "VideoRequest"):
             "kosten_gesamt_usd": bau.get("kosten_gesamt_usd"),
             "kosten_gesamt_eur": bau.get("kosten_gesamt_eur"),
             "deckel_eur": bau.get("deckel_eur"),
+            # Abnahme und QC MUESSEN hier durch. Sie liefen schon im ersten
+            # Lauf sauber und standen nur im Log — genau der Zustand, den sie
+            # abstellen sollen: ein Befund, den der Aufrufer nie sieht, ist
+            # kein Befund.
+            "abnahme": bau.get("abnahme"),
+            "qc": bau.get("qc"),
+            "auslieferbar": bool((bau.get("qc") or {}).get("ok", True)),
             "sekunden": round(time.time() - t0, 1)}
         log.info("[VIDEO] %s fertig in %.0fs — %s", job_id[:8], time.time() - t0,
                  bau.get("bilanz"))

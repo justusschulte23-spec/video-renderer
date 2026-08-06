@@ -9727,7 +9727,12 @@ ZUSTAENDE = ("vollbild", "bubble", "uebernahme", "beleg", "metapher")
 MIN_ABSCHNITT_S = 6.0
 MAX_ABSCHNITT_S = 12.0
 MIN_LETZTER_S = 3.0
-MIN_VOLLBILD_ANTEIL = 0.40
+# Richtwert und Ablehnungsgrenze sind NICHT dasselbe. Der erste Plan lag mit
+# 40,06% vier Hundertstel ueber der Schwelle — der naechste faellt aus
+# Rundungsgruenden durch, und der Art Director trifft einen Boden ohnehin auf
+# zwei Nachkommastellen, statt ihn zu ueberbieten.
+RICHT_VOLLBILD_ANTEIL = 0.40
+MIN_VOLLBILD_ANTEIL = 0.35
 
 
 def _gemini_upload(pfad: Path, mime: str = "video/mp4") -> str:
@@ -9853,9 +9858,17 @@ HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
 - BUBBLE, UEBERNAHME, BELEG und METAPHER haben immer ein "braucht"; VOLLBILD
   hat "braucht": null
 - kein Zustand zweimal hintereinander
-- mindestens 40 Prozent der Laufzeit VOLLBILD
+- Vollbild ist der Standardzustand: Richtwert 40 Prozent der Laufzeit.
+  Abgelehnt wird ein Plan erst unter 35 Prozent — triff den Richtwert, statt
+  die Grenze auszureizen
 - jedes vorhandene Material kommt in einem Abschnitt vor ODER steht in
   "material_abgelehnt" mit Grund
+- wird etwas GEBAUT ("quelle": "neu"), gehoert der ANZEIGETEXT in den Plan:
+  braucht.text.hauptwert (hoechstens 24 Zeichen, das was gross dasteht),
+  optional beschriftung und einordnung (je hoechstens 48). Das sind die Worte,
+  die im Bild STEHEN — keine Beschreibung dessen, was zu sehen sein soll.
+  "3-4 Runs" ist ein Anzeigetext. "Visualisierung der Abo-Falle" ist keiner.
+  Deine "begruendung" sieht der Zuschauer nie
 
 AUSGABE — nur der Plan, nur JSON
 {
@@ -9871,6 +9884,14 @@ AUSGABE — nur der Plan, nur JSON
     "zustand": "beleg",
     "begruendung": "er nennt die 3-4 Runs, das steht in der Doku",
     "braucht": {"art": "beleg", "was": "Kontingent-Angabe", "quelle": "vorhanden"}
+  }, {
+    "von": 15.3, "bis": 23.0,
+    "block": "beweis",
+    "zustand": "uebernahme",
+    "begruendung": "die Zahl traegt den Abschnitt, sein Gesicht nicht",
+    "braucht": {"art": "uebernahme", "was": "Kosten pro Monat", "quelle": "neu",
+                "text": {"hauptwert": "3-4 Runs", "beschriftung": "Starter-Plan",
+                         "einordnung": "pro Monat"}}
   }],
   "material_abgelehnt": [{"datei": "shot_x.png", "grund": "..."}],
   "gesamturteil": "ein Satz, wie das Video wirken soll"
@@ -9982,12 +10003,33 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
                           f"Ausfuehrung wuesste nicht, was sie holen soll"
                           + (". Eine Bubble ohne Hintergrund ist ein leerer Rahmen."
                              if z == "bubble" else ""))
+        # Was gebaut wird, braucht seinen Anzeigetext IM PLAN. Sonst erfindet
+        # ihn die Ausfuehrung — und die erste Fassung hat dafuer die interne
+        # Begruendung des Art Directors ins Bild gestellt.
+        b_ = a.get("braucht") or {}
+        if z != "vollbild" and b_:
+            quelle_ = str(b_.get("quelle") or "").lower()
+            gebaut = not quelle_.startswith("vorhanden") and not any(
+                _dateiname(m.get("url", "")).lower() in quelle_
+                for m in (material or []))
+            t_ = b_.get("text") or {}
+            if gebaut and not str(t_.get("hauptwert") or "").strip():
+                fehler.append(f"Abschnitt {i} ({von:.1f}s): hier wird gebaut, aber "
+                              f"braucht.text.hauptwert fehlt — was steht im Bild?")
+            for feld, grenze in (("hauptwert", 24), ("beschriftung", 48),
+                                 ("einordnung", 48)):
+                wert = str(t_.get(feld) or "")
+                if len(wert) > grenze:
+                    fehler.append(f"Abschnitt {i} ({von:.1f}s): text.{feld} hat "
+                                  f"{len(wert)} Zeichen, hoechstens {grenze} — "
+                                  f"davon bleibt im Bild nichts lesbar")
     if abs(ende - dauer) > 1.0:
         fehler.append(f"der Plan endet bei {ende:.1f}s, das Video bei {dauer:.1f}s")
     anteil = vollbild_s / max(dauer, 1e-6)
     if anteil < MIN_VOLLBILD_ANTEIL:
-        fehler.append(f"nur {anteil * 100:.0f}% Vollbild, mindestens "
-                      f"{MIN_VOLLBILD_ANTEIL * 100:.0f}%")
+        fehler.append(f"nur {anteil * 100:.0f}% Vollbild, abgelehnt unter "
+                      f"{MIN_VOLLBILD_ANTEIL * 100:.0f}% (Richtwert "
+                      f"{RICHT_VOLLBILD_ANTEIL * 100:.0f}%)")
     # Der Pruefer muss DIESELBE Zuordnung machen wie der Beschaffer, sonst lehnt
     # er Plaene ab, die die Ausfuehrung problemlos bauen kann: der Art Director
     # schrieb quelle "vorhanden" statt des Dateinamens, _material_treffer haette
@@ -10135,14 +10177,19 @@ def _passt_transform(px) -> dict:
 
 
 def _auftrag_aus_braucht(a: dict) -> dict:
-    """Der Plan sagt WAS, der Gestalter braucht ein Formular. Uebersetzung,
-    keine Entscheidung."""
+    """Der Plan sagt, was DASTEHT. Der Gestalter bekommt genau das, wortwoertlich.
+
+    Die erste Fassung reichte `begruendung` als Beschriftung weiter — damit
+    stand die INTERNE Begruendung des Art Directors im fertigen Video
+    ("...der 'Abo-Falle' und der A..."). Uebersetzung darf nichts erfinden und
+    nichts durchreichen, was fuer den Zuschauer nie gedacht war."""
     b = a.get("braucht") or {}
-    was = str(b.get("was") or a.get("block") or "").strip()
+    t = b.get("text") or {}
     return {"art": str(b.get("art_element") or "titel"),
-            "hauptwert": was[:80],
-            "beschriftung": str(a.get("begruendung") or "")[:90],
-            "einordnung": "", "akzent_auf": "hauptwert",
+            "hauptwert": str(t.get("hauptwert") or "").strip()[:60],
+            "beschriftung": str(t.get("beschriftung") or "").strip()[:60],
+            "einordnung": str(t.get("einordnung") or "").strip()[:60],
+            "akzent_auf": "hauptwert",
             "bewegung": "ruhig einblenden, leichter Schub"}
 
 
@@ -10227,6 +10274,18 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         return {"quelle_art": "", "grund": f"Gestalter: {str(exc)[:160]}"}
 
 
+def _abweichung(kopf: dict, geplant: str, tatsaechlich: str, grund: str) -> dict:
+    """Der Plan ist die Wahrheit. Weicht die Ausfuehrung ab, steht das in EINER
+    Zeile im Log und als Feld im Protokoll — nicht im fertigen Video."""
+    log.warning("[BAU] plan_abweichung Abschnitt %s (%.1f-%.1fs): geplant %s, "
+                "gebaut %s — %s", kopf.get("nr"), float(kopf.get("von", 0)),
+                float(kopf.get("bis", 0)), geplant, tatsaechlich, grund)
+    return {**kopf, "umgesetzt": tatsaechlich, "quelle_art": "",
+            "abweichung": {"geplant": geplant, "tatsaechlich": tatsaechlich,
+                           "grund": str(grund)[:200]},
+            "grund": str(grund)[:200]}
+
+
 async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     """Einen Abschnitt in Ebenen uebersetzen. Gibt das Protokoll zurueck —
     was geholt wurde, woher, und wenn nichts: warum."""
@@ -10240,12 +10299,12 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
 
     res = await _beschaffen(s, a, i)
     if not res.get("quelle_art"):
-        # Die einzige erlaubte Abweichung vom Plan, und sie ist im Papier
-        # vorgesehen: nichts gefunden → Vollbild.
-        log.info("[BAU] %d %s: nichts gefunden (%s) → vollbild", i, a["zustand"],
-                 res.get("grund"))
-        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "",
-                "grund": res.get("grund") or "nichts gefunden"}
+        # Vorgesehene Abweichung (Papier D): nichts gefunden → Vollbild. Aber
+        # sie MUSS laut sein. Im ersten Durchstich sind zwei Abschnitte still
+        # auf vollbild gefallen, weil der Gestalter an asyncio.run starb — im
+        # Protokoll stand es, im Log nicht, und im Video sucht man es.
+        return _abweichung(kopf, a["zustand"], "vollbild",
+                           res.get("grund") or "nichts gefunden")
 
     src = res["layer_source"]
     durchsichtig = bool(src.get("transparent"))
@@ -10253,8 +10312,15 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     # stehen zu lassen als es Material hat, waere ein Standbild — der
     # Hintergrund traegt den Rest des Abschnitts.
     el_bis = bis_f
+    verkuerzt = 0.0
     if res.get("sekunden_material"):
         el_bis = min(bis_f, von_f + int(round(res["sekunden_material"] * FPS)))
+        verkuerzt = round((bis_f - el_bis) / FPS, 2)
+        if verkuerzt > 0.4:
+            log.warning("[BAU] plan_abweichung Abschnitt %d (%.1f-%.1fs): %s steht "
+                        "nur %.1fs statt %.1fs — Element ist kuerzer als der "
+                        "Abschnitt", i, a["von"], a["bis"], a["zustand"],
+                        res["sekunden_material"], float(a["bis"]) - float(a["von"]))
     neu = []
     if durchsichtig or a["zustand"] == "bubble":
         neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
@@ -10280,11 +10346,15 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     else:
         # uebernahme, beleg, metapher: vollflaechig, das Gesicht ist bewusst weg.
         # Ken-Burns nur auf Standbildern — ein Video bewegt sich selbst.
-        anim = ([{"property": "scale", "from": 1.02, "to": 1.12,
-                  "start": von_f, "end": bis_f, "easing": "easeInOut"}]
-                if src.get("kind") == "image" else [])
         tf = (_passt_transform(res["quelle_px"]) if res.get("quelle_px")
               else {"x": 0, "y": 0, "w": 1, "h": 1})
+        # Ken-Burns NUR auf einem Standbild, das ohnehin beschnitten wird. Auf
+        # einer passgenau gelegten Doku-Seite schneidet der Zoom genau den Text
+        # weg, wegen dem sie im Video steht — im Durchstich nachgesehen.
+        randlos = tf["w"] >= 0.99 and tf["h"] >= 0.99
+        anim = ([{"property": "scale", "from": 1.02, "to": 1.12,
+                  "start": von_f, "end": bis_f, "easing": "easeInOut"}]
+                if src.get("kind") == "image" and randlos else [])
         if tf["w"] < 0.99 or tf["h"] < 0.99:
             # Passt es nicht randlos, braucht es eine Flaeche dahinter, sonst
             # steht der Beleg vor dem Gesicht statt vor einem Hintergrund.
@@ -10298,8 +10368,12 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         }, frames))
 
     s["layers"].extend(neu)
-    return {**kopf, "umgesetzt": a["zustand"], "quelle_art": res["quelle_art"],
-            "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
+    aus = {**kopf, "umgesetzt": a["zustand"], "quelle_art": res["quelle_art"],
+           "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
+    if verkuerzt > 0.4:
+        aus["abweichung"] = {"geplant": a["zustand"], "tatsaechlich": a["zustand"],
+                             "grund": f"Element {verkuerzt:.1f}s kuerzer als der Abschnitt"}
+    return aus
 
 
 class BuildRequest(BaseModel):
@@ -10337,18 +10411,31 @@ async def tool_build(req: BuildRequest):
 
     protokoll = []
     for i, a in enumerate(plan["abschnitte"]):
-        protokoll.append(await _abschnitt_bauen(s, a, i))
+        kopf = {"nr": i, "von": a.get("von"), "bis": a.get("bis"),
+                "zustand": a.get("zustand"), "block": a.get("block", "")}
+        try:
+            protokoll.append(await _abschnitt_bauen(s, a, i))
+        except Exception as exc:
+            # Ein gescheiterter Abschnitt ist eine Abweichung, kein Abbruch:
+            # die anderen acht sollen trotzdem stehen.
+            log.exception("[BAU] Abschnitt %d", i)
+            protokoll.append(_abweichung(kopf, str(a.get("zustand")), "vollbild",
+                                         f"Ausnahme: {str(exc)[:160]}"))
+    abweichungen = [{"nr": p["nr"], "von": p["von"], "bis": p["bis"], **p["abweichung"]}
+                    for p in protokoll if p.get("abweichung")]
     kosten = round(sum(float(p.get("kosten") or 0) for p in protokoll), 4)
     umgesetzt = sum(1 for p in protokoll if p["umgesetzt"] != "vollbild")
     geplant = sum(1 for a in plan["abschnitte"] if a["zustand"] != "vollbild")
     log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD, %.1fs",
              s["id"], umgesetzt, geplant, len(s["layers"]), kosten, time.time() - t0)
-    _log_run(s["client_id"], "build", "ok" if umgesetzt == geplant else "warn",
+    _log_run(s["client_id"], "build", "ok" if not abweichungen else "warn",
              {"session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
               "ebenen": len(s["layers"]), "kosten_usd": kosten,
+              "abweichungen": abweichungen,
               "sekunden": round(time.time() - t0, 1)})
     aus = {"ok": True, "session_id": s["id"], "protokoll": protokoll,
            "umgesetzt": umgesetzt, "geplant": geplant,
+           "abweichungen": abweichungen,
            "ebenen": len(s["layers"]), "kosten_usd": kosten,
            "sekunden": round(time.time() - t0, 1)}
     if req.rendern:

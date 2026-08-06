@@ -9937,14 +9937,24 @@ def _quellenrang(url: str, titel: str, ueberschriften: list) -> tuple:
     return 5, "technischer Blog oder unklar"
 
 
-def _fc(pfad: str, body: dict, timeout: int = 60) -> dict:
+def _fc(pfad: str, body: dict, timeout: int = 90) -> dict:
+    """Firecrawl. Ein Lesetimeout ist kein Fehler des Systems, sondern eine
+    langsame Seite — deshalb ein zweiter Versuch, bevor der Begriff ausfaellt.
+    Im ersten Livelauf ist genau daran einer von zwei Begriffen gestorben."""
     if not FIRECRAWL_KEY:
         raise HTTPException(status_code=500, detail="FIRECRAWL_KEY fehlt")
-    r = requests.post(f"{FIRECRAWL_API}{pfad}", json=body, timeout=timeout,
-                      headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
-                               "Content-Type": "application/json"})
-    r.raise_for_status()
-    return r.json() or {}
+    letzter = None
+    for versuch in (1, 2):
+        try:
+            r = requests.post(f"{FIRECRAWL_API}{pfad}", json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {FIRECRAWL_KEY}",
+                                       "Content-Type": "application/json"})
+            r.raise_for_status()
+            return r.json() or {}
+        except requests.exceptions.Timeout as exc:
+            letzter = exc
+            log.warning("[BELEG] %s Zeitueberschreitung, Versuch %d", pfad, versuch)
+    raise letzter
 
 
 def _seite_ansehen(url: str) -> dict:

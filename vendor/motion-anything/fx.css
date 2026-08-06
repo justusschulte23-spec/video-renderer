@@ -1,0 +1,184 @@
+/* ── count-up ── */
+/* count-up.css — motion-anything recipe · category: emphasis
+ * Tabular figures keep the width steady while the number animates. */
+
+[data-count] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+
+/* ── blur-text ── */
+/* blur-text.css — text-kinetic · words resolve from blur, staggered. filter/opacity only. */
+[data-blur-text] .bt-w { display:inline-block; opacity:0; filter:blur(8px); transition: opacity .62s ease-out, filter .62s ease-out; transition-delay: var(--bt-d,0ms); }
+[data-blur-text].in .bt-w { opacity:1; filter:blur(0); }
+[data-blur-text] .bt-sp { display:inline-block; width:.28em; }
+@media (prefers-reduced-motion: reduce){ [data-blur-text] .bt-w{ opacity:1; filter:none; transition:none } }
+
+
+/* ── shiny-text ── */
+/* shiny-text.css — motion-anything recipe · category: text-kinetic
+ * A highlight band sweeps across muted text (text-clipped gradient). GPU-safe; static under reduced-motion. */
+.shiny {
+  --shiny-base: #8a8a94;
+  --shiny-hi: #ffffff;
+  background: linear-gradient(100deg, var(--shiny-base) 40%, var(--shiny-hi) 50%, var(--shiny-base) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: shiny-sweep 3s linear infinite;
+}
+@keyframes shiny-sweep { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .shiny { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--shiny-base); }
+}
+
+
+/* ── border-beam ── */
+/* border-beam.css — motion-anything recipe · category: ambient
+ * A small bright comet travels the border via a rotating conic-gradient masked to a thin ring.
+ * Livelier than shine-border. Compositor-friendly; fully static under reduced-motion. */
+
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.beam {
+  --beam-angle: 0deg;
+  --beam-color: #8b7cf6;
+  --beam-size: 1.5px;
+  position: relative;
+  border-radius: 16px;
+  background: #14151c;
+  color: #e7e8ee;
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  padding: var(--beam-size);
+  /* a tight bright arc (the comet head) + faint tail, everything else transparent */
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0%,
+    color-mix(in srgb, var(--beam-color) 30%, transparent) 4%,
+    var(--beam-color) 8%,
+    #fff 9%,
+    var(--beam-color) 10%,
+    transparent 16%,
+    transparent 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 3px var(--beam-color));
+  animation: beam-travel 3s linear infinite;
+}
+@keyframes beam-travel { to { --beam-angle: 360deg; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .beam::before { animation: none; background: none; filter: none;
+    border: var(--beam-size) solid rgba(139, 124, 246, 0.4); }
+}
+
+
+/* ── star-border ── */
+/* star-border.css — category: ambient · a light rotates around the border. Compositor-friendly; static under reduced-motion. */
+@property --star-a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.star {
+  --star-color: #8b7cf6; --star-w: 1.6px; --star-a: 0deg;
+  position: relative; border-radius: 999px; border: 0; cursor: pointer;
+  background: #14151c; color: #e7e8ee; font: 600 15px/1 ui-sans-serif, system-ui, sans-serif; padding: 13px 24px; isolation: isolate;
+}
+.star::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; padding: var(--star-w);
+  background: conic-gradient(from var(--star-a), transparent 0 60%, var(--star-color) 78%, #fff 82%, var(--star-color) 86%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
+  animation: star-spin 4s linear infinite;
+}
+@keyframes star-spin { to { --star-a: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .star::before { animation: none; background: none; border: var(--star-w) solid rgba(139,124,246,.45); } }
+
+
+/* ── bounce-cards ── */
+/* bounce-cards.css — entrance · cards spring + fan out on load, staggered. transform/opacity only. */
+.bcards{ position:relative; width:220px; height:150px; }
+.bcards .bc{ position:absolute; inset:0; margin:auto; width:180px; height:120px; border-radius:14px; box-shadow:0 12px 30px rgba(0,0,0,.4);
+  opacity:0; transform: translateY(20px) rotate(0deg) scale(.9); transition: opacity .5s ease-out, transform .6s cubic-bezier(.34,1.56,.64,1); transition-delay:var(--bc-d,0ms); }
+.bcards.in .bc{ opacity:1; }
+.bcards.in .bc:nth-child(1){ transform: translateX(-46px) rotate(-9deg); }
+.bcards.in .bc:nth-child(2){ transform: translateX(0) rotate(0deg); }
+.bcards.in .bc:nth-child(3){ transform: translateX(46px) rotate(9deg); }
+@media (prefers-reduced-motion: reduce){ .bcards .bc{ transition:none; opacity:1 } }
+
+
+/* ── attention-pulse ── */
+/* attention-pulse.css — motion-anything recipe · category: attention
+ * A soft expanding ring to draw the eye to ONE element. Transform + opacity only.
+ * reduced-motion: no pulse. */
+
+[data-pulse] { position: relative; }
+[data-pulse]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--pulse-color, #8b7cf6);
+  opacity: 0;
+  transform: scale(1);
+  animation: ma-pulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+@keyframes ma-pulse {
+  0%   { opacity: 0.5; transform: scale(1); }
+  70%  { opacity: 0;   transform: scale(1.5); }
+  100% { opacity: 0;   transform: scale(1.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-pulse]::after { animation: none; display: none; }
+}
+
+
+/* ── gradient-text ── */
+/* gradient-text.css — motion-anything recipe · category: text-kinetic
+ * A gradient clipped to the text drifts slowly. Reserve for one short headline.
+ * Animates background-position only — GPU-safe; solid color under reduced-motion. */
+
+.gradient-text {
+  --g1: #8b7cf6;
+  --g2: #39d98a;
+  --g3: #ff8bd0;
+  background: linear-gradient(90deg, var(--g1), var(--g2), var(--g3), var(--g1));
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: gradient-text-drift 6s ease-in-out infinite;
+}
+@keyframes gradient-text-drift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gradient-text {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--g1);                 /* fall back to a solid brand color */
+  }
+}

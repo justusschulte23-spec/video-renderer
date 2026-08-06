@@ -727,10 +727,47 @@ HTML_TOOL_MAX_PX = 1080 * 1920
 #
 # Nachgewiesen mit handgeschriebenem Markup, nicht mit Agenten-Ausgabe: der
 # Fehler sitzt im Renderer und betrifft jedes HTML-Element, das je gebaut wurde.
+# Die Bewegung der Rezepte laeuft ueber requestAnimationFrame — mit der
+# Wanduhr. Unsere Aufnahme stellt aber jeden Frame einzeln. Deshalb bekommt die
+# Seite eine eigene Uhr: rAF sammelt nur ein, performance.now und Date.now
+# liefern die gestellte Zeit, und beim Seek wird die Warteschlange EINMAL
+# abgearbeitet. Damit laeuft jedes rAF-Rezept exakt im Frametakt — count-up
+# zaehlt in echten Schritten, der Shader rechnet mit unserer Zeit.
+#
+# Ohne dieses Stueck waere die ganze Bibliothek nutzlos: eingefroren oder
+# zufaellig, je nachdem wie schnell der Screenshot kam.
+UHR_JS = """() => {
+  if (window.__uhr) return;
+  const start = performance.now();
+  const warte = [];
+  window.__uhr = {t: 0, start: start};
+  window.requestAnimationFrame = function (cb) { warte.push(cb); return warte.length; };
+  window.cancelAnimationFrame = function () {};
+  performance.now = function () { return window.__uhr.t; };
+  const D = Date.now;
+  Date.now = function () { return start + window.__uhr.t; };
+  window.__pumpe = function (t) {
+    window.__uhr.t = t;
+    // Zwei Durchlaeufe: ein Rezept, das sich am Ende neu anmeldet, soll im
+    // selben Frame nicht doppelt laufen — aber angemeldet bleiben.
+    for (let runde = 0; runde < 2; runde++) {
+      const jetzt = warte.splice(0, warte.length);
+      if (!jetzt.length) break;
+      for (const cb of jetzt) { try { cb(t); } catch (e) {} }
+    }
+  };
+}"""
+
 SEEK_JS = """(t) => {
     if (window.gsap) gsap.globalTimeline.seek(t, false);
     document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
+    if (window.__pumpe) window.__pumpe(t * 1000);
 }"""
+
+# Die Rezepte selbst. Apache-2.0, LICENSE und NOTICE liegen daneben.
+FX_DIR = Path("vendor/motion-anything")
+FX_JS = FX_DIR / "fx.js"
+FX_CSS = FX_DIR / "fx.css"
 
 
 async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
@@ -757,11 +794,17 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
     shots = job_dir / "htmlshots"
     shots.mkdir(parents=True, exist_ok=True)
 
+    fx_css = FX_CSS.read_text(encoding="utf-8") if FX_CSS.exists() else ""
+    fx_js = FX_JS.read_text(encoding="utf-8") if FX_JS.exists() else ""
     page_html = (
         "<!doctype html><html><head><meta charset='utf-8'><style>"
         "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
-        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}</style></head>"
-        f"<body>{markup}</body></html>"
+        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}"
+        f"</style><style>{fx_css}</style></head>"
+        f"<body>{markup}"
+        # Die Rezepte NACH dem Markup, damit ihr init die Elemente findet.
+        f"<script>{fx_js}</script>"
+        "</body></html>"
     )
     src = job_dir / "tool.html"
     src.write_text(page_html, encoding="utf-8")
@@ -770,10 +813,16 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            # swiftshader: ohne GPU im Container gaebe es sonst keinen
+            # WebGL-Kontext, und die Flaechen-Rezepte blieben schwarz.
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+                  "--use-gl=swiftshader", "--enable-unsafe-swiftshader",
+                  "--enable-webgl", "--ignore-gpu-blocklist"],
         )
         ctx = await browser.new_context(viewport={"width": width, "height": height},
                                         device_scale_factor=1)
+        # Die Uhr muss stehen, BEVOR ein Rezept sein erstes rAF anmeldet.
+        await ctx.add_init_script("(" + UHR_JS + ")()")
         if GSAP_LOCAL.exists():
             await ctx.add_init_script(path=str(GSAP_LOCAL))
         page = await ctx.new_page()
@@ -10266,13 +10315,20 @@ def _auftrag_aus_braucht(a: dict) -> dict:
         zeilen = [str(t.get(f) or "").strip()
                   for f in ("hauptwert", "beschriftung", "einordnung")
                   if str(t.get(f) or "").strip()]
+    # ZWEI Toepfe, streng getrennt. Im letzten Video stand "Alle Symbole und der
+    # leere Abo-Balken sind sichtbar" im Bild — das ist der endzustand aus dem
+    # Plan, den ich als 'einordnung' durchgereicht habe. Der Gestalter haelt
+    # jedes Textfeld fuer Anzeigetext, und zu Recht: es hiess ja so.
     return {"art": str(b.get("art_element") or "titel"),
+            # steht im Bild
             "hauptwert": (zeilen[0] if zeilen else "")[:60],
-            "beschriftung": " · ".join(zeilen[1:])[:120],
-            "einordnung": str(b.get("endzustand") or "").strip()[:120],
-            "zeigt": str(b.get("zeigt") or "").strip()[:300],
+            "beschriftung": (zeilen[1] if len(zeilen) > 1 else "")[:60],
+            "einordnung": (" · ".join(zeilen[2:]))[:80],
             "akzent_auf": "hauptwert",
-            "bewegung": str(b.get("bewegung") or "ruhig einblenden")[:200]}
+            # Regie — steht NIE im Bild
+            "regie": {"zeigt": str(b.get("zeigt") or "").strip()[:300],
+                      "bewegung": str(b.get("bewegung") or "ruhig einblenden")[:200],
+                      "endzustand": str(b.get("endzustand") or "").strip()[:200]}}
 
 
 def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
@@ -10531,7 +10587,11 @@ OHNE_MATERIAL = ("vollbild", "punch", "drift")
 # die Untertitel — bei einem Stockclip ohne Schrift waere es unnoetig.
 TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                "haelften", "uebernahme", "overlay_wandert", "flaeche_kippt",
-               "beleg", "durchforsten")
+               "beleg", "durchforsten",
+               # Bubble fehlte: bei Sekunde 52 lag "PREISEN UND KATEGORIEN"
+               # mitten im Doku-Text, weil hinter der Bubble ein voller
+               # Screenshot laeuft. Der traegt Text wie jedes Element.
+               "bubble", "bubble_wandert")
 
 
 def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
@@ -10699,7 +10759,10 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         neu.append(_layer_defaults({
             "id": f"cam_{i}", "z": Z_ELEMENT + 1,
             "source": {"kind": "video", "url": s["face_url"]},
-            "from": von_f, "to": bis_f,
+            # Zwei Frames frueher, einen spaeter. Ohne Ueberlappung sieht man
+            # am Schnitt fuer genau einen Frame die durchlaufende Facecam
+            # darunter — das war das Zucken beim Wechsel.
+            "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
             "mask": "circle" if k.startswith("bubble") else "none",
             "transform": cam_box, "animate": cam_anim,
             "herkunft": f"plan:{k}", "konzept": str(a.get("block") or "")[:80],
@@ -11509,23 +11572,71 @@ def _letzte_html_elemente(client_id: str, n: int = 5) -> list:
 # Code — die Liste steht hier als LATTE: das ist das Niveau, auf dem heute
 # Bewegung gebaut wird. Wer sie kopieren wollte, muesste die Lizenz beachten;
 # wer sich daran misst, nicht.
-HTML_AGENT_REZEPTE = """WOGEGEN DU DICH MESSEN LAESST
-Es gibt fertige Bibliotheken mit vierhundert Bewegungsrezepten. Ein paar,
-damit du weisst, was heute normal ist:
+HTML_AGENT_REZEPTE = """DU HAST EINE EFFEKTBIBLIOTHEK. BENUTZ SIE.
+Elf Rezepte liegen in der Seite, ohne dass du etwas laden musst. Du schreibst
+nur das Element und haengst das Attribut oder die Klasse dran — der Rest
+laeuft. Alles davon ist aufnahmefest: die Bewegung wird Frame fuer Frame
+gestellt, nichts zittert.
 
-  Schrift    typewriter-multi, shiny-text, rotating-text, decrypted-text,
-             text-scramble, count-up, true-focus
-  Auftritt   bounce-cards, elastic-slider, star-border
-  Flaeche    magnet-lines, strands, silk, waves, faulty-terminal, pixel-blast
+ZAHLEN UND SCHRIFT
+  <span data-count="70" data-count-suffix=" Shops">0</span>
+        zaehlt hoch statt dazustehen. IMMER bei einer Zahl benutzen.
+        data-count-prefix, data-count-suffix, data-count-duration (ms)
+  <span class="decrypt" data-text="LIMIT ERREICHT">LIMIT ERREICHT</span>
+        Zeichen wuerfeln sich in den Text hinein
+  <span class="blur-text">Zeile</span>      kommt aus der Unschaerfe
+  <span class="shiny">Zeile</span>          Lichtstreifen wandert durch
+  <span class="gradient-text">Zeile</span>  Farbverlauf wandert durch
 
-Das ist eine LATTE, keine Vorlage. Du kopierst nichts davon — weder Markup
-noch Code, weder Namen noch Anordnung. Du siehst daran, was ein Element
-koennen muss, damit es nicht wie ein Kasten mit Text aussieht: eine Zahl
-zaehlt hoch, statt dazustehen. Eine Zeile schreibt sich, statt zu erscheinen.
-Eine Flaeche atmet, statt zu liegen.
+RAHMEN UND AUFTRITT
+  <div class="beam">…</div>     Lichtpunkt laeuft am Rahmen entlang
+  <button class="star">…</button>  Sternenrand, gut fuer EIN Schlagwort
+  <div class="bcards">…</div>   Kinder federn nacheinander herein
+  <button class="cta" data-pulse>…</button>  pulst ruhig weiter
 
-Eine Bewegung, die man erst beim zweiten Ansehen bemerkt, ist richtig. Eine,
-die man nicht bemerkt, fehlt. Eine, die vom Inhalt ablenkt, ist zu viel."""
+FLAECHEN (nur als Hintergrund, nie ueber Text)
+  <div class="aurora" data-colors="#8B5CF6,#A78BFA,#8B5CF6"></div>
+  <div class="dot-grid"></div>
+
+REGELN DAZU
+- Eine Zahl ohne data-count ist eine verschenkte Zahl.
+- Hoechstens ZWEI Effekte je Element. Drei sind Jahrmarkt.
+- data-colors und jede Farbe kommen aus den Markentokens, nicht aus dem
+  Beispiel oben.
+- Die Effekte ersetzen keine Gestaltung: Weissraum, Kontrast und EINE Aussage
+  je Element gelten weiter."""
+
+
+def _fremde_farben(markup: str, farben: dict) -> list:
+    """Jeder Farbwert im Markup, der weder Marke noch Graustufe ist.
+
+    Der Gestalter bekommt die Markentokens seit Wochen und erfindet trotzdem
+    Cyan und Rot — im letzten Video standen die Chips in Tuerkis und Signalrot
+    neben einem amethystfarbenen Kanal. Eine Vorgabe, die nur im Prompt steht,
+    ist eine Bitte."""
+    erlaubt = set()
+    for w in (farben or {}).values():
+        if isinstance(w, str) and w.startswith("#"):
+            erlaubt.add(w.lower()[:7])
+    fremd = []
+    for roh in re.findall(r"#[0-9a-fA-F]{3,8}", markup or ""):
+        h = roh.lower()
+        if len(h) == 4:                      # #abc → #aabbcc
+            h = "#" + "".join(c * 2 for c in h[1:])
+        h7 = h[:7]
+        if h7 in erlaubt:
+            continue
+        try:
+            r, g, b = int(h7[1:3], 16), int(h7[3:5], 16), int(h7[5:7], 16)
+        except ValueError:
+            continue
+        bunt = max(r, g, b) - min(r, g, b)
+        if bunt <= 12:                        # echte Graustufe
+            continue
+        if max(r, g, b) <= 64 and bunt <= 34:  # dunkles Schiefer, taugt als Grund
+            continue
+        fremd.append(roh)
+    return sorted(set(fremd))[:8]
 
 
 def _html_agent_prompt(art: str, client_id: str) -> str:
@@ -11583,8 +11694,17 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
 
     tools = _html_agent_tools()
     sys_p = _html_agent_prompt(art, client_id)
+    try:
+        _marken_farben = _tpl_colors(_load_template(client_id, None))
+    except Exception:
+        _marken_farben = {}
+    _regie = (auftrag or {}).pop("regie", None) if isinstance(auftrag, dict) else None
     auftrag_text = (
-        "AUFTRAG\n" + json.dumps(auftrag, ensure_ascii=False, indent=1) +
+        "TEXT — GENAU DIESE WORTE STEHEN IM BILD, keine anderen\n"
+        + json.dumps(auftrag, ensure_ascii=False, indent=1)
+        + ("\n\nREGIE — was passieren soll. Das ist eine ANWEISUNG AN DICH und "
+           "gehoert NICHT ins Bild. Schreib keinen Satz daraus ab.\n"
+           + json.dumps(_regie, ensure_ascii=False, indent=1) if _regie else "") +
         f"\n\nLEINWAND {w_px}x{h_px} px, Standzeit {dauer_s:.1f} s."
         f"\nDie Mitte der Standzeit liegt bei t={t_mitte}."
         "\nBau die erste Fassung und sieh sie dir an.")
@@ -11608,6 +11728,16 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "abgelehnt": True,
                         "fehler": f"{HTML_AGENT_RUNDEN} Runden sind aufgebraucht. "
                                   f"Ruf fertig auf — die letzte Fassung wird genommen."}
+            fremd = _fremde_farben(mk, _marken_farben)
+            if fremd:
+                zustand["runden"] += 1
+                return {"ok": False, "runde": zustand["runden"],
+                        "fehler": "Fremde Farben: " + ", ".join(fremd)
+                                  + ". Erlaubt sind nur die Markentokens "
+                                  + json.dumps(_marken_farben, ensure_ascii=False)
+                                  + " und Graustufen. Kein Tuerkis, kein Signalrot, "
+                                    "keine erfundenen Akzente — der Kanal hat EINE "
+                                    "Akzentfarbe."}
             pr = asyncio.run(_html_pruefstand(mk, w_px, h_px, t_mitte, t_ende=dauer_s))
             if not pr.get("ok"):
                 return {"ok": False, "fehler": pr.get("grund", "Pruefstand kaputt")}

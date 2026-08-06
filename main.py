@@ -9544,7 +9544,10 @@ def tool_session_render(req: SessionRef):
     # liest das Transkript und haengt gefundene Bilder als eigene Ebenen an.
     # Muss VOR dem Render laufen — nachtraeglich laesst sich keine Ebene mehr
     # in eine fertige Grafik legen.
-    meta_ebenen = _metapher_ebenen(s)
+    # Im Plan-Pfad haengt niemand mehr ungefragt Ebenen an: was im Video steht,
+    # steht im Plan. Die Metapher-Maschine war eine Antwort auf einen Agenten,
+    # der Bilder vergisst — Stufe 1 vergisst sie nicht.
+    meta_ebenen = [] if s.get("plan_pfad") else _metapher_ebenen(s)
     if meta_ebenen:
         s["layers"].extend(meta_ebenen)
         log.info("[SESSION] %s +%d Metapher-Ebenen", s["id"], len(meta_ebenen))
@@ -9612,7 +9615,10 @@ def tool_session_render(req: SessionRef):
     qa_zeiten = sorted({round(l["from"] / FPS + 0.4, 2) for l in s["layers"]
                         if not _ist_pflicht(l)})[:6]
     qa = _gemini_qa(out, qa_zeiten, dauer) if qa_zeiten else {"overall": "SKIP"}
-    if qa.get("overall") == "ISSUES":
+    # Eine Pruefung, die selbst korrigiert, zerlegt ihr eigenes Werk — am 06.08.
+    # hat genau diese Runde fuenf Vollbild-Uebernahmen zu 0.24-Bannern gezogen.
+    # Im Plan-Pfad meldet sie nur; korrigiert wird in Stufe 3.
+    if qa.get("overall") == "ISSUES" and not s.get("plan_pfad"):
         # Nicht die Ebenen wegwerfen — das hat frueher nackte Videos erzeugt.
         # Stattdessen alles, was dem Agenten gehoert, auf die sicheren Schienen
         # ueber und unter dem Gesicht ziehen und EINMAL neu rendern.
@@ -9711,7 +9717,16 @@ GEMINI_API = "https://generativelanguage.googleapis.com"
 AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
               "gemini-2.0-flash-001")
 ZUSTAENDE = ("vollbild", "bubble", "uebernahme", "beleg", "metapher")
-MIN_ABSCHNITT_S = 3.0
+# Das Umbau-Papier sagt an einer Stelle "kein Abschnitt kuerzer als 3 Sekunden"
+# (C3) und an der anderen "ein Wechsel alle 6-12 Sekunden" (C2). Der Code hat
+# die 3 geprueft, also sind zwei Abschnitte mit 4,5 s und 4,9 s durchgegangen,
+# die der Prompt verbietet. Eine Regel, die nur im Prompt steht, ist Dekoration.
+# Es gilt der Rhythmus: 6-12 s. Die 3 s bleiben nur fuer den LETZTEN Abschnitt,
+# wenn der Rest des Videos kuerzer ist — sonst waere ein 65-s-Clip nicht
+# teilbar.
+MIN_ABSCHNITT_S = 6.0
+MAX_ABSCHNITT_S = 12.0
+MIN_LETZTER_S = 3.0
 MIN_VOLLBILD_ANTEIL = 0.40
 
 
@@ -9831,7 +9846,8 @@ Du setzt keine Ebenen, du waehlst keine Farben, du bestimmst keine Pixel. Du
 sagst, WAS in welchem Abschnitt passiert und WARUM. Das Wie machen die anderen.
 
 HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
-- kein Abschnitt kuerzer als 3 Sekunden
+- jeder Abschnitt 6 bis 12 Sekunden; nur der letzte darf kuerzer sein (min 3),
+  wenn das Video vorher zu Ende ist
 - die Abschnitte decken das Video luecken- und ueberlappungsfrei ab, von 0 bis
   zum Ende, in Reihenfolge
 - BUBBLE, UEBERNAHME, BELEG und METAPHER haben immer ein "braucht"; VOLLBILD
@@ -9940,9 +9956,15 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         if z not in ZUSTAENDE:
             fehler.append(f"Abschnitt {i} ({von:.1f}s): Zustand '{z}' gibt es nicht "
                           f"— erlaubt: {', '.join(ZUSTAENDE)}")
-        if bis - von < MIN_ABSCHNITT_S - 1e-6:
+        letzter = i == len(ab) - 1
+        unten = MIN_LETZTER_S if letzter else MIN_ABSCHNITT_S
+        if bis - von < unten - 1e-6:
             fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {bis - von:.1f}s, "
-                          f"mindestens {MIN_ABSCHNITT_S:.0f}s")
+                          f"mindestens {unten:.0f}s"
+                          + ("" if letzter else " — der Rhythmus ist 6-12s"))
+        if bis - von > MAX_ABSCHNITT_S + 1e-6:
+            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {bis - von:.1f}s, "
+                          f"hoechstens {MAX_ABSCHNITT_S:.0f}s — danach steht das Bild")
         if abs(von - ende) > 0.25:
             fehler.append(f"Abschnitt {i}: beginnt bei {von:.1f}s, der vorige endete "
                           f"bei {ende:.1f}s — luecken- und ueberlappungsfrei aneinander")
@@ -10042,6 +10064,249 @@ def tool_plan(req: PlanRequest):
             "regelverstoesse": fehler, "plan": plan,
             "tokens": tok, "kosten_usd": kosten, "sekunden": dauer_s,
             "duration": round(s["duration"], 2), "facecam_url": s["face_url"]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STUFE 2 — AUSFUEHRUNG OHNE ERMESSEN
+#
+# Kein Agent. Eine Schleife ueber den Plan. Beschaffer und Gestalter bekommen
+# einen AUFTRAG, keine Freiheit — sie liefern oder melden, dass sie nichts
+# finden. Findet niemand etwas, wird der Abschnitt VOLLBILD: kein Ersatzbau,
+# kein Halbpassendes.
+#
+# Die Geometrie steht hier im Code, nicht im Prompt. Das ist der Unterschied
+# zum alten Loop: dort war jede Position eine Modellentscheidung, und jeder
+# Fehlgriff wurde eine weitere Prompt-Regel.
+# ══════════════════════════════════════════════════════════════════════════════
+BUBBLE_W = 0.30
+BUBBLE_H = round(BUBBLE_W * W / H, 4)   # gleiche PIXEL-Kante → Kreis, keine Ellipse
+BUBBLE_X, BUBBLE_Y = 0.64, 0.06         # oben rechts, weit weg vom Untertitelband
+Z_HINTERGRUND, Z_ELEMENT = 11, 12       # beide ueber der Facecam (z 10)
+
+
+def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
+                    bild_url: str = "") -> dict:
+    """Markenflaeche hinter durchsichtigen Elementen und hinter der Bubble.
+    Ohne sie steht ein Alpha-Element vor der Facecam statt vor einer Flaeche —
+    und eine Bubble haette gar keinen Hintergrund, also genau den Fehler, den
+    das ganze Bauwerk vermeiden soll."""
+    scene = ({"type": "image", "imageUrl": bild_url} if bild_url
+             else {"type": "statement", "title": "", "subtitle": ""})
+    return _layer_defaults({
+        "id": f"bg_{i}", "z": Z_HINTERGRUND,
+        "source": {"kind": "scene", "scene": scene},
+        "from": von_f, "to": bis_f,
+        "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+        "herkunft": "plan:hintergrund",
+        "konzept": str(a.get("block") or "")[:80],
+    }, frames)
+
+
+def _auftrag_aus_braucht(a: dict) -> dict:
+    """Der Plan sagt WAS, der Gestalter braucht ein Formular. Uebersetzung,
+    keine Entscheidung."""
+    b = a.get("braucht") or {}
+    was = str(b.get("was") or a.get("block") or "").strip()
+    return {"art": str(b.get("art_element") or "titel"),
+            "hauptwert": was[:80],
+            "beschriftung": str(a.get("begruendung") or "")[:90],
+            "einordnung": "", "akzent_auf": "hauptwert",
+            "bewegung": "ruhig einblenden, leichter Schub"}
+
+
+def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
+    """Nennt der Plan eine Datei oder sagt er 'vorhanden', wird das Fundstueck
+    genommen. Verglichen wird ueber den Dateinamen — ganze URLs kippen an einem
+    Query-Parameter."""
+    quelle = str((braucht or {}).get("quelle") or "").lower()
+    mats = s.get("material") or []
+    for m in mats:
+        n = _dateiname(m.get("url", "")).lower()
+        if n and n in quelle:
+            return m
+    if quelle.startswith("vorhanden") and len(mats) == 1:
+        return mats[0]
+    return None
+
+
+async def _beschaffen(s: dict, a: dict, i: int) -> dict:
+    """Ein Auftrag, ein Ergebnis. Kein Ermessen darueber, OB etwas gebraucht
+    wird — das hat der Plan entschieden."""
+    b = a.get("braucht") or {}
+    zustand, was = a["zustand"], str(b.get("was") or "")
+    quelle = str(b.get("quelle") or "").lower()
+    sek = max(1.0, float(a["bis"]) - float(a["von"]))
+
+    m = _material_treffer(s, b)
+    if m:
+        kind = "video" if str(m.get("url", "")).lower().endswith((".mp4", ".webm", ".mov")) else "image"
+        return {"quelle_art": "material", "kosten": 0.0,
+                "layer_source": {"kind": kind, "url": m["url"]}}
+
+    if b.get("url"):
+        try:
+            shot = await tool_screenshot_url(ScreenshotRequest(
+                session_id=s["id"], url=str(b["url"])))
+            if shot.get("url"):
+                return {"quelle_art": "screenshot", "kosten": 0.0,
+                        "layer_source": {"kind": "image", "url": shot["url"]}}
+        except Exception as exc:
+            log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
+
+    if zustand in ("metapher", "bubble") and was:
+        # Echtes Material vor gebautem — der Zuschauer sieht sofort, was echt ist.
+        try:
+            res = _stock_fuer(was)
+            clip = (res or {}).get("clip") or {}
+            if clip.get("url"):
+                return {"quelle_art": "stock", "kosten": 0.0,
+                        "layer_source": {"kind": "video", "url": clip["url"]}}
+        except Exception as exc:
+            log.warning("[BAU] %d stock: %s", i, str(exc)[:160])
+
+    if quelle.startswith("vorhanden"):
+        # Der Plan wollte einen echten Beleg, es gibt keinen. Ein Nachbau waere
+        # genau das Halbpassende, das die Ausfuehrung nicht bauen soll.
+        return {"quelle_art": "", "grund": "vorhandenes Material nicht gefunden"}
+
+    try:
+        voll = zustand in ("uebernahme", "bubble", "beleg")
+        res = _html_subagent(_auftrag_aus_braucht(a),
+                             W if voll else 860, H if voll else 560,
+                             min(sek, HTML_TOOL_MAX_S), s["client_id"],
+                             s.get("model") or HTML_AGENT_MODELL)
+        if res.get("url"):
+            return {"quelle_art": "gestalter", "runden": res.get("runden"),
+                    "kosten": float(res.get("kosten_usd") or 0.0),
+                    "sekunden_material": float(res.get("seconds") or sek),
+                    "layer_source": {"kind": "video", "url": res["url"],
+                                     "transparent": True}}
+        return {"quelle_art": "", "grund": f"Gestalter: {str(res.get('hinweis'))[:120]}"}
+    except Exception as exc:
+        return {"quelle_art": "", "grund": f"Gestalter: {str(exc)[:160]}"}
+
+
+async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
+    """Einen Abschnitt in Ebenen uebersetzen. Gibt das Protokoll zurueck —
+    was geholt wurde, woher, und wenn nichts: warum."""
+    frames = s["frames"]
+    von_f = max(0, int(round(float(a["von"]) * FPS)))
+    bis_f = min(frames, int(round(float(a["bis"]) * FPS)))
+    kopf = {"nr": i, "von": a["von"], "bis": a["bis"], "zustand": a["zustand"],
+            "block": a.get("block", "")}
+    if a["zustand"] == "vollbild" or bis_f - von_f < 2:
+        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam"}
+
+    res = await _beschaffen(s, a, i)
+    if not res.get("quelle_art"):
+        # Die einzige erlaubte Abweichung vom Plan, und sie ist im Papier
+        # vorgesehen: nichts gefunden → Vollbild.
+        log.info("[BAU] %d %s: nichts gefunden (%s) → vollbild", i, a["zustand"],
+                 res.get("grund"))
+        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "",
+                "grund": res.get("grund") or "nichts gefunden"}
+
+    src = res["layer_source"]
+    durchsichtig = bool(src.get("transparent"))
+    # Ein bestelltes Element ist hoechstens HTML_TOOL_MAX_S lang. Es laenger
+    # stehen zu lassen als es Material hat, waere ein Standbild — der
+    # Hintergrund traegt den Rest des Abschnitts.
+    el_bis = bis_f
+    if res.get("sekunden_material"):
+        el_bis = min(bis_f, von_f + int(round(res["sekunden_material"] * FPS)))
+    neu = []
+    if durchsichtig or a["zustand"] == "bubble":
+        neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
+
+    if a["zustand"] == "bubble":
+        # Hintergrund vollflaechig, er selbst klein oben rechts. Die Facecam
+        # darunter laeuft weiter — eine zweite kleine Kopie kostet nur im
+        # Fenster, ein Umbau der Pflichtebene haette den ganzen Clip getroffen.
+        neu.append(_layer_defaults({
+            "id": f"bubble_{i}", "z": Z_ELEMENT + 1,
+            "source": {"kind": "video", "url": s["face_url"]},
+            "from": von_f, "to": bis_f, "mask": "circle",
+            "transform": {"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
+            "herkunft": "plan:bubble", "konzept": str(a.get("block") or "")[:80],
+        }, frames))
+        neu.insert(len(neu) - 1, _layer_defaults({
+            "id": f"hg_{i}", "z": Z_ELEMENT,
+            "source": src, "from": von_f, "to": el_bis,
+            "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+            "herkunft": f"plan:{res['quelle_art']}",
+            "konzept": str((a.get("braucht") or {}).get("was") or "")[:80],
+        }, frames))
+    else:
+        # uebernahme, beleg, metapher: vollflaechig, das Gesicht ist bewusst weg.
+        # Ken-Burns nur auf Standbildern — ein Video bewegt sich selbst.
+        anim = ([{"property": "scale", "from": 1.02, "to": 1.12,
+                  "start": von_f, "end": bis_f, "easing": "easeInOut"}]
+                if src.get("kind") == "image" else [])
+        neu.append(_layer_defaults({
+            "id": f"{a['zustand']}_{i}", "z": Z_ELEMENT,
+            "source": src, "from": von_f, "to": el_bis,
+            "transform": {"x": 0, "y": 0, "w": 1, "h": 1}, "animate": anim,
+            "herkunft": f"plan:{res['quelle_art']}",
+            "konzept": str((a.get("braucht") or {}).get("was") or "")[:80],
+        }, frames))
+
+    s["layers"].extend(neu)
+    return {**kopf, "umgesetzt": a["zustand"], "quelle_art": res["quelle_art"],
+            "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
+
+
+class BuildRequest(BaseModel):
+    session_id: str
+    plan:       Optional[dict] = None
+    rendern:    bool = True
+
+
+@app.post("/tool/build")
+async def tool_build(req: BuildRequest):
+    """STUFE 2: den Plan ausfuehren. Keine Geschmacksentscheidung, kein Turn-
+    Budget, keine Fertig-Bedingungen — der Plan hat entschieden."""
+    s = _sess(req.session_id)
+    plan = req.plan or s.get("plan")
+    if not plan or not (plan.get("abschnitte") or []):
+        raise HTTPException(status_code=400, detail="kein Plan zu dieser Sitzung")
+    fehler = _plan_pruefen(plan, s["duration"], s.get("material") or [])
+    if fehler:
+        raise HTTPException(status_code=422, detail={
+            "text": "Plan verletzt die harten Regeln — Stufe 1 wiederholen",
+            "regelverstoesse": fehler})
+
+    t0 = time.time()
+    # Die Facecam gehoert wieder ganz ins Bild: der Plan sagt, WANN etwas
+    # davorliegt. Ein Rest aus einem frueheren Lauf wuerde still weiterwirken.
+    for l in s["layers"]:
+        if (l.get("source") or {}).get("kind") == "facecam":
+            l["transform"].update({"x": 0, "y": 0, "w": 1, "h": 1})
+    s["layers"] = [l for l in s["layers"]
+                   if _ist_pflicht(l) or not str(l.get("herkunft", "")).startswith("plan:")]
+    s["plan"] = plan
+    # Die alte QA korrigiert selbst und hat dabei am 06.08. ihr eigenes Werk
+    # zerlegt. Im Plan-Pfad meldet sie nur noch; korrigiert wird in Stufe 3.
+    s["plan_pfad"] = True
+
+    protokoll = []
+    for i, a in enumerate(plan["abschnitte"]):
+        protokoll.append(await _abschnitt_bauen(s, a, i))
+    kosten = round(sum(float(p.get("kosten") or 0) for p in protokoll), 4)
+    umgesetzt = sum(1 for p in protokoll if p["umgesetzt"] != "vollbild")
+    geplant = sum(1 for a in plan["abschnitte"] if a["zustand"] != "vollbild")
+    log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD, %.1fs",
+             s["id"], umgesetzt, geplant, len(s["layers"]), kosten, time.time() - t0)
+    _log_run(s["client_id"], "build", "ok" if umgesetzt == geplant else "warn",
+             {"session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
+              "ebenen": len(s["layers"]), "kosten_usd": kosten,
+              "sekunden": round(time.time() - t0, 1)})
+    aus = {"ok": True, "session_id": s["id"], "protokoll": protokoll,
+           "umgesetzt": umgesetzt, "geplant": geplant,
+           "ebenen": len(s["layers"]), "kosten_usd": kosten,
+           "sekunden": round(time.time() - t0, 1)}
+    if req.rendern:
+        aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))
+    return aus
 
 
 class TurnStatsRequest(BaseModel):
@@ -10819,6 +11084,12 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             "ueberlauf": bool(pr.get("ueberlauf")), "vorschau": vorschau,
             "hinweis": "; ".join(hinweise) or (zustand["begruendung"] or "passt"),
             "art": art, "seconds": dauer_s,
+            # Ohne diese zwei Felder ist der 0,80-Deckel aus dem Umbau-Papier
+            # nicht messbar: der Gestalter ist der einzige Posten in Stufe 2,
+            # der ueberhaupt Modell kostet.
+            "tokens": dict(tok),
+            "kosten_usd": round(tok.get("ein", 0) / 1e6 * 3.0
+                                + tok.get("aus", 0) / 1e6 * 15.0, 4),
             "anforderungsmass_px": [w_px, h_px],
             "seitenverhaeltnis": round(w_px / max(1, h_px), 3),
             # quelle_px reist in der Ebene mit, ELEMENT_MASSE haelt es

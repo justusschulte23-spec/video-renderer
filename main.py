@@ -10599,17 +10599,13 @@ sagt dir im Hinweis, was daraus wurde. Ebenen werden beschnitten und nicht
 gestaucht, deshalb ist diese Zahl nicht verhandelbar.
 Die Fehlermeldung nennt dir die erlaubten Werte. Lies sie, statt zu raten.
 
-SCHNITT UND TON GEHOEREN DAZU
-Geschnitten wird AN DEN PAUSEN. Wo er Luft holt oder absetzt, sitzt der
-Schnitt — nicht in einem Takt und nicht nach Gefuehl. Das ist die
-Konvention dieses Kanals und keine Empfehlung.
+SCHNITT UND TON STEHEN SCHON
+Geschnitten wird an den Pausen — das ist die Konvention dieses Kanals und
+folgt aus dem Transkript. Die Schnitte sitzen bereits auf der Facecam, die
+Impacts auf den staerksten Betonungen. Beides ist gesetzt, bevor du
+anfaengst; du kannst und musst daran nichts tun.
 
-session_tick nennt dir die Pausen in Sekunden und sagt, an welcher noch
-kein Schnitt sitzt. cut rastet selbst auf die naechste Betonung, du musst
-den Frame nicht auf die Stelle genau treffen.
-
-add_sfx legt einen Impact auf eine Betonung; die Zeiten stehen in
-read_audio_peaks. Beides verlangt session_tick.
+Deine Arbeit ist das BILD: was zu sehen ist, wo es steht, wie lange.
 
 VORHANDENES MATERIAL: SETZEN ODER BEGRUENDET ABLEHNEN
 Liegt ein Fundstueck bereit, gehoert es ins Video — es ist der staerkere
@@ -10774,12 +10770,11 @@ def _tool_specs() -> list:
            "z": {"type": "integer"}, "from_frame": {"type": "integer"},
            "to_frame": {"type": "integer"}, "mask": {"type": "string"}}, ["id"]),
         T("remove_layer", "Ebene entfernen.", {"id": {"type": "string"}}, ["id"]),
-        T("cut", "Harter Schnitt auf der Facecam.", {"at_frame": {"type": "integer"}},
-          ["at_frame"]),
+        # cut + add_sfx sind RAUS: Schnitte stehen an den Pausen und Impacts auf
+        # den Transienten, beides beim session/open gesetzt. Ableitbares gehoert
+        # nicht in den Loop — der Agent hat daran nur Turns verbrannt.
         T("set_duration", "Laenge des Videos in Frames.", {"frames": {"type": "integer"}},
           ["frames"]),
-        T("add_sfx", "Sound setzen.", {"asset": {"type": "string"},
-                                       "at_frame": {"type": "integer"}}, ["asset", "at_frame"]),
         T("preview_frame", "EINEN Frame ansehen.", {"frame": {"type": "integer"}}, ["frame"]),
         T("session_tick", "Turn zaehlen und fragen, ob weitergebaut werden darf.", {}, []),
     ]

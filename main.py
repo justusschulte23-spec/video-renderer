@@ -8706,20 +8706,48 @@ async def tool_schnappschuss(req: SchnappschussRequest):
                 if not req.ziel:
                     p = job / "shot_0.png"
                     await seite.screenshot(path=str(p), full_page=False)
-                    aus.append((p, "sichtbarer Bereich"))
+                    aus.append((p, "sichtbarer Bereich", None, None))
                     return aus
                 treffer, rat = await _ziele_finden(seite, req.ziel, bool(req.wert))
                 if not treffer:
                     raise HTTPException(status_code=404, detail={
                         "grund": "nichts Brauchbares zu '%s'" % req.ziel[:50],
                         "rat": rat})
+                # Die ganze Seite EINMAL, und zu jedem Treffer, WO er darauf
+                # liegt. Ohne diese Box gibt es keine Fahrt ueber die Seite auf
+                # die Fundstelle — und ohne die Fahrt ist Durchforsten nur ein
+                # Screenshot mit Rahmen.
+                voll = job / "voll.png"
+                seiten_px = None
+                try:
+                    await seite.screenshot(path=str(voll), full_page=True)
+                    seiten_px = await seite.evaluate(
+                        "() => ({w: document.documentElement.scrollWidth,"
+                        " h: document.documentElement.scrollHeight})")
+                except Exception as exc:
+                    log.warning("[SHOT] Vollseite: %s", str(exc)[:120])
+                    voll = None
                 for i, t in enumerate(treffer):
                     p = job / f"shot_{i}.png"
                     try:
                         await t["el"].scroll_into_view_if_needed(timeout=5000)
                         await seite.wait_for_timeout(200)
                         await t["el"].screenshot(path=str(p))
-                        aus.append((p, " ".join(t["text"].split())[:110]))
+                        box = None
+                        if seiten_px:
+                            r = await t["el"].evaluate(
+                                "el => { const b = el.getBoundingClientRect();"
+                                " return {x: b.left + window.scrollX,"
+                                " y: b.top + window.scrollY,"
+                                " w: b.width, h: b.height}; }")
+                            sw = max(1.0, float(seiten_px.get("w") or 1))
+                            sh = max(1.0, float(seiten_px.get("h") or 1))
+                            box = [round(float(r["x"]) / sw, 4),
+                                   round(float(r["y"]) / sh, 4),
+                                   round(float(r["w"]) / sw, 4),
+                                   round(float(r["h"]) / sh, 4)]
+                        aus.append((p, " ".join(t["text"].split())[:110], box,
+                                    voll if i == 0 else None))
                     except Exception:
                         continue
                 return aus
@@ -8735,7 +8763,19 @@ async def tool_schnappschuss(req: SchnappschussRequest):
     try:
         from PIL import Image
         kandidaten = []
-        for p, was in bilder:
+        voll_url, voll_px = "", None
+        for eintrag in bilder:
+            p, was = eintrag[0], eintrag[1]
+            box = eintrag[2] if len(eintrag) > 2 else None
+            vollbild = eintrag[3] if len(eintrag) > 3 else None
+            if vollbild is not None and not voll_url:
+                try:
+                    with Image.open(vollbild) as vi:
+                        voll_px = list(vi.size)
+                    voll_url = upload_supabase(
+                        vollbild, f"seite_{uuid.uuid4().hex[:10]}", folder="screenshots") or ""
+                except Exception as exc:
+                    log.warning("[SHOT] Vollseite-Upload: %s", str(exc)[:120])
             with Image.open(p) as im:
                 qw, qh = im.size
             url = upload_supabase(p, f"shot_{uuid.uuid4().hex[:10]}",
@@ -8743,16 +8783,19 @@ async def tool_schnappschuss(req: SchnappschussRequest):
             if not url:
                 continue
             kandidaten.append({"url": url, "quelle_px": [qw, qh], "im_bild": was,
+                               "bereich": box,
                                "layer_source": {"kind": "image", "url": url,
                                                 "quelle_px": [qw, qh]}})
         if not kandidaten:
             raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
         _log_einheit("schnappschuss", "seite", len(kandidaten), 0, status="ok")
+        seite_info = ({"seite_url": voll_url, "seite_px": voll_px}
+                      if voll_url else {})
         if len(kandidaten) == 1:
-            treffer = {"ok": True, **kandidaten[0], "zoom": zoom,
+            treffer = {"ok": True, **kandidaten[0], **seite_info, "zoom": zoom,
                        "hinweis": "Setz die Ebene mit dem Verhaeltnis aus quelle_px."}
         else:
-            treffer = {"ok": True, "kandidaten": kandidaten, "zoom": zoom,
+            treffer = {"ok": True, "kandidaten": kandidaten, **seite_info, "zoom": zoom,
                        "hinweis": "%d Bloecke passen. Sieh sie dir an und nimm den, "
                                   "der zum Skript gehoert — auf einer Tarifliste "
                                   "steht im Skript, welcher Tarif gemeint ist, nicht "
@@ -9491,6 +9534,8 @@ ER IST WEG
   beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
   metapher        ein Bild fuer eine abstrakte Aussage
   durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
+                  braucht: {"url": "https://…", "ziel": "das Wort auf der Seite"}
+                  OHNE url geht es nicht — dann nimm eine andere Komposition
 
 ER IST DA, ABER ETWAS PASSIERT
   overlay_wandert Vollbild, ein Element zieht durchs Bild und verschwindet
@@ -9504,7 +9549,8 @@ dabei hin?
   Er zaehlt auf          → unten_aufbau, oben entsteht die Liste
   Er vergleicht          → haelften
   Er nennt eine Zahl     → overlay_wandert oder seite_rechts
-  Er verweist auf etwas  → beleg oder durchforsten
+  Er verweist auf etwas  → beleg (Fundstueck) oder durchforsten (echte Seite,
+                           dann gehoert die url in braucht)
   Er wird grundsaetzlich → vollbild oder punch
   Die Stimmung kippt     → flaeche_kippt
   Etwas baut sich auf    → bubble mit echter Bewegung
@@ -9936,19 +9982,12 @@ def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
 
 async def _durchforsten(s: dict, a: dict, i: int) -> dict:
     """Nicht ein Bild von einer Seite, sondern der sichtbare Vorgang, etwas zu
-    FINDEN. Zwei Werkzeuge, die es seit Wochen gibt und die nie jemand gerufen
-    hat: schnappschuss holt die Stelle von der echten Seite, markiere zieht den
-    Rahmen darum. Die Suche selbst ist die Kamerafahrt in der Ebene — weit,
-    dann hinein auf die Fundstelle.
+    FINDEN. Erst die ganze Seite mit dem Rahmen um die Fundstelle, dann die
+    Fundstelle selbst — der Schnitt dazwischen IST die Suche. Ein Standbild mit
+    Rahmen waere ein Beleg, kein Durchforsten.
 
-    Ohne URL geht das nicht: erfinden waere genau der Nachbau, den echtes
-    Material schlagen soll.
-
-    GRENZE, ehrlich: schnappschuss gibt KEINE Koordinaten des Treffers zurueck,
-    nur das zugeschnittene Bild. Markiert wird deshalb der gefundene Block als
-    Ganzes. Fuer eine Fahrt ueber die volle Seite auf die Fundstelle muesste
-    schnappschuss die Box mitliefern — das ist der naechste Schritt, nicht
-    dieser."""
+    schnappschuss liefert seit heute die Box des Treffers auf der Vollseite;
+    ohne sie gab es die Fahrt nicht und der Fall endete als Folie."""
     b = a.get("braucht") or {}
     url = str(b.get("url") or b.get("quelle_url") or "").strip()
     ziel = str(b.get("ziel") or b.get("suche") or b.get("zeigt") or "").strip()
@@ -9964,8 +10003,6 @@ async def _durchforsten(s: dict, a: dict, i: int) -> dict:
     except Exception as exc:
         return {"quelle_art": "", "grund": f"schnappschuss: {str(exc)[:140]}"}
 
-    # Ein Treffer kommt flach zurueck, mehrere als Kandidaten. Welcher gemeint
-    # ist, steht im Plan und nicht auf der Seite — also der erste.
     kand = shot.get("kandidaten") or []
     treffer = kand[0] if (kand and not shot.get("url")) else shot
     bild = str(treffer.get("url") or "")
@@ -9973,19 +10010,37 @@ async def _durchforsten(s: dict, a: dict, i: int) -> dict:
     if not bild:
         return {"quelle_art": "", "grund": "nichts auf der Seite gefunden"}
 
-    # Der Rahmen sitzt um den gefundenen Block. Ein Anteil knapp innerhalb der
-    # Kante, damit der Strich nicht selbst abgeschnitten wird.
-    bereich = b.get("bereich") or [0.03, 0.03, 0.94, 0.94]
+    # Die Fundstelle bekommt ihren Rahmen — auf der Vollseite, wo man sieht,
+    # WO sie liegt. Dafuer war die Box noetig.
+    uebersicht = None
+    seite_url, seite_px = shot.get("seite_url"), shot.get("seite_px")
+    box = treffer.get("bereich")
+    if seite_url and box:
+        try:
+            mark = tool_markiere(MarkiereRequest(
+                session_id=s["id"], bild=seite_url, bereich=list(box)[:4],
+                art="rahmen", client_id=s["client_id"]))
+            if mark.get("url"):
+                uebersicht = {"url": mark["url"],
+                              "quelle_px": mark.get("quelle_px") or seite_px,
+                              "bereich": list(box)[:4]}
+        except Exception as exc:
+            log.warning("[BAU] %d markiere Vollseite: %s", i, str(exc)[:140])
+    if not uebersicht and seite_url:
+        uebersicht = {"url": seite_url, "quelle_px": seite_px, "bereich": None}
+
+    # Und die Fundstelle selbst, damit man sie lesen kann.
     try:
-        mark = tool_markiere(MarkiereRequest(
-            session_id=s["id"], bild=bild, bereich=list(bereich)[:4],
-            art=str(b.get("markierung") or "rahmen"), client_id=s["client_id"]))
-        if mark.get("url"):
-            bild, px = mark["url"], mark.get("quelle_px") or px
+        mark2 = tool_markiere(MarkiereRequest(
+            session_id=s["id"], bild=bild, bereich=[0.02, 0.02, 0.96, 0.96],
+            art="rahmen", client_id=s["client_id"]))
+        if mark2.get("url"):
+            bild, px = mark2["url"], mark2.get("quelle_px") or px
     except Exception as exc:
-        # Ohne Markierung bleibt ein echter Screenshot — schwaecher, aber wahr.
-        log.warning("[BAU] %d markiere: %s", i, str(exc)[:140])
+        log.warning("[BAU] %d markiere Block: %s", i, str(exc)[:140])
+
     return {"quelle_art": "durchforsten", "kosten": 0.0, "quelle_px": px,
+            "uebersicht": uebersicht,
             "layer_source": {"kind": "image", "url": bild}}
 
 
@@ -10071,10 +10126,34 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         if res.get("url"):
             # Der Gestalter MELDET Ueberlauf, Stufe 2 hat ihn verschluckt: im
             # Durchstich stand "oud Cod" im Bild, an beiden Raendern
-            # abgeschnitten. Das Element wird trotzdem gesetzt — aber laut.
+            # abgeschnitten. Jetzt EINMAL nachbestellen — mit weniger Text
+            # statt mit mehr Flaeche, denn die Flaeche ist die Komposition.
             if res.get("ueberlauf"):
-                log.warning("[BAU] plan_abweichung: Element laeuft aus der "
-                            "Leinwand — %s", str(res.get("hinweis"))[:160])
+                log.warning("[BAU] Element laeuft aus der Leinwand — %s",
+                            str(res.get("hinweis"))[:160])
+                frei = DECKEL_USD - (float(s.get("kosten_plan") or 0.0)
+                                     + float(s.get("_ausgegeben") or 0.0)
+                                     + float(res.get("kosten_usd") or 0.0))
+                if frei >= GESTALTER_SCHAETZUNG_USD:
+                    knapp = _auftrag_aus_braucht(a)
+                    knapp["beschriftung"] = ""
+                    knapp["einordnung"] = ""
+                    knapp["hauptwert"] = knapp["hauptwert"][:24]
+                    knapp["bewegung"] = (knapp.get("bewegung") or "")[:80]
+                    log.info("[BAU] %d Nachbestellung ohne Nebenzeilen", i)
+                    zweit = await asyncio.to_thread(
+                        _html_subagent, knapp, w_px, h_px,
+                        min(sek, HTML_TOOL_MAX_S), s["client_id"],
+                        s.get("model") or HTML_AGENT_MODELL)
+                    if zweit.get("url") and not zweit.get("ueberlauf"):
+                        zweit["kosten_usd"] = (float(zweit.get("kosten_usd") or 0)
+                                               + float(res.get("kosten_usd") or 0))
+                        res = zweit
+                    else:
+                        # Zwei Anlaeufe, immer noch zu breit: die erste Fassung
+                        # steht, der Mangel bleibt sichtbar im Protokoll.
+                        res["kosten_usd"] = (float(res.get("kosten_usd") or 0)
+                                             + float((zweit or {}).get("kosten_usd") or 0))
             return {"quelle_art": "gestalter", "runden": res.get("runden"),
                     "ueberlauf": bool(res.get("ueberlauf")),
                     "hinweis": str(res.get("hinweis") or "")[:200],
@@ -10138,6 +10217,11 @@ BRAUCHT_FLAECHE = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts
                    "haelften", "bubble", "bubble_wandert")
 # Diese holen kein Material — sie sind reine Kamerabewegung auf ihm selbst.
 OHNE_MATERIAL = ("vollbild", "punch", "drift")
+# Kompositionen, deren Element eigenen Text ins Bild bringt. Nur dort ducken
+# die Untertitel — bei einem Stockclip ohne Schrift waere es unnoetig.
+TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
+               "haelften", "uebernahme", "overlay_wandert", "flaeche_kippt",
+               "beleg", "durchforsten")
 
 
 def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
@@ -10238,7 +10322,49 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     if k in BRAUCHT_FLAECHE or (src.get("transparent") and k != "flaeche_kippt"):
         neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
 
-    if src:
+    if k == "durchforsten" and res.get("uebersicht", {}).get("url"):
+        # Erste Haelfte: die ganze Seite, der Rahmen zeigt, wohin es geht.
+        # Zweite Haelfte: die Fundstelle gross. Der Schnitt ist das Finden.
+        u = res["uebersicht"]
+        mitte = von_f + int((bis_f - von_f) * 0.45)
+        # Die Seite wird SO hoch gesetzt, wie sie ist — dann zeigt der Rahmen
+        # ihre volle Breite, und die Ebene faehrt nach unten. Passgenau
+        # eingepasst waere eine lange Seite ein Streifen in der Bildmitte;
+        # das waere kein Suchen, sondern eine Briefmarke.
+        px = u.get("quelle_px") or [1080, 1920]
+        try:
+            hoch = max(1.0, (float(px[1]) / max(1.0, float(px[0]))) * (W / H))
+        except Exception:
+            hoch = 1.0
+        ziel_y = 0.0
+        if u.get("bereich") and hoch > 1.01:
+            # Die Fundstelle landet auf einem Drittel der Bildhoehe.
+            ziel_y = -(hoch * float(u["bereich"][1]) - 0.33)
+            ziel_y = max(-(hoch - 1.0), min(0.0, ziel_y))
+        neu.append(_layer_defaults({
+            "id": f"suche_{i}", "z": Z_ELEMENT,
+            "source": {"kind": "image", "url": u["url"]},
+            "from": von_f, "to": mitte,
+            "transform": {"x": 0, "y": 0, "w": 1, "h": round(hoch, 4)},
+            "animate": ([{"property": "y", "from": 0.0, "to": round(ziel_y, 4),
+                          "start": von_f, "end": mitte, "easing": "easeInOut"}]
+                        if ziel_y < -0.01 else
+                        [{"property": "scale", "from": 1.0, "to": 1.06,
+                          "start": von_f, "end": mitte, "easing": "linear"}]),
+            "herkunft": "plan:durchforsten", "konzept": "Seite",
+        }, frames))
+        neu.append(_layer_defaults({
+            "id": f"fund_{i}", "z": Z_ELEMENT,
+            "source": src, "from": mitte, "to": bis_f,
+            "transform": (_passt_transform(res["quelle_px"])
+                          if res.get("quelle_px") else {"x": 0, "y": 0, "w": 1, "h": 1}),
+            "animate": [{"property": "scale", "from": 1.12, "to": 1.0,
+                         "start": mitte, "end": min(bis_f, mitte + 12),
+                         "easing": "easeOut"}],
+            "herkunft": "plan:durchforsten", "konzept": "Fundstelle",
+        }, frames))
+        neu.insert(0, _backdrop_layer(a, von_f, bis_f, frames, i))
+    elif src:
         tf = dict(el_box or {"x": 0, "y": 0, "w": 1, "h": 1})
         if res.get("quelle_px") and tf["w"] >= 0.99 and tf["h"] >= 0.99:
             # Ein Beleg muss LESBAR sein: passgenau statt formatfuellend
@@ -10445,6 +10571,7 @@ async def _build_impl(req: BuildRequest):
                     f"Kostendeckel: {bisher:.2f} ausgegeben, naechstes Element "
                     f"~{naechstes:.2f}, Deckel {DECKEL_USD:.2f} USD"))
                 continue
+            s["_ausgegeben"] = sum(float(x.get("kosten") or 0) for x in protokoll)
             protokoll.append(await _abschnitt_bauen(s, a, i))
         except Exception as exc:
             # Ein gescheiterter Abschnitt ist eine Abweichung, kein Abbruch:
@@ -10457,6 +10584,27 @@ async def _build_impl(req: BuildRequest):
     kosten = round(sum(float(p.get("kosten") or 0) for p in protokoll), 4)
     umgesetzt = sum(1 for p in protokoll if p.get("umgesetzt") != "vollbild")
     geplant = sum(1 for a in plan["abschnitte"] if _komposition(a) != "vollbild")
+    # Zwei Textebenen uebereinander sind beide unlesbar. Im Durchstich lag
+    # "LEER DIE MEISTEN" quer ueber "Firecrawl Starter Plan" — beides richtig
+    # gebaut, zusammen unbrauchbar. Wo ein Element eigenen Text zeigt, weichen
+    # die Untertitel aus; wegnehmen waere falsch, sie tragen den Ton.
+    _duck = []
+    for _p, _a in zip(protokoll, plan["abschnitte"]):
+        _k = _p.get("umgesetzt")
+        if _k in ("vollbild", None) or _k not in TEXTTRAEGER:
+            continue
+        _b = _a.get("braucht") or {}
+        if not (_b.get("text") or _b.get("zeigt")):
+            continue
+        _duck.append([int(round(float(_p["von"]) * FPS)),
+                      int(round(float(_p["bis"]) * FPS))])
+    if _duck:
+        for _l in s["layers"]:
+            if (_l.get("source") or {}).get("kind") == "captions":
+                _l["source"]["duckFor"] = _duck
+                log.info("[BAU] %s: Untertitel ducken in %d Abschnitten",
+                         s["id"], len(_duck))
+
     gesamt = round(kosten + float(s.get("kosten_plan") or 0.0), 4)
     log.info("[BAU] %s: %d/%d Abschnitte umgesetzt, %d Ebenen, %.4f USD "
              "(mit Plan %.4f von %.2f), %.1fs", s["id"], umgesetzt, geplant,

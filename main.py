@@ -9685,6 +9685,365 @@ def tool_session_render(req: SessionRef):
             "metapher_ebenen": len(meta_ebenen), "sfx": len(sfx_events), "qa": qa}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# STUFE 1 — ART DIRECTOR
+#
+# Ein Aufruf. Er sieht das geschnittene Rohmaterial und schreibt den PLAN.
+# Er baut nichts. Die Ausfuehrung (Stufe 2) gehorcht ihm ohne Ermessen.
+#
+# Warum ueberhaupt: der Agenten-Loop hat 45 Einzelentscheidungen getroffen und
+# dabei nie das Video gesehen. Daher die Fehler vom 06.08. — eine QA, die ihr
+# eigenes Werk auf Schienen zog, und ein leerer Rahmen, der durch alle fuenf
+# Fertig-Bedingungen rutschte, weil niemand hinsah, sondern alle nur Werte
+# prueften.
+# ══════════════════════════════════════════════════════════════════════════════
+def _dateiname(u: str) -> str:
+    """Dateiname aus einer URL. Vergleicht man ganze URLs, kippt ein
+    Query-Parameter den Abgleich — genau daran ist am 05.08. eine korrekte
+    Material-Ablehnung verpufft."""
+    return str(u or "").rsplit("/", 1)[-1].split("?")[0]
+
+
+GEMINI_API = "https://generativelanguage.googleapis.com"
+# Erst das staerkste Modell — der Plan ist der ganze Umbau, an ihm zu sparen
+# waere die falsche Stelle. Die Kette faengt Modellnamen ab, die in der Region
+# noch nicht ausgerollt sind.
+AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
+              "gemini-2.0-flash-001")
+ZUSTAENDE = ("vollbild", "bubble", "uebernahme", "beleg", "metapher")
+MIN_ABSCHNITT_S = 3.0
+MIN_VOLLBILD_ANTEIL = 0.40
+
+
+def _gemini_upload(pfad: Path, mime: str = "video/mp4") -> str:
+    """Video in die Files API, warten bis es verarbeitet ist, uri zurueck.
+
+    Einzelbilder waeren wieder Stichproben — genau die Sehschwaeche, die der
+    Umbau abstellen soll. Gemini bekommt das Video am Stueck."""
+    if not GOOGLE_AI_KEY:
+        raise HTTPException(status_code=500, detail="GOOGLE_AI_KEY fehlt")
+    daten = pfad.read_bytes()
+    start = requests.post(
+        f"{GEMINI_API}/upload/v1beta/files?key={GOOGLE_AI_KEY}", timeout=60,
+        headers={"X-Goog-Upload-Protocol": "resumable",
+                 "X-Goog-Upload-Command": "start",
+                 "X-Goog-Upload-Header-Content-Length": str(len(daten)),
+                 "X-Goog-Upload-Header-Content-Type": mime,
+                 "Content-Type": "application/json"},
+        json={"file": {"display_name": pfad.name}})
+    start.raise_for_status()
+    ziel = start.headers.get("X-Goog-Upload-URL") or start.headers.get("x-goog-upload-url")
+    if not ziel:
+        raise HTTPException(status_code=502, detail="Files API gab keine Upload-URL")
+    up = requests.post(ziel, data=daten, timeout=900,
+                       headers={"Content-Length": str(len(daten)),
+                                "X-Goog-Upload-Offset": "0",
+                                "X-Goog-Upload-Command": "upload, finalize"})
+    up.raise_for_status()
+    info = (up.json() or {}).get("file") or {}
+    name, uri = info.get("name"), info.get("uri")
+    if not uri:
+        raise HTTPException(status_code=502, detail="Files API gab keine uri")
+    # PROCESSING ueberspringen waere der klassische stille Fehlschlag: das
+    # Modell bekaeme eine Datei, die es noch nicht lesen kann, und antwortete
+    # trotzdem — nur eben ohne das Video gesehen zu haben.
+    for _ in range(80):
+        st = requests.get(f"{GEMINI_API}/v1beta/{name}?key={GOOGLE_AI_KEY}",
+                          timeout=30).json() or {}
+        zustand = st.get("state") or ""
+        if zustand == "ACTIVE":
+            log.info("[AD] Video hochgeladen: %s (%.1f MB)", uri, len(daten) / 1e6)
+            return uri
+        if zustand == "FAILED":
+            raise HTTPException(status_code=502, detail="Gemini konnte das Video nicht lesen")
+        time.sleep(3)
+    raise HTTPException(status_code=504, detail="Video blieb in PROCESSING")
+
+
+def _gemini_plan_call(uri: str, prompt: str, modelle: tuple) -> tuple:
+    """generateContent mit Video + Text, JSON erzwungen.
+    Gibt (plan, modell, tokens) zurueck."""
+    body = {
+        "contents": [{"role": "user", "parts": [
+            {"file_data": {"mime_type": "video/mp4", "file_uri": uri}},
+            {"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json",
+                             "maxOutputTokens": 8192},
+    }
+    letzter = ""
+    for modell in modelle:
+        try:
+            r = requests.post(
+                f"{GEMINI_API}/v1beta/models/{modell}:generateContent?key={GOOGLE_AI_KEY}",
+                json=body, timeout=600)
+            if r.status_code >= 400:
+                letzter = f"{modell}: {r.status_code} {r.text[:200]}"
+                log.warning("[AD] %s", letzter)
+                continue
+            data = r.json()
+            teile = (((data.get("candidates") or [{}])[0].get("content") or {})
+                     .get("parts") or [])
+            text = "".join(p.get("text", "") for p in teile)
+            um = data.get("usageMetadata") or {}
+            tok = {"ein": um.get("promptTokenCount", 0),
+                   "aus": um.get("candidatesTokenCount", 0),
+                   "gesamt": um.get("totalTokenCount", 0)}
+            return json.loads(text), modell, tok
+        except Exception as exc:
+            letzter = f"{modell}: {str(exc)[:200]}"
+            log.warning("[AD] %s", letzter)
+    raise HTTPException(status_code=502, detail=f"Art Director ohne Antwort — {letzter}")
+
+
+AD_SYS = """Du bist Art Director fuer ein 9:16-Kurzvideo.
+Du siehst das geschnittene Rohmaterial. Du baust nichts — du schreibst den
+Plan, nach dem andere bauen.
+
+DEINE AUFGABE
+Geh das Video von vorn bis hinten durch und entscheide fuer jeden Abschnitt:
+Wie sieht der aus?
+
+FUENF ZUSTAENDE, mehr gibt es nicht
+  VOLLBILD     er redet, nichts lenkt ab
+  BUBBLE       er klein in der Ecke, dahinter etwas anderes
+  UEBERNAHME   er ist weg, das Bild gehoert etwas anderem
+  BELEG        ein echter Screenshot, markiert, mit Zoom
+  METAPHER     ein Bild fuer eine abstrakte Aussage
+
+WANN WAS
+  VOLLBILD    bei den wichtigsten Saetzen. Wenn er den Kern sagt, soll nichts
+              zwischen ihm und dem Zuschauer stehen. Das ist der
+              Standardzustand, nicht die Ausnahme.
+  BUBBLE      nur, wenn hinter ihm etwas Sehenswertes laeuft. Eine Bubble vor
+              schwarzem Grund ist ein Fehler.
+  UEBERNAHME  wenn das Gezeigte staerker ist als sein Gesicht.
+  BELEG       wenn er eine Zahl, ein Werkzeug oder eine Quelle nennt, die man
+              sehen kann.
+  METAPHER    wenn er etwas Abstraktes sagt und es ein Bild dafuer gibt.
+
+RHYTHMUS
+Ein Wechsel alle 6-12 Sekunden. Nicht oefter.
+Nie zweimal denselben Zustand hintereinander.
+Der laengste Vollbild-Abschnitt gehoert zum staerksten Satz.
+
+WAS DU NICHT TUST
+Du setzt keine Ebenen, du waehlst keine Farben, du bestimmst keine Pixel. Du
+sagst, WAS in welchem Abschnitt passiert und WARUM. Das Wie machen die anderen.
+
+HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
+- kein Abschnitt kuerzer als 3 Sekunden
+- die Abschnitte decken das Video luecken- und ueberlappungsfrei ab, von 0 bis
+  zum Ende, in Reihenfolge
+- BUBBLE, UEBERNAHME, BELEG und METAPHER haben immer ein "braucht"; VOLLBILD
+  hat "braucht": null
+- kein Zustand zweimal hintereinander
+- mindestens 40 Prozent der Laufzeit VOLLBILD
+- jedes vorhandene Material kommt in einem Abschnitt vor ODER steht in
+  "material_abgelehnt" mit Grund
+
+AUSGABE — nur der Plan, nur JSON
+{
+  "abschnitte": [{
+    "von": 0.0, "bis": 6.3,
+    "block": "hook",
+    "zustand": "vollbild",
+    "begruendung": "erster Satz, nichts soll ablenken",
+    "braucht": null
+  }, {
+    "von": 6.3, "bis": 15.3,
+    "block": "stakes",
+    "zustand": "beleg",
+    "begruendung": "er nennt die 3-4 Runs, das steht in der Doku",
+    "braucht": {"art": "beleg", "was": "Kontingent-Angabe", "quelle": "vorhanden"}
+  }],
+  "material_abgelehnt": [{"datei": "shot_x.png", "grund": "..."}],
+  "gesamturteil": "ein Satz, wie das Video wirken soll"
+}"""
+
+
+def _ad_kontext(s: dict) -> str:
+    """Was der Art Director ausser dem Video bekommt. Alles davon liegt
+    ohnehin in der Sitzung — hier wird nur gelesen, nichts berechnet."""
+    dauer = s["duration"]
+    face = s.get("face") or {}
+    cam = next((l for l in s["layers"]
+                if (l.get("source") or {}).get("kind") == "facecam"), None)
+    schnitte = (((cam or {}).get("modifiers") or {}).get("punch") or {}).get("frames") or []
+    teile = [f"LAUFZEIT {dauer:.1f}s bei {FPS} fps ({s['frames']} Frames)."]
+    teile.append(
+        "SCHNITTE (stehen schon, an jeder Sprechpause, nicht verhandelbar): "
+        + (", ".join(f"{f / FPS:.1f}s" for f in schnitte) or "keine"))
+    if face:
+        teile.append(
+            "GESICHT im Bild (Anteile, Median ueber den Clip): "
+            f"oben {face.get('top', 0):.2f}, unten {face.get('bottom', 0):.2f}, "
+            f"links {face.get('left', 0):.2f}, rechts {face.get('right', 0):.2f}. "
+            "Links und rechts davon ist Flaeche ueber die ganze Hoehe.")
+    briefing = s.get("briefing") or {}
+    bloecke = (briefing.get("bloecke") or briefing.get("blocks")
+               or briefing.get("skript_bloecke"))
+    if bloecke:
+        teile.append("SKRIPT IN BLOECKEN\n" + json.dumps(bloecke, ensure_ascii=False)[:4000])
+    else:
+        teile.append("SKRIPT: liegt nicht vor. Leite die Bloecke aus dem "
+                     "Transkript ab und benenne sie selbst.")
+    teile.append("WORT-TRANSKRIPT MIT ZEITEN\n" + _timed_transcript(s.get("words") or [],
+                                                                    max_chars=14000))
+    mat = s.get("material") or []
+    if mat:
+        zeilen = []
+        for m in mat:
+            px = m.get("quelle_px") or []
+            zeilen.append("- %s | %s%s" % (
+                str(m.get("was") or "Fundstueck")[:140], _dateiname(m.get("url", "")),
+                ("  (%dx%d)" % (px[0], px[1])) if len(px) == 2 else ""))
+        teile.append("VORHANDENES MATERIAL (echt, nicht gebaut)\n" + "\n".join(zeilen))
+    else:
+        teile.append("VORHANDENES MATERIAL: keins.")
+    if s.get("style_guide"):
+        teile.append("SCHNITT-STIL DES KUNDEN\n" + str(s["style_guide"])[:1500])
+    farben = s.get("colors") or {}
+    if farben:
+        teile.append("MARKENFARBEN " + json.dumps(farben, ensure_ascii=False)[:400])
+    try:
+        hist = tool_read_history(HistoryRequest(client_id=s["client_id"], n=5))
+        mittel = sorted({e.get("art") or "" for r in (hist.get("renders") or [])
+                         for e in r.get("elemente") or []} - {""})
+        konzepte = [e.get("konzept") for r in (hist.get("renders") or [])
+                    for e in r.get("elemente") or [] if e.get("konzept")][:20]
+        if mittel or konzepte:
+            teile.append("LETZTE 5 VIDEOS — nicht wiederholen\nMittel: "
+                         + (", ".join(mittel) or "—")
+                         + "\nKonzepte: " + (", ".join(konzepte[:20]) or "—"))
+    except Exception as exc:
+        log.warning("[AD] Historie nicht lesbar: %s", exc)
+    return "\n\n".join(teile)
+
+
+def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
+    """Die harten Regeln aus C3. Sie werden GEPRUEFT, nicht erbeten — und ein
+    Verstoss geht EINMAL zurueck an den Art Director, statt in der Ausfuehrung
+    zu einem Sonderfall zu werden. Genau daran ist der alte Prompt gestorben:
+    jede Ausnahme wurde eine weitere Regel."""
+    ab = plan.get("abschnitte") if isinstance(plan, dict) else None
+    if not isinstance(ab, list) or not ab:
+        return ["kein Feld 'abschnitte' mit Inhalt"]
+    fehler, vorher, ende = [], None, 0.0
+    vollbild_s = 0.0
+    for i, a in enumerate(ab):
+        try:
+            von, bis = float(a.get("von")), float(a.get("bis"))
+        except Exception:
+            fehler.append(f"Abschnitt {i}: von/bis fehlen oder sind keine Zahlen")
+            continue
+        z = str(a.get("zustand") or "").lower().strip()
+        if z not in ZUSTAENDE:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): Zustand '{z}' gibt es nicht "
+                          f"— erlaubt: {', '.join(ZUSTAENDE)}")
+        if bis - von < MIN_ABSCHNITT_S - 1e-6:
+            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {bis - von:.1f}s, "
+                          f"mindestens {MIN_ABSCHNITT_S:.0f}s")
+        if abs(von - ende) > 0.25:
+            fehler.append(f"Abschnitt {i}: beginnt bei {von:.1f}s, der vorige endete "
+                          f"bei {ende:.1f}s — luecken- und ueberlappungsfrei aneinander")
+        ende = bis
+        if z == vorher:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{z}' steht zweimal "
+                          f"hintereinander")
+        vorher = z
+        if z == "vollbild":
+            vollbild_s += max(0.0, bis - von)
+            if a.get("braucht"):
+                fehler.append(f"Abschnitt {i} ({von:.1f}s): vollbild braucht nichts")
+        elif not a.get("braucht"):
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{z}' ohne 'braucht' — die "
+                          f"Ausfuehrung wuesste nicht, was sie holen soll"
+                          + (". Eine Bubble ohne Hintergrund ist ein leerer Rahmen."
+                             if z == "bubble" else ""))
+    if abs(ende - dauer) > 1.0:
+        fehler.append(f"der Plan endet bei {ende:.1f}s, das Video bei {dauer:.1f}s")
+    anteil = vollbild_s / max(dauer, 1e-6)
+    if anteil < MIN_VOLLBILD_ANTEIL:
+        fehler.append(f"nur {anteil * 100:.0f}% Vollbild, mindestens "
+                      f"{MIN_VOLLBILD_ANTEIL * 100:.0f}%")
+    genannt = json.dumps(plan, ensure_ascii=False).lower()
+    for m in material or []:
+        n = _dateiname(m.get("url", "")).lower()
+        if n and n not in genannt:
+            fehler.append(f"Material {n} kommt nicht vor und wird nicht abgelehnt "
+                          f"(in einen Abschnitt legen oder in 'material_abgelehnt' "
+                          f"mit Grund)")
+    return fehler
+
+
+class PlanRequest(BaseModel):
+    session_id: str = ""
+    facecam:    str = ""
+    client_id:  str = "justus"
+    briefing:   Optional[dict] = None
+    material:   Optional[list] = None
+    modell:     str = ""
+
+
+@app.post("/tool/plan")
+def tool_plan(req: PlanRequest):
+    """STUFE 1: ein Blick aufs Rohmaterial, ein Plan. Rendert NICHTS.
+
+    Der Plan ist das Produkt dieser Stufe. Traegt er, traegt der Umbau."""
+    if req.session_id:
+        s = _sess(req.session_id)
+    elif req.facecam:
+        s = _sess(tool_session_open(OpenSessionRequest(
+            facecam=req.facecam, client_id=req.client_id, briefing=req.briefing,
+            material=req.material))["session_id"])
+    else:
+        raise HTTPException(status_code=400, detail="session_id oder facecam noetig")
+
+    modelle = (req.modell,) if req.modell else AD_MODELLE
+    t0 = time.time()
+    uri = _gemini_upload(s["facecam_path"])
+    kontext = _ad_kontext(s)
+    plan, modell, tok = _gemini_plan_call(uri, AD_SYS + "\n\n" + kontext, modelle)
+    fehler = _plan_pruefen(plan, s["duration"], s.get("material") or [])
+    runden = 1
+    if fehler:
+        # EINE Rueckgabe. Nicht drei — wer nach zwei Anlaeufen keinen regelfesten
+        # Plan schreibt, schreibt auch nach fuenf keinen, und jede Runde kostet
+        # den vollen Video-Kontext.
+        log.info("[AD] Plan verletzt %d Regeln, geht einmal zurueck", len(fehler))
+        nach = (AD_SYS + "\n\n" + kontext
+                + "\n\nDEIN ERSTER PLAN VERLETZT DIESE REGELN:\n- "
+                + "\n- ".join(fehler)
+                + "\n\nHier ist er:\n" + json.dumps(plan, ensure_ascii=False)[:6000]
+                + "\n\nSchreib ihn neu. Aendere nur, was noetig ist.")
+        plan2, modell, tok2 = _gemini_plan_call(uri, nach, modelle)
+        fehler2 = _plan_pruefen(plan2, s["duration"], s.get("material") or [])
+        runden = 2
+        tok = {k: tok.get(k, 0) + tok2.get(k, 0) for k in ("ein", "aus", "gesamt")}
+        # Der zweite Plan gilt, wenn er besser ist — nicht automatisch.
+        if len(fehler2) <= len(fehler):
+            plan, fehler = plan2, fehler2
+
+    s["plan"] = plan
+    dauer_s = round(time.time() - t0, 1)
+    # Preis nach der oeffentlichen Gemini-Liste, damit der Deckel aus F
+    # ueberhaupt messbar ist statt geschaetzt.
+    preise = {"gemini-2.5-pro": (1.25, 10.0)}.get(modell, (0.30, 2.50))
+    kosten = round(tok.get("ein", 0) / 1e6 * preise[0]
+                   + tok.get("aus", 0) / 1e6 * preise[1], 4)
+    _log_run(s["client_id"], "plan", "ok" if not fehler else "warn",
+             {"session_id": s["id"], "modell": modell, "runden": runden,
+              "abschnitte": len(plan.get("abschnitte") or []), "offen": fehler,
+              "tokens": tok, "kosten_usd": kosten, "sekunden": dauer_s})
+    log.info("[AD] %s: %d Abschnitte, %d Regelverstoesse, %s, %.4f USD, %.1fs",
+             s["id"], len(plan.get("abschnitte") or []), len(fehler), modell,
+             kosten, dauer_s)
+    return {"ok": True, "session_id": s["id"], "modell": modell, "runden": runden,
+            "regelverstoesse": fehler, "plan": plan,
+            "tokens": tok, "kosten_usd": kosten, "sekunden": dauer_s,
+            "duration": round(s["duration"], 2), "facecam_url": s["face_url"]}
+
+
 class TurnStatsRequest(BaseModel):
     client_id: str = ""
     n:         int = 30

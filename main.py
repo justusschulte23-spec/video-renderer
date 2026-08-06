@@ -9452,6 +9452,10 @@ EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_k
 # Schmal heisst: die Flaeche traegt keinen Fliesstext. seite_rechts hat im
 # Testlauf "1 Funktion / 2 Funktionen . 3 Funktionen" gezeigt — Flaeche, keine
 # Gestaltung. Was dort steht, muss OHNE Satz funktionieren.
+# Die Skelette gibt es seit Wochen — nur kam nie eines an: art_element wurde
+# nie gesetzt, also bekam JEDES Element das Titel-Layout. Deshalb sah alles
+# gleich aus, egal ob Zahl, Vergleich oder Zitat.
+ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel")
 SCHMALE = ("seite_links", "seite_rechts", "bubble", "bubble_wandert")
 SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
@@ -9599,7 +9603,10 @@ ER IST WEG
 ER IST DA, ABER ETWAS PASSIERT
   overlay_wandert Vollbild, ein Element zieht durchs Bild und verschwindet
                   → nebenbei genannte Zahlen, Namen, Werkzeuge
-  flaeche_kippt   Vollbild, der Hintergrund wechselt mit der Aussage
+  flaeche_kippt   Vollbild, die FARBE des Bildes kippt mit der Aussage.
+                  KEIN Text, KEIN Muster, KEINE Kacheln — es liegt ueber seinem
+                  Gesicht. Nur Farbe. Willst du Worte zeigen, nimm eine andere
+                  Komposition
                   → wenn die Stimmung umschlaegt: Problem → Loesung
 
 WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
@@ -9637,6 +9644,13 @@ eine Bewegung.
 
 WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
 "Abo-Oberflaechen laufen hinter ihm (generiert)" ist keine Anweisung.
+  art_element  WELCHE ART Element gebaut wird — davon haengt das Layout ab:
+                 stat      EINE Zahl gross, Beschriftung klein  (70 Shops, 3-4 Runs)
+                 vergleich zwei Seiten gegeneinander            (vorher/nachher)
+                 ablauf    Schritte nacheinander                (1 → 2 → 3)
+                 zitat     ein Satz, der wirkt                  (seine Aussage)
+                 titel     Ueberschrift mit Unterzeile          (nur wenn nichts
+                           anderes passt — nicht der Standard)
   zeigt        immer, wenn braucht gesetzt ist: WAS zu sehen ist, konkret
   bewegung     bei unten_aufbau, oben_unterbau, bubble, bubble_wandert,
                overlay_wandert, flaeche_kippt — ohne Bewegung ist es eine Folie
@@ -9656,6 +9670,9 @@ HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
 - hoechstens ZWEI uebernahme im ganzen Video — er soll nicht dauernd
   verschwinden
 - text ohne bewegung und ohne eine Zahl ist eine Folie und wird abgelehnt
+- jedes gebaute Element braucht "art_element". Ohne das bekommt der Gestalter
+  fuer eine Zahl dasselbe Layout wie fuer ein Zitat — und genau so sieht es
+  dann auch aus
 - in seite_links, seite_rechts, bubble und bubble_wandert hoechstens DREI
   Woerter je Textzeile. Aufzaehlungen, Vergleiche und ganze Saetze gehoeren in
   unten_aufbau, haelften oder uebernahme — dort ist Platz dafuer
@@ -9853,6 +9870,18 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         if k in ENDZUSTAND_PFLICHT and not str(b.get("endzustand") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' baut etwas auf, aber "
                           f"'endzustand' fehlt — was steht am Ende da?")
+        if _gebaut(a) and k not in ("beleg", "durchforsten", "metapher"):
+            if str(b.get("art_element") or "").lower() not in ART_ELEMENTE:
+                fehler.append(
+                    f"Abschnitt {i} ({von:.1f}s): 'art_element' fehlt oder ist "
+                    f"unbekannt. Erlaubt: {', '.join(ART_ELEMENTE)} — davon "
+                    f"haengt ab, ob eine Zahl gross steht oder als Ueberschrift")
+        if k == "flaeche_kippt" and (b.get("text") if isinstance(b, dict) else None):
+            fehler.append(
+                f"Abschnitt {i} ({von:.1f}s): flaeche_kippt traegt Text. Die "
+                f"Flaeche liegt ueber seinem Gesicht — dort ist Text unlesbar "
+                f"und das Gesicht zugedeckt. Nur Farbe, oder eine andere "
+                f"Komposition")
         if k in SCHMALE:
             t_ = b.get("text")
             zeilen_ = (t_ if isinstance(t_, list) else
@@ -10403,6 +10432,56 @@ def _passt_transform(px) -> dict:
     return {"x": round((1 - w) / 2, 4), "y": 0, "w": w, "h": 1}
 
 
+# Wer im Bild wo liegt. Ohne das baut der Gestalter ins Blaue: er bekam bisher
+# nur "1080x1920 px" und wusste weder, dass dahinter ein Gesicht ist, noch ob
+# er Hintergrund oder Overlay wird. Das Punktemuster ueber Justus' Gesicht war
+# genau das — ein korrekt gebauter Hintergrund, an die falsche Stelle geklebt.
+ROLLE = {
+    "vollbild": "", "punch": "", "drift": "",
+    "unten_aufbau": "Du bist die OBERE Haelfte. Unter dir sitzt er im unteren "
+                    "Drittel — dein Kasten beruehrt ihn nicht.",
+    "oben_unterbau": "Du bist eine LEISTE ganz unten. Ueber dir sitzt er.",
+    "seite_links": "Du bist eine schmale SPALTE am Rand. Daneben sitzt er.",
+    "seite_rechts": "Du bist eine schmale SPALTE am Rand. Daneben sitzt er.",
+    "haelften": "Du bist die UNTERE Haelfte. In der oberen sitzt er.",
+    "bubble": "Du bist der HINTERGRUND, formatfuellend. Er sitzt als kleiner "
+              "Kreis oben rechts darauf — halt die obere rechte Ecke frei.",
+    "bubble_wandert": "Du bist der HINTERGRUND, formatfuellend. Er sitzt als "
+                      "kleiner Kreis darauf und wechselt die Ecke — halte die "
+                      "Ecken frei.",
+    "uebernahme": "Du bist das GANZE BILD. Er ist weg, das Bild gehoert dir.",
+    "beleg": "Du bist das GANZE BILD.",
+    "metapher": "Du bist das GANZE BILD. Er ist weg.",
+    "durchforsten": "Du bist das GANZE BILD.",
+    "overlay_wandert": "Du bist ein SCHMALER STREIFEN, der durchs Bild zieht. "
+                       "Hinter dir laeuft sein Gesicht weiter — kein Kasten, "
+                       "der zumacht, sondern etwas Leichtes.",
+    "flaeche_kippt": "Du liegst als FARBFLAECHE UEBER SEINEM GESICHT, halb "
+                     "durchsichtig. Kein Text, kein Muster, keine Kacheln — "
+                     "sonst deckst du ihn zu. Nur Farbe und Verlauf.",
+}
+
+
+def _platz_fuer_gestalter(k: str, el_box: dict, face: dict) -> dict:
+    """Was der Gestalter ueber seinen Platz im Bild wissen muss."""
+    b = el_box or {"x": 0, "y": 0, "w": 1, "h": 1}
+    voll = float(b.get("w", 1)) > 0.95 and float(b.get("h", 1)) > 0.95
+    aus = {"rolle": ROLLE.get(k, ""),
+           "anteil_am_bild": "%d%% breit, %d%% hoch"
+                             % (round(float(b.get("w", 1)) * 100),
+                                round(float(b.get("h", 1)) * 100))}
+    if not voll and k not in ("vollbild", "punch", "drift"):
+        aus["liegt"] = ("x %.2f-%.2f, y %.2f-%.2f (0 = oben links, 1 = unten rechts)"
+                        % (float(b.get("x", 0)), float(b.get("x", 0)) + float(b.get("w", 1)),
+                           float(b.get("y", 0)), float(b.get("y", 0)) + float(b.get("h", 1))))
+    if face and k in ("flaeche_kippt", "overlay_wandert"):
+        aus["sein_gesicht"] = ("liegt hinter dir bei x %.2f-%.2f, y %.2f-%.2f — "
+                               "halte diese Flaeche frei"
+                               % (float(face.get("left", 0.28)), float(face.get("right", 0.72)),
+                                  float(face.get("top", 0.15)), float(face.get("bottom", 0.66))))
+    return {k2: v for k2, v in aus.items() if v}
+
+
 def _auftrag_aus_braucht(a: dict) -> dict:
     """Der Plan sagt, was DASTEHT. Der Gestalter bekommt genau das, wortwoertlich.
 
@@ -10588,8 +10667,10 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         # aus diesem async-Endpoint heraus wirft das "cannot be called from a
         # running event loop" — im ersten Durchstich sind daran zwei
         # Abschnitte auf vollbild gefallen.
+        _auftrag = _auftrag_aus_braucht(a)
+        _auftrag["platz"] = _platz_fuer_gestalter(k, kasten, s.get("face") or {})
         res = await asyncio.to_thread(
-            _html_subagent, _auftrag_aus_braucht(a), w_px, h_px,
+            _html_subagent, _auftrag, w_px, h_px,
             min(sek, HTML_TOOL_MAX_S), s["client_id"],
             s.get("model") or HTML_AGENT_MODELL)
         if res.get("url"):
@@ -10604,7 +10685,7 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                                      + float(s.get("_ausgegeben") or 0.0)
                                      + float(res.get("kosten_usd") or 0.0))
                 if frei >= GESTALTER_SCHAETZUNG_USD:
-                    knapp = _auftrag_aus_braucht(a)
+                    knapp = dict(_auftrag)
                     knapp["beschriftung"] = ""
                     knapp["einordnung"] = ""
                     knapp["hauptwert"] = knapp["hauptwert"][:24]
@@ -10678,7 +10759,8 @@ KOMP_BOXEN = {
     "beleg":           (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "metapher":        (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "durchforsten":    (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
-    "overlay_wandert": (None, {"x": 0.08, "y": 0.30, "w": 0.52, "h": 0.16}),
+    # y wird beim Bauen auf das Gesicht angepasst — 0.30 lag mitten darauf.
+    "overlay_wandert": (None, {"x": 0.08, "y": 0.10, "w": 0.52, "h": 0.14}),
     "flaeche_kippt":   (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
 }
 # Wer das Bild NICHT ganz fuer sich hat, braucht eine Flaeche hinter sich.
@@ -10776,6 +10858,14 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         return _abweichung(kopf, k, "vollbild", "bubble ohne bewegung")
 
     cam_box, el_box = KOMP_BOXEN[k]
+    if k == "overlay_wandert" and el_box:
+        # Ueber dem Gesicht, wenn dort Platz ist, sonst darunter. Ein Streifen
+        # quer ueber die Augen ist kein Overlay, sondern eine Augenbinde.
+        face = s.get("face") or {}
+        oben = float(face.get("top", 0.15)) - float(el_box["h"]) - 0.03
+        el_box = dict(el_box)
+        el_box["y"] = round(oben if oben >= 0.04
+                            else min(0.82, float(face.get("bottom", 0.66)) + 0.03), 3)
     cam_anim, el_anim = _komp_animate(k, b, von_f, bis_f)
     neu, res = [], {}
 
@@ -11878,9 +11968,12 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
     except Exception:
         _marken_farben = {}
     _regie = (auftrag or {}).pop("regie", None) if isinstance(auftrag, dict) else None
+    _platz = (auftrag or {}).pop("platz", None) if isinstance(auftrag, dict) else None
     auftrag_text = (
         "TEXT — GENAU DIESE WORTE STEHEN IM BILD, keine anderen\n"
         + json.dumps(auftrag, ensure_ascii=False, indent=1)
+        + ("\n\nDEIN PLATZ IM VIDEO — danach richtest du die Gestaltung aus\n"
+           + json.dumps(_platz, ensure_ascii=False, indent=1) if _platz else "")
         + ("\n\nREGIE — was passieren soll. Das ist eine ANWEISUNG AN DICH und "
            "gehoert NICHT ins Bild. Schreib keinen Satz daraus ab.\n"
            + json.dumps(_regie, ensure_ascii=False, indent=1) if _regie else "") +

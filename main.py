@@ -10102,6 +10102,28 @@ def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
     }, frames)
 
 
+def _passt_transform(px) -> dict:
+    """Ein Beleg muss LESBAR sein. Stage zeichnet jede Quelle mit
+    objectFit:cover — eine hochformatige Doku-Seite auf Vollbild verliert damit
+    links und rechts genau den Text, wegen dem sie im Video steht (im ersten
+    Durchstich nachgesehen: beide Raender abgeschnitten). Also die Ebene auf das
+    Seitenverhaeltnis legen und mittig setzen; der Hintergrund traegt den Rest.
+    """
+    try:
+        qw, qh = float(px[0]), float(px[1])
+        if qw <= 0 or qh <= 0:
+            raise ValueError
+    except Exception:
+        return {"x": 0, "y": 0, "w": 1, "h": 1}
+    sv = qw / qh
+    h_bei_voller_breite = (W / sv) / H
+    if h_bei_voller_breite <= 1.0:
+        h = round(h_bei_voller_breite, 4)
+        return {"x": 0, "y": round((1 - h) / 2, 4), "w": 1, "h": h}
+    w = round((H * sv) / W, 4)
+    return {"x": round((1 - w) / 2, 4), "y": 0, "w": w, "h": 1}
+
+
 def _auftrag_aus_braucht(a: dict) -> dict:
     """Der Plan sagt WAS, der Gestalter braucht ein Formular. Uebersetzung,
     keine Entscheidung."""
@@ -10141,6 +10163,7 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     if m:
         kind = "video" if str(m.get("url", "")).lower().endswith((".mp4", ".webm", ".mov")) else "image"
         return {"quelle_art": "material", "kosten": 0.0,
+                "quelle_px": m.get("quelle_px"),
                 "layer_source": {"kind": kind, "url": m["url"]}}
 
     if b.get("url"):
@@ -10153,10 +10176,13 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         except Exception as exc:
             log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
 
-    if zustand in ("metapher", "bubble") and was:
-        # Echtes Material vor gebautem — der Zuschauer sieht sofort, was echt ist.
+    if zustand == "metapher" and was:
+        # NUR fuer die Metapher. Im ersten Durchstich lief Stock auch fuer
+        # Bubble-Hintergruende und lieferte einen Maschendrahtzaun und eine
+        # schmelzende Vase — fuer eine abstrakte Aussage vertretbar, hinter
+        # einem Erklaerabschnitt Unsinn. Dort baut der Gestalter markengerecht.
         try:
-            res = _stock_fuer(was)
+            res = await asyncio.to_thread(_stock_fuer, was)
             clip = (res or {}).get("clip") or {}
             if clip.get("url"):
                 return {"quelle_art": "stock", "kosten": 0.0,
@@ -10171,10 +10197,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
 
     try:
         voll = zustand in ("uebernahme", "bubble", "beleg")
-        res = _html_subagent(_auftrag_aus_braucht(a),
-                             W if voll else 860, H if voll else 560,
-                             min(sek, HTML_TOOL_MAX_S), s["client_id"],
-                             s.get("model") or HTML_AGENT_MODELL)
+        # _html_subagent ruft intern asyncio.run fuer den Pruefstand. Direkt
+        # aus diesem async-Endpoint heraus wirft das "cannot be called from a
+        # running event loop" — im ersten Durchstich sind daran zwei
+        # Abschnitte auf vollbild gefallen.
+        res = await asyncio.to_thread(
+            _html_subagent, _auftrag_aus_braucht(a),
+            W if voll else 860, H if voll else 560,
+            min(sek, HTML_TOOL_MAX_S), s["client_id"],
+            s.get("model") or HTML_AGENT_MODELL)
         if res.get("url"):
             return {"quelle_art": "gestalter", "runden": res.get("runden"),
                     "kosten": float(res.get("kosten_usd") or 0.0),
@@ -10242,10 +10273,16 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         anim = ([{"property": "scale", "from": 1.02, "to": 1.12,
                   "start": von_f, "end": bis_f, "easing": "easeInOut"}]
                 if src.get("kind") == "image" else [])
+        tf = (_passt_transform(res["quelle_px"]) if res.get("quelle_px")
+              else {"x": 0, "y": 0, "w": 1, "h": 1})
+        if tf["w"] < 0.99 or tf["h"] < 0.99:
+            # Passt es nicht randlos, braucht es eine Flaeche dahinter, sonst
+            # steht der Beleg vor dem Gesicht statt vor einem Hintergrund.
+            neu.insert(0, _backdrop_layer(a, von_f, bis_f, frames, i))
         neu.append(_layer_defaults({
             "id": f"{a['zustand']}_{i}", "z": Z_ELEMENT,
             "source": src, "from": von_f, "to": el_bis,
-            "transform": {"x": 0, "y": 0, "w": 1, "h": 1}, "animate": anim,
+            "transform": tf, "animate": anim,
             "herkunft": f"plan:{res['quelle_art']}",
             "konzept": str((a.get("braucht") or {}).get("was") or "")[:80],
         }, frames))

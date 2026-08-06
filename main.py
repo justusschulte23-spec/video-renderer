@@ -10799,6 +10799,7 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     w_px = max(200, int(round(float(kasten.get("w", 1)) * W)))
     h_px = max(160, int(round(float(kasten.get("h", 1)) * H)))
     art = str(b.get("art_element") or "").lower()
+    _kit_geruest = ""
     if art in kit.KANN:
         auftrag = _auftrag_aus_braucht(a)
         zeilen = [z for z in [auftrag.get("hauptwert"), auftrag.get("beschriftung"),
@@ -10808,20 +10809,12 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or "")},
                           s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S))
         if markup:
-            try:
-                res = await tool_render_html(RenderHtmlRequest(
-                    markup=markup, width=w_px, height=h_px,
-                    seconds=min(sek, HTML_TOOL_MAX_S)))
-                if res.get("url"):
-                    log.info("[BAU] %d Kit-Komponente '%s' (%dx%d)", i, art, w_px, h_px)
-                    return {"quelle_art": "kit", "kosten": 0.0,
-                            "ueberlauf": bool(res.get("ueberlauf")),
-                            "sekunden_material": float(res.get("seconds") or sek),
-                            "layer_source": {"kind": "video", "url": res["url"],
-                                             "transparent": True}}
-            except Exception as exc:
-                log.warning("[BAU] %d Kit '%s' gescheitert, gehe an den Gestalter: %s",
-                            i, art, str(exc)[:140])
+            # Das Kit ist das GERUEST, nicht das fertige Bild: Layout, Marke,
+            # Hierarchie und Zeiten stehen. Der Gestalter veredelt es — Haken,
+            # X, gruene und rote Raender, ein Icon, Betonung, Bewegung. So
+            # arbeitet ein Motion Designer mit einer Vorlage.
+            _kit_geruest = markup
+            log.info("[BAU] %d Geruest '%s' aus dem Kit (%dx%d)", i, art, w_px, h_px)
 
     try:
         # _html_subagent ruft intern asyncio.run fuer den Pruefstand. Direkt
@@ -10830,6 +10823,8 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         # Abschnitte auf vollbild gefallen.
         _auftrag = _auftrag_aus_braucht(a)
         _auftrag["platz"] = _platz_fuer_gestalter(k, kasten, s.get("face") or {})
+        if _kit_geruest:
+            _auftrag["geruest"] = _kit_geruest
         res = await asyncio.to_thread(
             _html_subagent, _auftrag, w_px, h_px,
             min(sek, HTML_TOOL_MAX_S), s["client_id"],
@@ -12278,9 +12273,26 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
         _marken_farben = {}
     _regie = (auftrag or {}).pop("regie", None) if isinstance(auftrag, dict) else None
     _platz = (auftrag or {}).pop("platz", None) if isinstance(auftrag, dict) else None
+    _geruest = (auftrag or {}).pop("geruest", "") if isinstance(auftrag, dict) else ""
     auftrag_text = (
         "TEXT — GENAU DIESE WORTE STEHEN IM BILD, keine anderen\n"
         + json.dumps(auftrag, ensure_ascii=False, indent=1)
+        + (("\n\nDEIN GERUEST kommt aus dem Brand Kit des Kanals. "
+            "Layout, Farben, Schriftgroessen und Hierarchie sind "
+            "ENTSCHIEDEN und bleiben. Du wirfst es nicht weg und baust "
+            "nichts daneben.\n\nDEINE AUFGABE IST DIE VEREDELUNG, genau "
+            "das was ein Cutter im Schnitt dazugibt:\n"
+            "  - Zustandszeichen: Haken bei dem was geht, X bei dem was "
+            "nicht geht; gruener Rand fuer gut, roter fuer die Grenze. "
+            "Sparsam, und nur wo es die Aussage traegt.\n"
+            "  - EIN Icon aus dem Sprite, wo es etwas erklaert.\n"
+            "  - Betonung auf dem einen Wort oder der einen Zahl.\n"
+            "  - BEWEGUNG: Auftritt, Halten, Akzent, Abgang. Effektklassen "
+            "und data-count benutzen; ein Standbild ist keine Gestaltung.\n"
+            "  - SHORTFORM: aus zwei Metern auf einem Handy in unter drei "
+            "Sekunden lesbar. Lieber ein Wort weniger und doppelt so gross.\n"
+            "\nDie Klassen wrap, flaeche und inhalt bleiben erhalten.\n\n"
+            + _geruest) if _geruest else "")
         + ("\n\nDEIN PLATZ IM VIDEO — danach richtest du die Gestaltung aus\n"
            + json.dumps(_platz, ensure_ascii=False, indent=1) if _platz else "")
         + ("\n\nREGIE — was passieren soll. Das ist eine ANWEISUNG AN DICH und "
@@ -12309,6 +12321,12 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "abgelehnt": True,
                         "fehler": f"{HTML_AGENT_RUNDEN} Runden sind aufgebraucht. "
                                   f"Ruf fertig auf — die letzte Fassung wird genommen."}
+            if _geruest and not all(c in mk for c in ("wrap", "flaeche", "inhalt")):
+                zustand["runden"] += 1
+                return {"ok": False, "runde": zustand["runden"],
+                        "fehler": "Du hast das Geruest weggeworfen. Die Klassen "
+                                  "wrap, flaeche und inhalt bleiben stehen — "
+                                  "veredle es, bau es nicht neu."}
             mk, verdrahtet = _fx_verdrahten(mk)
             if verdrahtet:
                 log.info("[HTMLAGENT] verdrahtet: %s", ", ".join(verdrahtet))

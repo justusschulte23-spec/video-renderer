@@ -10588,7 +10588,10 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
 # erreicht, werden Abschnitte zurueckgestuft — nicht das Budget erhoeht.
 DECKEL_USD = float(os.environ.get("VIDEO_DECKEL_USD", "0.80"))
 # Gemessen an a956ba3ff98c: 0,637 USD fuer sechs gebaute Elemente.
-GESTALTER_SCHAETZUNG_USD = 0.11
+# Gemessen: 0,637/6 = 0,106 im ersten Lauf, 0,907/7 = 0,130 im zweiten. Die
+# Schaetzung muss die teurere Seite treffen — zu niedrig geschaetzt heisst,
+# der Deckel reisst, und genau das ist im Lauf 72fb0e1887c4 passiert (0,93).
+GESTALTER_SCHAETZUNG_USD = 0.14
 # Was traegt ein Abschnitt? Hoch = traegt viel und wird zuletzt geopfert. Ein
 # Beleg ist der staerkste Baustein im Video (echt, nicht gebaut) und kostet
 # ausserdem nichts; ein wanderndes Overlay ist Beiwerk.
@@ -10728,10 +10731,18 @@ async def _build_impl(req: BuildRequest):
             # eine Zusage, kein Richtwert.
             bisher = (float(s.get("kosten_plan") or 0.0)
                       + sum(float(p.get("kosten") or 0) for p in protokoll))
-            if bisher >= DECKEL_USD and _kostet_modell(s, a):
+            # VOR dem Ausgeben pruefen, nicht danach: "schon drueber" heisst,
+            # das letzte Element hat den Deckel bereits gerissen. Die Schaetzung
+            # zieht mit den echten Kosten dieses Laufs nach.
+            bezahlt = [float(p.get("kosten") or 0) for p in protokoll
+                       if float(p.get("kosten") or 0) > 0]
+            naechstes = max(GESTALTER_SCHAETZUNG_USD,
+                            sum(bezahlt) / len(bezahlt) if bezahlt else 0.0)
+            if _kostet_modell(s, a) and bisher + naechstes > DECKEL_USD:
                 protokoll.append(_abweichung(
                     kopf, _komposition(a), "vollbild",
-                    f"Kostendeckel erreicht ({bisher:.2f} von {DECKEL_USD:.2f} USD)"))
+                    f"Kostendeckel: {bisher:.2f} ausgegeben, naechstes Element "
+                    f"~{naechstes:.2f}, Deckel {DECKEL_USD:.2f} USD"))
                 continue
             protokoll.append(await _abschnitt_bauen(s, a, i))
         except Exception as exc:
@@ -11293,8 +11304,33 @@ def _letzte_html_elemente(client_id: str, n: int = 5) -> list:
         return []
 
 
+# nexu-io/motion-anything, Apache-2.0 (geprueft 2026-08-06; ATTRIBUTION.md
+# nennt nur MIT/Apache-Quellen, kein Copyleft). Wir uebernehmen KEINE Zeile
+# Code — die Liste steht hier als LATTE: das ist das Niveau, auf dem heute
+# Bewegung gebaut wird. Wer sie kopieren wollte, muesste die Lizenz beachten;
+# wer sich daran misst, nicht.
+HTML_AGENT_REZEPTE = """WOGEGEN DU DICH MESSEN LAESST
+Es gibt fertige Bibliotheken mit vierhundert Bewegungsrezepten. Ein paar,
+damit du weisst, was heute normal ist:
+
+  Schrift    typewriter-multi, shiny-text, rotating-text, decrypted-text,
+             text-scramble, count-up, true-focus
+  Auftritt   bounce-cards, elastic-slider, star-border
+  Flaeche    magnet-lines, strands, silk, waves, faulty-terminal, pixel-blast
+
+Das ist eine LATTE, keine Vorlage. Du kopierst nichts davon — weder Markup
+noch Code, weder Namen noch Anordnung. Du siehst daran, was ein Element
+koennen muss, damit es nicht wie ein Kasten mit Text aussieht: eine Zahl
+zaehlt hoch, statt dazustehen. Eine Zeile schreibt sich, statt zu erscheinen.
+Eine Flaeche atmet, statt zu liegen.
+
+Eine Bewegung, die man erst beim zweiten Ansehen bemerkt, ist richtig. Eine,
+die man nicht bemerkt, fehlt. Eine, die vom Inhalt ablenkt, ist zu viel."""
+
+
 def _html_agent_prompt(art: str, client_id: str) -> str:
-    teile = [HTML_AGENT_SYS.format(min_px=HTML_AGENT_MIN_PX), "", HTML_AGENT_GESTALTUNG]
+    teile = [HTML_AGENT_SYS.format(min_px=HTML_AGENT_MIN_PX), "", HTML_AGENT_GESTALTUNG,
+             "", HTML_AGENT_REZEPTE]
     skelett = SKELETTE.get(art)
     if skelett:
         teile += ["", f"SKELETT FUER '{art}' — Struktur, keine Gestaltung:", skelett]
@@ -11356,7 +11392,10 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 {"role": "user", "content": auftrag_text}]
 
     zustand = {"markup": "", "pruefung": None, "runden": 0, "vorschau_b64": "",
-               "begruendung": ""}
+               "begruendung": "",
+               # Welche Fassung er tatsaechlich ANGESEHEN hat. Ein Element, das
+               # niemand ansieht, sieht aus wie eins, das niemand angesehen hat.
+               "gesehen": ""}
     tok = {"ein": 0, "aus": 0, "cached": 0}
     t0 = time.time()
 
@@ -11376,6 +11415,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             zustand["markup"] = mk
             zustand["pruefung"] = pr
             zustand["runden"] += 1
+            zustand["gesehen"] = ""     # neue Fassung, wieder ungesehen
             return {"ok": True, "runde": zustand["runden"],
                     "ueberlauf": pr["ueberlauf"], "inhalt_px": [pr["breite"], pr["hoehe"]],
                     "leinwand_px": pr["leinwand"],
@@ -11397,6 +11437,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "fehler": "noch nichts gebaut"}
             t = float(args.get("t", t_mitte))
             pr = asyncio.run(_html_pruefstand(zustand["markup"], w_px, h_px, t, mit_bild=True))
+            zustand["gesehen"] = zustand["markup"]
             if not pr.get("ok"):
                 return {"ok": False, "fehler": pr.get("grund", "")}
             zustand["vorschau_b64"] = pr["bild_b64"]
@@ -11411,6 +11452,13 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             # erste Lauf gab mit abgeschnittenem Prozentzeichen ab, obwohl der
             # Pruefstand es gemeldet hatte.
             pr = zustand["pruefung"] or {}
+            # Und Messwerte sind kein Bild. Ueberlappende Schrift, ein Akzent,
+            # der auf dem Hintergrund verschwindet, eine Bewegung, die im
+            # Standbild nichts zeigt — das faellt nur beim Hinsehen auf.
+            if zustand["markup"] and zustand["gesehen"] != zustand["markup"]:
+                return {"ok": False,
+                        "fehler": "Du hast diese Fassung nicht angesehen. Ruf "
+                                  "preview_frame auf, sieh sie dir an, dann gib ab."}
             maengel = []
             if pr.get("ueberlauf"):
                 maengel.append(f"Inhalt {pr['breite']}x{pr['hoehe']}px passt nicht in "

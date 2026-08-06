@@ -7855,6 +7855,36 @@ def _max_gap(layers: list, frames: int) -> tuple:
     return luecke, wo
 
 
+LEERER_RAHMEN_F = 30        # eine Sekunde Luft, damit ein Uebergang nicht zaehlt
+
+
+def _leerer_rahmen(layers: list, frames: int) -> int:
+    """Frames, in denen die Facecam verkleinert ist und NICHTS den Rahmen
+    fuellt — also schwarze Flaeche mit einer Bubble darin.
+
+    Die Facecam in die Ecke zu ruecken ist erlaubt und gewollt: davor liegt
+    dann ein Bild, eine Aufnahme, eine gebaute Flaeche. Ohne diesen
+    Hintergrund ist es kein Bildaufbau, sondern ein leeres Video — genau das
+    war cce695957089 ueber die volle Laufzeit, und keine Bedingung hat es
+    bemerkt, weil die Facecam eine Pflichtebene ist und nicht mitgezaehlt wird.
+    """
+    cam = next((l for l in layers
+                if (l.get("source") or {}).get("kind") == "facecam"), None)
+    if not cam:
+        return 0
+    t = cam.get("transform") or {}
+    if float(t.get("w", 1)) > 0.95 and float(t.get("h", 1)) > 0.95:
+        return 0                      # Facecam fuellt selbst — nichts offen
+    frei = [False] * max(1, frames)
+    for l in layers:
+        if not _ist_uebernahme(l):
+            continue
+        for f in range(max(0, int(l["from"])), min(frames, int(l["to"]))):
+            frei[f] = True
+    a, b = max(0, int(cam.get("from", 0))), min(frames, int(cam.get("to", frames)))
+    return sum(1 for f in range(a, b) if not frei[f])
+
+
 def _gap_grenze(duration: float) -> float:
     """Zwanzig Sekunden Stille sind bei 80 Sekunden Material ein Signal. Bei
     einem 30-Sekunden-Clip waeren zwanzig Sekunden fast alles — deshalb greift
@@ -8364,6 +8394,15 @@ def _fertig(s: dict) -> dict:
                      f"(Ebene mit w und h > 0.95, Gesicht ganz weg)")
     if not bewegung:
         offen.append(f"keine animate-Kurve in den ersten {MOTION_WINDOW_F} Frames")
+    # Sechste Bedingung: eine verkleinerte Facecam ohne Hintergrund ist ein
+    # schwarzer Rahmen mit einer Bubble darin. Die Facecam ist Pflichtebene und
+    # zaehlt nirgends mit — deshalb ist das durch alle fuenf Bedingungen
+    # gerutscht und erst im fertigen Video zu sehen gewesen.
+    leer_f = _leerer_rahmen(s["layers"], s["frames"])
+    if leer_f > LEERER_RAHMEN_F:
+        offen.append(f"{leer_f / FPS:.1f}s leerer Rahmen: Facecam verkleinert, "
+                     f"aber nichts fuellt das Bild. Entweder die Facecam auf "
+                     f"w=1 h=1 zurueck, oder eine vollflaechige Ebene dahinter.")
     # Vierte Bedingung: drei Ebenen im ersten Drittel und danach eine Minute
     # nichts erfuellen die ersten drei Bedingungen — und sind trotzdem kein
     # fertiges Video. Das ist der Unterschied zwischen "aufgehoert zu arbeiten"
@@ -8402,6 +8441,7 @@ def _fertig(s: dict) -> dict:
             "pausen_ohne_schnitt": _ohne,
             "impacts": len(s.get("sfx") or []),
             "bewegung_ab_null": bewegung,
+            "leerer_rahmen_s": round(leer_f / FPS, 1),
             "groesste_luecke_s": round(luecke_f / FPS, 1),
             "luecke_ab_s": round(luecke_ab / FPS, 1),
             "luecke_grenze_s": round(grenze, 1)}
@@ -9581,7 +9621,14 @@ def tool_session_render(req: SessionRef):
         unten = round(min(0.80, float(face.get("bottom", 0.66)) + 0.04), 3)
         sicher = []
         for l in s["layers"]:
-            if _ist_pflicht(l):
+            # Pflichtebenen gehoeren dem System. Und eine Vollbild-Uebernahme
+            # DARF das Gesicht verdecken — das ist ihr Zweck. Sie auf die
+            # Schienen zu ziehen macht aus jedem Cutaway ein 0.24-Banner:
+            # gemessen an cce695957089, wo alle fuenf Uebernahmen so
+            # verschwanden und ein schwarzer Rahmen mit Bubble uebrigblieb.
+            # Die Korrektur widersprach damit genau der Abnahmebedingung,
+            # die Uebernahmen verlangt.
+            if _ist_pflicht(l) or _ist_uebernahme(l):
                 sicher.append(l)
                 continue
             t = dict(l["transform"])
@@ -10573,7 +10620,14 @@ oder texte kuerzer. Der Gestalter kuerzt nicht selbst, er meldet es dir.
 
 DEINE MITTEL
 Die Facecam ist eine gewoehnliche Ebene. Vollbild ist ein Transform-Wert; in die
-Ecke ruecken ist derselbe Layer mit anderem x/y/w/h und mask 'circle'. Du kannst
+Ecke ruecken ist derselbe Layer mit anderem x/y/w/h und mask 'circle'.
+
+Aber: eine verkleinerte Facecam braucht einen HINTERGRUND. Rueckst du sie in
+die Ecke und liegt dahinter nichts, ist das Bild schwarz mit einer Bubble
+darin. Entweder die Facecam bleibt w=1 h=1, oder es steht eine vollflaechige
+Ebene dahinter — fuer die ganze Zeit, in der sie klein ist.
+
+Du kannst
 Text, Bilder, Videos, Stock-Clips und selbstgeschriebene HTML-Animationen als
 Ebenen setzen, jede mit freier Position, Groesse, Ebene und Dauer.
 

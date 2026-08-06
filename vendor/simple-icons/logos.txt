@@ -1,0 +1,3453 @@
+1001tracklists	1001Tracklists	40AEF0
+1and1	1&1	003D8F
+1dot1dot1dot1	1.1.1.1	221E68
+1panel	1Panel	0854C1
+1password	1Password	145FE4
+2fas	2FAS	EC1C24
+2k	2K	DD0700
+30secondsofcode	30 seconds of code	5395FD
+365datascience	365 Data Science	000C1F
+3m	3M	FF0000
+42	42	000000
+4chan	4chan	006600
+4d	4D	004088
+500px	500px	222222
+7zip	7Zip	000000
+99designs	99designs	FE5F50
+9gag	9GAG	000000
+abb	ABB	FF000F
+abbott	Abbott	008FC7
+abbvie	Abbvie	071D49
+abdownloadmanager	AB Download Manager	897BFF
+aboutdotme	about.me	333333
+abstract	Abstract	191A1B
+abusedotch	abuse.ch	00465B
+academia	Academia	41454A
+accenture	Accenture	A100FF
+accusoft	Accusoft	A9225C
+accuweather	AccuWeather	FF6600
+acer	Acer	83B81A
+acm	ACM	0085CA
+acode	Acode	3499FE
+actigraph	ActiGraph	3A4259
+activeloop	Activeloop	FFB746
+activision	Activision	000000
+activitypub	ActivityPub	F1007E
+actix	Actix	000000
+actualbudget	Actual Budget	6B46C1
+acura	Acura	000000
+ada	Ada	000000
+adafruit	Adafruit	000000
+adaway	AdAway	B71C1C
+adblock	AdBlock	F40D12
+adblockplus	Adblock Plus	C70D2C
+addydotio	addy.io	19216C
+adguard	AdGuard	68BC71
+adidas	Adidas	000000
+adminer	Adminer	34567C
+adonisjs	AdonisJS	5A45FF
+adp	ADP	D0271D
+adroll	Adroll	0DBDFF
+adventofcode	Advent Of Code	FFFF66
+adyen	Adyen	0ABF53
+aegisauthenticator	Aegis Authenticator	005E9D
+aeroflot	Aeroflot	02458D
+aeromexico	Aeroméxico	0B2343
+afdian	AFDIAN	946CE6
+affine	AFFiNE	1E96EB
+aframe	A-Frame	EF2D5E
+afterpay	Afterpay	B2FCE4
+aftership	AfterShip	FF6B2B
+agentskills	Agent Skills	000000
+agora	Agora	099DFD
+aib	AIB	7F2B7B
+aidungeon	AI Dungeon	000000
+aiohttp	AIOHTTP	2C5BB4
+aiqfome	Aiqfome	7A1FA2
+airasia	AirAsia	FF0000
+airbnb	Airbnb	FF5A5F
+airbrake	Airbrake	FFA500
+airbus	Airbus	00205B
+airbyte	Airbyte	615EFF
+aircall	Aircall	00B388
+aircanada	Air Canada	F01428
+airchina	Air China	E30E17
+airfrance	Air France	002157
+airindia	Air India	DA0E29
+airplayaudio	AirPlay Audio	000000
+airplayvideo	AirPlay Video	000000
+airserbia	Air Serbia	0E203F
+airtable	Airtable	18BFFF
+airtel	Airtel	E40000
+airtransat	Air Transat	172B54
+ajv	Ajv	23C8D2
+akamai	Akamai	0096D6
+akasaair	Akasa Air	FF6300
+akaunting	Akaunting	6DA252
+akiflow	Akiflow	AF38F9
+alacritty	Alacritty	F46D01
+alamy	Alamy	00FF7B
+albertheijn	Albert Heijn	04ACE6
+alby	Alby	FFDF6F
+alchemy	Alchemy	0C0C0E
+aldinord	Aldi Nord	2490D7
+aldisud	Aldi Süd	00005F
+alfred	Alfred	5C1F87
+algolia	Algolia	003DFF
+algorand	Algorand	000000
+alibabacloud	Alibaba Cloud	FF6A00
+alibabadotcom	Alibaba.com	FF6A00
+alienware	Alienware	541BAE
+aliexpress	AliExpress	FF4747
+alipay	Alipay	1677FF
+alist	AList	70C6BE
+allegro	Allegro	FF5A00
+alliedmodders	AlliedModders	1578D3
+alltrails	AllTrails	142800
+almalinux	AlmaLinux	000000
+alpinedotjs	Alpine.js	8BC0D0
+alpinelinux	Alpine Linux	0D597F
+alternativeto	AlternativeTo	0289D5
+alwaysdata	Alwaysdata	E9568E
+amd	AMD	ED1C24
+ameba	Ameba	2D8C3C
+americanairlines	American Airlines	0078D2
+americanexpress	American Express	2E77BC
+amg	AMG	000000
+amp	AMP	005AF0
+amul	Amul	ED1D24
+ana	ANA	13448F
+anaconda	Anaconda	44A833
+analogue	Analogue	1A1A1A
+andela	Andela	173B3F
+android	Android	3DDC84
+androidauto	Android Auto	3DDC84
+androidstudio	Android Studio	3DDC84
+angular	Angular	0F0F11
+anichart	AniChart	41B1EA
+anilist	AniList	02A9FF
+animalplanet	Animal Planet	0073FF
+animedotjs	Anime.js	000000
+ankermake	AnkerMake	88F387
+anki	Anki	80C2EE
+ansible	Ansible	EE0000
+answer	Answer	0033FF
+ansys	Ansys	FFB71B
+anta	Anta	D70010
+antdesign	Ant Design	0170FE
+antena3	Antena 3	FF7328
+antennapod	AntennaPod	364FF3
+anthropic	Anthropic	191919
+antv	AntV	8B5DFF
+anycubic	Anycubic	476695
+anydesk	AnyDesk	EF443B
+anytype	Anytype	FF6A7B
+apache	Apache	D22128
+apacheairflow	Apache Airflow	017CEE
+apacheant	Apache Ant	A81C7D
+apachearrow	Apache Arrow	000000
+apacheavro	Apache Avro	30638E
+apachecassandra	Apache Cassandra	1287B1
+apachecloudstack	Apache CloudStack	2AA5DC
+apachecordova	Apache Cordova	E8E8E8
+apachecouchdb	Apache CouchDB	E42528
+apachedolphinscheduler	Apache DolphinScheduler	85CDF0
+apachedoris	Apache Doris	444FD9
+apachedruid	Apache Druid	29F1FB
+apacheecharts	Apache ECharts	AA344D
+apacheflink	Apache Flink	E6526F
+apachefreemarker	Apache FreeMarker	326CAC
+apachegroovy	Apache Groovy	4298B8
+apacheguacamole	Apache Guacamole	578B34
+apachehadoop	Apache Hadoop	66CCFF
+apachehbase	Apache HBase	BE160C
+apachehive	Apache Hive	FDEE21
+apachejmeter	Apache JMeter	D22128
+apachekafka	Apache Kafka	231F20
+apachekylin	Apache Kylin	F09D13
+apachelucene	Apache Lucene	019B8F
+apachemaven	Apache Maven	C71A36
+apachenetbeanside	Apache NetBeans IDE	1B6AC6
+apachenifi	Apache NiFi	728E9B
+apacheopenoffice	Apache OpenOffice	0E85CD
+apacheparquet	Apache Parquet	50ABF1
+apachepdfbox	Apache PDFBox	34A5DA
+apachepulsar	Apache Pulsar	188FFF
+apacherocketmq	Apache RocketMQ	D77310
+apachesolr	Apache Solr	D9411E
+apachespark	Apache Spark	E25A1C
+apachestorm	Apache Storm	225593
+apachesuperset	Apache Superset	20A6C9
+apachetomcat	Apache Tomcat	F8DC75
+aparat	Aparat	ED145B
+apifox	Apifox	F44A53
+apmterminals	APM Terminals	FF6441
+apollographql	Apollo GraphQL	311C87
+apostrophe	Apostrophe	6236FF
+appgallery	AppGallery	FF0000
+appian	Appian	2322F0
+appimage	AppImage	739FB9
+appium	Appium	EE376D
+apple	Apple	000000
+applearcade	Apple Arcade	000000
+applemusic	Apple Music	FA243C
+applenews	Apple News	FD415E
+applepay	Apple Pay	000000
+applepodcasts	Apple Podcasts	9933CC
+appletv	Apple TV	000000
+appmanager	AppManager	DCAF74
+appsignal	AppSignal	21375A
+appsmith	Appsmith	2A2F3D
+appstore	App Store	0D96F6
+appveyor	AppVeyor	00B3E0
+appwrite	Appwrite	FD366E
+aqua	Aqua	1904DA
+aral	ARAL	0063CB
+arangodb	ArangoDB	DDDF72
+arc	Arc	FCBFBD
+arcgis	ArcGIS	2C7AC3
+archicad	Archicad	2D50A5
+archiveofourown	Archive of Our Own	990000
+archlinux	Arch Linux	1793D1
+ardour	Ardour	C61C3E
+arduino	Arduino	00878F
+argo	Argo	EF7B4D
+argos	Argos	DA291C
+ariakit	Ariakit	007ACC
+arkecosystem	ARK Ecosystem	C9292C
+arlo	Arlo	49B48A
+arm	Arm	0091BD
+armkeil	Arm Keil	394049
+arstechnica	Ars Technica	FF4E00
+artifacthub	Artifact Hub	417598
+artixlinux	Artix Linux	10A0CC
+artstation	ArtStation	13AFF0
+arxiv	arXiv	B31B1B
+asahilinux	Asahi Linux	A61200
+asana	Asana	F06A6A
+asciidoctor	Asciidoctor	E40046
+asciinema	asciinema	D40000
+asda	ASDA	68A51C
+aseprite	Aseprite	7D929E
+assemblyscript	AssemblyScript	007ACC
+asterisk	Asterisk	F68F1E
+astonmartin	Aston Martin	00665E
+astra	Astra	5C2EDE
+astral	Astral	261230
+astro	Astro	BC52EE
+asus	ASUS	000000
+atandt	AT&T	009FDB
+atari	Atari	E4202E
+atlasos	AtlasOS	1A91FF
+atlassian	Atlassian	0052CC
+auchan	Auchan	D6180B
+audacity	Audacity	0000CC
+audi	Audi	BB0A30
+audible	Audible	F8991C
+audiobookshelf	Audiobookshelf	82612C
+audioboom	Audioboom	007CE2
+audiomack	Audiomack	FFA200
+audiotechnica	Audio-Technica	000000
+aurelia	Aurelia	ED2B88
+autentique	Autentique	3379F2
+auth0	Auth0	EB5424
+authelia	Authelia	113155
+authentik	Authentik	FD4B2D
+autocad	AutoCAD	E51050
+autocannon	AutoCannon	3BA4B7
+autodesk	Autodesk	000000
+autodeskmaya	Autodesk Maya	37A5CC
+autodeskrevit	Autodesk Revit	186BFF
+autohotkey	AutoHotkey	334455
+autoit	AutoIt	5D83AC
+automattic	Automattic	3499CD
+autoprefixer	Autoprefixer	DD3735
+autozone	AutoZone	D52B1E
+avajs	avajs	4B4B77
+avaloniaui	AvaloniaUI	165BFF
+avast	Avast	FF7800
+avianca	avianca	FF0000
+avira	Avira	E02027
+avm	AVM	E2001A
+await	Await	7858F5
+awesomelists	Awesome Lists	FC60A8
+awesomewm	awesomeWM	535D6C
+awwwards	Awwwards	222222
+axios	Axios	5A29E4
+axisbank	Axis Bank	971A4D
+b4x	B4X	14AECB
+babel	Babel	F9DC3E
+babelio	Babelio	FBB91E
+babylondotjs	Babylon.js	BB464B
+backblaze	Backblaze	E21E29
+backbone	Backbone	000000
+backbonedotjs	Backbone.js	0071B5
+backendless	Backendless	1D77BD
+backstage	Backstage	9BF0E1
+backstage_casting	Backstage	000000
+badoo	Badoo	783BF9
+baidu	Baidu	2932E1
+bakalari	Bakaláři	00A2E2
+bamboo	Bamboo	0052CC
+bambulab	Bambu Lab	00AE42
+bandcamp	Bandcamp	408294
+bandlab	BandLab	F12C18
+bandrautomation	B&R Automation	FF8800
+bandsintown	Bandsintown	00CEC8
+bankofamerica	Bank of America	012169
+barclays	Barclays	00AEEF
+baremetrics	Baremetrics	6078FF
+barmenia	Barmenia	009FE3
+basecamp	Basecamp	1D2D35
+baserow	Baserow	5190EF
+baseui	Base UI	EDEDED
+basicattentiontoken	Basic Attention Token	80247B
+bastyon	Bastyon	00A4FF
+bat	bat	31369E
+bata	Bata	DD282E
+battledotnet	Battle.net	4381C3
+bazel	Bazel	43A047
+beatport	Beatport	01FF95
+beats	Beats	005571
+beatsbydre	Beats by Dre	E01F3D
+beatstars	BeatStars	EB0000
+beekeeperstudio	Beekeeper Studio	FAD83B
+behance	Behance	1769FF
+beijingsubway	Beijing Subway	004A9D
+bem	BEM	000000
+bentley	Bentley	333333
+bento	Bento	768CFF
+bentobox	BentoBox	F15541
+bentoml	BentoML	000000
+bereal	BeReal	000000
+betfair	Betfair	FFB80B
+betterauth	Better Auth	FFFFFF
+betterdiscord	BetterDiscord	3E82E5
+betterstack	Better Stack	000000
+bevy	Bevy	232326
+bigbasket	bigbasket	A5CD39
+bigbluebutton	BigBlueButton	283274
+bigcartel	Big Cartel	222222
+bigcommerce	BigCommerce	121118
+bilibili	Bilibili	00A1D6
+billboard	Billboard	000000
+bim	BIM	EB1928
+binance	Binance	F0B90B
+bioconductor	Bioconductor	1A81C2
+biolink	Bio Link	000000
+biome	Biome	60A5FA
+bisecthosting	BisectHosting	0D1129
+bit	Bit	592EC1
+bitbucket	Bitbucket	0052CC
+bitcoin	Bitcoin	F7931A
+bitcoincash	Bitcoin Cash	0AC18E
+bitcoinsv	Bitcoin SV	EAB300
+bitcomet	BitComet	F49923
+bitdefender	Bitdefender	ED1C24
+bitly	Bitly	EE6123
+bitrise	Bitrise	683D87
+bitsy	Bitsy	6767B2
+bittorrent	BitTorrent	050505
+bitwarden	Bitwarden	175DDC
+bitwig	Bitwig	FF5A00
+black	Black	000000
+blackberry	Blackberry	000000
+blackmagicdesign	Blackmagic Design	FFA200
+blazemeter	Blazemeter	CA2133
+blazor	Blazor	512BD4
+blender	Blender	E87D0D
+blibli	Blibli	0072FF
+blockbench	Blockbench	1E93D9
+blockchaindotcom	Blockchain.com	121D33
+blogger	Blogger	FF5722
+bloglovin	Bloglovin	000000
+blueprint	Blueprint	137CBD
+bluesky	Bluesky	1185FE
+bluesound	Bluesound	0F131E
+bluetooth	Bluetooth	0082FC
+bmcsoftware	BMC Software	FE5000
+bmw	BMW	0066B1
+bnbchain	BNB Chain	F0B90B
+boardgamegeek	BoardGameGeek	FF5100
+boat	boAt	E20722
+boehringeringelheim	Boehringer Ingelheim	00E47C
+boeing	Boeing	1D439C
+bohemiainteractive	Bohemia Interactive	6BA539
+bombardier	Bombardier	000000
+bookalope	Bookalope	DC2829
+bookbub	BookBub	F44336
+bookingdotcom	Booking.com	003A9A
+bookmeter	Bookmeter	64BC4B
+bookmyshow	BookMyShow	C4242B
+bookstack	BookStack	0288D1
+boost	Boost	F7901E
+boosty	Boosty	F15F2C
+boots	Boots	05054B
+bootstrap	Bootstrap	7952B3
+borgbackup	BorgBackup	00DD00
+bosch	Bosch	EA0016
+bose	Bose	000000
+botblecms	Botble CMS	205081
+boulanger	boulanger	FD5300
+bower	Bower	EF5734
+box	Box	0061D5
+boxysvg	Boxy SVG	3584E3
+braintree	Braintree	000000
+braintrust	Braintrust	000000
+brandfetch	Brandfetch	0084FF
+brandfolder	Brandfolder	40D1F5
+brave	Brave	FB542B
+breaker	Breaker	003DAD
+brenntag	Brenntag	1A0033
+brevo	Brevo	0B996E
+brex	Brex	212121
+bricks	Bricks	FFD54D
+britishairways	British Airways	2E5C99
+broadcom	Broadcom	E31837
+bruno	Bruno	F4AA41
+bsd	BSD	AB2B28
+bspwm	bspwm	2E2E2E
+bt	BT	6400AA
+buddy	Buddy	1A86FD
+budibase	Budibase	000000
+buefy	Buefy	7957D5
+buffer	Buffer	231F20
+bugatti	Bugatti	000000
+bugcrowd	Bugcrowd	F26822
+buhl	Buhl	023E84
+buildkite	Buildkite	14CC80
+builtbybit	BuiltByBit	2D87C3
+bukalapak	Bukalapak	E31E52
+bulma	Bulma	00D1B2
+bun	Bun	000000
+bungie	Bungie	0075BB
+bunnydotnet	bunny.net	FFAA49
+bunq	bunq	3394D7
+burgerking	Burger King	D62300
+burpsuite	Burp Suite	FF6633
+burton	Burton	000000
+buymeacoffee	Buy Me A Coffee	FFDD00
+buysellads	BuySellAds	EB4714
+buzzfeed	BuzzFeed	EE3322
+bvg	BVG	F0D722
+byjus	Byju's	813588
+bytedance	ByteDance	3C8CFF
+c	C	A8B9CC
+cachet	Cachet	7ED321
+cachyos	CachyOS	00AA88
+caddy	Caddy	1F88C0
+cadillac	Cadillac	000000
+cafepress	CafePress	58A616
+cairographics	Cairo Graphics	F39914
+cairometro	Cairo Metro	C10C0C
+caixabank	CaixaBank	007EAE
+cakephp	CakePHP	D33C43
+caldotcom	Cal.com	292929
+calendly	Calendly	006BFF
+calibreweb	Calibre-Web	45B29D
+campaignmonitor	Campaign Monitor	111324
+camunda	Camunda	FC5D0D
+canonical	Canonical	E95420
+canvas	Canvas	E72429
+capacitor	Capacitor	119EFF
+caprover	CapRover	ED5B26
+cardano	Cardano	0133AD
+cardmarket	Cardmarket	012169
+carlsberggroup	Carlsberg Group	00321E
+carrd	Carrd	596CAF
+carrefour	Carrefour	004E9F
+carthrottle	Car Throttle	FF9C42
+carto	Carto	EB1510
+cashapp	Cash App	00C244
+castbox	Castbox	F55B23
+castorama	Castorama	0078D7
+castro	Castro	00B265
+caterpillar	Caterpillar	FFCD11
+cbc	CBC	E60505
+cbs	CBS	033963
+ccc	CCC	000000
+ccleaner	CCleaner	CB2D29
+cdprojekt	CD Projekt	DC0D15
+ce	CE	000000
+celery	Celery	37814A
+celestron	Celestron	F47216
+centos	CentOS	262577
+ceph	Ceph	EF5C55
+cesium	Cesium	6CADDF
+chai	Chai	A30701
+chainguard	Chainguard	4445E7
+chainlink	Chainlink	375BD2
+chakraui	Chakra UI	1BB2A9
+changedetection	Change Detection	3056D3
+channel4	Channel 4	AAFF89
+charles	Charles	F3F5F5
+chartdotjs	Chart.js	FF6384
+chartmogul	ChartMogul	13324B
+chase	Chase	117ACA
+chatbot	ChatBot	0066FF
+chatwoot	Chatwoot	1F93FF
+checkio	CheckiO	008DB6
+checkmarx	Checkmarx	54B848
+checkmk	Checkmk	15D1A0
+chedraui	Chedraui	E0832F
+cheerio	Cheerio	E88C1F
+chef	Chef	F09820
+chemex	Chemex	4D2B1A
+chessdotcom	Chess.com	81B64C
+chevrolet	Chevrolet	CD9834
+chianetwork	Chia Network	5ECE71
+chinaeasternairlines	China Eastern Airlines	1A2477
+chinarailway	China Railway	FF2600
+chinasouthernairlines	China Southern Airlines	008BCB
+chocolatey	Chocolatey	80B5E3
+chromatic	Chromatic	FC521F
+chromewebstore	Chrome Web Store	4285F4
+chrysler	Chrysler	000000
+chupachups	Chupa Chups	CF103E
+cilium	Cilium	F8C517
+cinema4d	Cinema 4D	011A6A
+cinnamon	Cinnamon	DC682E
+cinny	Cinny	000000
+circle	Circle	8669AE
+circleci	CircleCI	343434
+circuitverse	CircuitVerse	42B883
+cirrusci	Cirrus CI	4051B5
+cisco	Cisco	1BA0D7
+citrix	Citrix	452170
+citroen	Citroën	DA291C
+civicrm	CiviCRM	81C459
+civo	Civo	239DFF
+clarifai	Clarifai	1955FF
+claris	Claris	000000
+clarivate	Clarivate	93FF9E
+claude	Claude	D97757
+claudecode	Claude Code	D97757
+clerk	Clerk	6C47FF
+clevercloud	Clever Cloud	171C36
+clickhouse	ClickHouse	FFCC01
+clickup	ClickUp	7B68EE
+cline	Cline	18181B
+clion	CLion	000000
+clockify	Clockify	03A9F4
+clojure	Clojure	5881D8
+cloud66	Cloud 66	3C72B9
+cloudbees	CloudBees	1997B5
+cloudcannon	CloudCannon	407AFC
+cloudera	Cloudera	F96702
+cloudflare	Cloudflare	F38020
+cloudflarepages	Cloudflare Pages	F38020
+cloudflareworkers	Cloudflare Workers	F38020
+cloudfoundry	Cloud Foundry	0C9ED5
+cloudinary	Cloudinary	3448C5
+cloudnativebuild	Cloud Native Build	F76945
+cloudron	Cloudron	03A9F4
+cloudsmith	Cloudsmith	2A6FE1
+cloudways	Cloudways	2C39BD
+clubforce	Clubforce	191176
+clubhouse	Clubhouse	FFE450
+clyp	Clyp	3CBDB1
+cmake	CMake	064F8C
+cncf	CNCF	231F20
+cnes	CNES	204F8C
+cnet	CNET	E71D1D
+cnn	CNN	CC0000
+cobalt	cobalt	FFFFFF
+cocacola	Coca-Cola	D00013
+cockpit	Cockpit	2A7AE2
+cockroachlabs	Cockroach Labs	6933FF
+cocoapods	CocoaPods	EE3322
+cocos	Cocos	55C2E1
+coda	Coda	F46A54
+codacy	Codacy	222F29
+codeberg	Codeberg	2185D0
+codeblocks	Code::Blocks	41AD48
+codebuddy	CodeBuddy	6C4DFF
+codecademy	Codecademy	1F4056
+codeceptjs	CodeceptJS	F6E05E
+codechef	CodeChef	5B4638
+codeclimate	Code Climate	000000
+codecov	Codecov	F01F7A
+codecrafters	CodeCrafters	171920
+codefactor	CodeFactor	F44A6A
+codeforces	Codeforces	1F8ACB
+codefresh	Codefresh	08B1AB
+codeigniter	CodeIgniter	EF4223
+codemagic	Codemagic	F45E3F
+codementor	Codementor	003648
+codemirror	CodeMirror	D30707
+codenewbie	CodeNewbie	9013FE
+codeproject	CodeProject	FF9900
+coder	Coder	090B0B
+coderabbit	CodeRabbit	FF570A
+codersrank	CodersRank	67A4AC
+coderwall	Coderwall	3E8DCC
+codesandbox	CodeSandbox	151515
+codeship	Codeship	004466
+codesignal	CodeSignal	1062FB
+codestream	CodeStream	008C99
+codewars	Codewars	B1361E
+codingame	CodinGame	F2BB13
+codingninjas	Coding Ninjas	DD6620
+codio	Codio	4574E0
+coffeescript	CoffeeScript	2F2625
+coggle	Coggle	9ED56B
+coinbase	Coinbase	0052FF
+coinmarketcap	CoinMarketCap	17181B
+collaboraonline	Collabora Online	5C2983
+comicfury	ComicFury	79BD42
+comma	comma	51FF00
+commerzbank	Commerzbank	FFCC33
+commitlint	commitlint	000000
+commodore	Commodore	1E2A4E
+commonlisp	Common Lisp	000000
+commonworkflowlanguage	Common Workflow Language	B5314C
+compilerexplorer	Compiler Explorer	67C52A
+composer	Composer	885630
+comptia	CompTIA	C8202F
+comsol	Comsol	368CCB
+conan	Conan	6699CB
+concourse	Concourse	3398DC
+condaforge	Conda-Forge	000000
+conekta	Conekta	0A1837
+confluence	Confluence	172B4D
+construct3	Construct 3	00FFDA
+consul	Consul	F24C53
+contabo	Contabo	00AAEB
+contactlesspayment	Contactless Payment	000000
+containerd	containerd	575757
+contao	Contao	F47C00
+contensis	Contensis	37BFA7
+contentful	Contentful	2478CC
+contentstack	Contentstack	E74C3D
+continente	Continente	E31E24
+contributorcovenant	Contributor Covenant	5E0D73
+conventionalcommits	Conventional Commits	FE5196
+convertio	Convertio	FF3333
+convex	Convex	EE342F
+cookiecutter	Cookiecutter	D4AA00
+coolermaster	Cooler Master	1E1E28
+coolify	Coolify	6B16ED
+coop	Co-op	00B1E7
+copaairlines	Copa Airlines	0032A0
+coppel	Coppel	0266AE
+cora	Cora	E61845
+coreboot	Coreboot	000000
+coreldraw	CorelDRAW	000000
+coronaengine	Corona Engine	F96F29
+coronarenderer	Corona Renderer	E6502A
+corsair	Corsair	231F20
+couchbase	Couchbase	EA2328
+counterstrike	Counter-Strike	000000
+countingworkspro	CountingWorks PRO	2E3084
+coursera	Coursera	0056D2
+coveralls	Coveralls	3F5767
+coze	Coze	4D53E8
+cpanel	cPanel	FF6C2C
+cplusplus	C++	00599C
+cplusplusbuilder	C++ Builder	E62431
+craftcms	Craft CMS	E5422B
+craftsman	Craftsman	D6001C
+cratedb	CrateDB	009DC7
+crayon	Crayon	FF6A4C
+creality	Creality	000000
+createreactapp	Create React App	09D3AC
+creativecommons	Creative Commons	ED592F
+creativetechnology	Creative Technology	000000
+credly	Credly	FF6B00
+crehana	Crehana	4B22F4
+crewai	CrewAI	FF5A50
+crewunited	Crew United	000000
+criticalrole	Critical Role	000000
+crowdin	Crowdin	2E3340
+crowdsource	Crowdsource	4285F4
+crunchbase	Crunchbase	0288D1
+crunchyroll	Crunchyroll	FF5E00
+cryengine	CRYENGINE	000000
+cryptomator	Cryptomator	49B04A
+cryptpad	CryptPad	0087FF
+crystal	Crystal	000000
+csdn	CSDN	FC5531
+css	CSS	663399
+cssdesignawards	CSS Design Awards	280FEE
+cssmodules	CSS Modules	000000
+csswizardry	CSS Wizardry	F43059
+cts	CTS	E53236
+cucumber	Cucumber	23D96C
+cultura	Cultura	1D2C54
+curl	curl	073551
+curseforge	CurseForge	F16436
+cursor	Cursor	000000
+customink	Custom Ink	FA3C00
+cyberdefenders	CyberDefenders	335EEA
+cycling74	Cycling '74	111111
+cypress	Cypress	69D3A7
+cytoscapedotjs	Cytoscape.js	F7DF1E
+d	D	B03931
+d3	D3	F9A03C
+dacia	Dacia	646B52
+daf	DAF	00529B
+dailydotdev	daily.dev	CE3DF3
+dailymotion	Dailymotion	0A0A0A
+daisyui	daisyUI	FFC63A
+dapr	Dapr	0D2192
+darkreader	Dark Reader	141E24
+dart	Dart	0175C2
+darty	Darty	EB1B23
+daserste	Das Erste	001A4B
+dash	Dash	008DE4
+dash0	Dash0	EA3D3B
+dashlane	Dashlane	0E353D
+dask	Dask	FC6E6B
+dassaultsystemes	Dassault Systèmes	005386
+databricks	Databricks	FF3621
+datacamp	DataCamp	03EF62
+datadog	Datadog	632CA6
+datadotai	data.ai	000000
+datagrip	DataGrip	000000
+dataiku	Dataiku	2AB1AC
+datastax	DataStax	000000
+datefns	date-fns	770C56
+datev	DATEV	9BD547
+datocms	DatoCMS	FF7751
+datto	Datto	199ED9
+davinciresolve	DaVinci Resolve	233A51
+dazhongdianping	Dazhong Dianping	FF6633
+dazn	DAZN	F8F8F5
+dbeaver	DBeaver	382923
+dblp	dblp	004F9F
+dcentertainment	DC Entertainment	0078F0
+debian	Debian	A81D33
+debridlink	Debrid-Link	264E70
+decapcms	Decap CMS	FF0082
+decentraland	Decentraland	FF2D55
+dedge	D-EDGE	432975
+deepcool	DeepCool	068584
+deepgram	Deepgram	13EF93
+deepin	deepin	007CFF
+deepl	DeepL	0F2B46
+deepmind	DeepMind	4285F4
+deepnote	Deepnote	3793EF
+deepseek	DeepSeek	5786FE
+deezer	Deezer	A238FF
+deliveroo	Deliveroo	00CCBC
+dell	Dell	007DB8
+delonghi	De'Longhi	072240
+delphi	Delphi	E62431
+delta	Delta	003366
+deluge	Deluge	094491
+deno	Deno	000000
+denodeploy	Deno Deploy	002633
+denon	Denon	0B131A
+dependabot	Dependabot	025E8C
+dependencycheck	OWASP Dependency-Check	F78D0A
+depositphotos	Depositphotos	000000
+derspiegel	Der Spiegel	E64415
+deutschebahn	Deutsche Bahn	F01414
+deutschebank	Deutsche Bank	0018A8
+deutschepost	Deutsche Post	FFCC00
+deutschetelekom	Deutsche Telekom	E20074
+deutschewelle	Deutsche Welle	05B2FC
+devbox	Devbox	280459
+devdotto	dev.to	0A0A0A
+developmentcontainers	Development Containers	2753E3
+devexpress	DevExpress	FF7200
+deviantart	DeviantArt	05CC47
+devpost	Devpost	003E54
+devrant	devRant	F99A66
+devuan	Devuan	004489
+dgraph	Dgraph	E50695
+dhl	DHL	FFCC00
+diagramsdotnet	diagrams.net	F08705
+dialogflow	Dialogflow	FF9800
+diaspora	Diaspora	000000
+dicebear	DiceBear	0284C7
+dictionarydotcom	Dictionary.com	0049D7
+dify	Dify	0033FF
+digg	Digg	000000
+digikeyelectronics	Digi-Key Electronics	CC0000
+digitalocean	DigitalOcean	0080FF
+dinersclub	Diners Club	004C97
+dior	Dior	000000
+directus	Directus	263238
+discogs	Discogs	333333
+discord	Discord	5865F2
+discorddotjs	discord.js	5865F2
+discourse	Discourse	000000
+discover	Discover	FF6000
+disqus	Disqus	2E9FFF
+disroot	Disroot	50162D
+distrobox	Distrobox	4F433C
+distrokid	Distrokid	231F20
+django	Django	092E20
+dji	DJI	000000
+dlib	Dlib	008000
+dlna	DLNA	48A842
+dlthub	dlthub	59C1D5
+dm	dm	002878
+dmm	DMM	000000
+docker	Docker	2496ED
+docsdotrs	Docs.rs	000000
+docsify	Docsify	2ECE53
+doctrine	Doctrine	FC6A31
+docusaurus	Docusaurus	3ECC5F
+dodopayments	Dodo Payments	C6FE1E
+dogecoin	Dogecoin	C2A633
+doi	DOI	FAB70C
+dolby	Dolby	000000
+dolibarr	Dolibarr	263C5C
+dolphin	Dolphin	00AAFF
+doordash	DoorDash	FF3008
+dota2	Dota 2	BF2E1A
+dotenv	.ENV	ECD53F
+dotnet	.NET	512BD4
+douban	Douban	2D963D
+doubanread	Douban Read	24D2C8
+dovecot	Dovecot	54BCAB
+dovetail	Dovetail	190041
+downdetector	Downdetector	FF160A
+doxygen	Doxygen	2C4AA8
+dpd	DPD	DC0032
+dragonframe	Dragonframe	D4911E
+draugiemdotlv	Draugiem.lv	FF6600
+dreamstime	Dreamstime	50A901
+dribbble	Dribbble	EA4C89
+drizzle	Drizzle	C5F74F
+drone	Drone	212121
+drooble	Drooble	19C4BE
+dropbox	Dropbox	0061FF
+drupal	Drupal	0678BE
+dsautomobiles	DS Automobiles	1D1717
+dts	DTS	F98B2B
+dtube	DTube	F01A30
+ducati	Ducati	CC0000
+duckdb	DuckDB	FFF000
+duckduckgo	DuckDuckGo	DE5833
+dungeonsanddragons	Dungeons & Dragons	ED1C24
+dunked	Dunked	2DA9D7
+dunzo	Dunzo	00D290
+duolingo	Duolingo	58CC02
+duplicati	Duplicati	1E3A8A
+dvc	DVC	13ADC7
+dwavesystems	D-Wave Systems	008CD7
+dwm	dwm	1177AA
+dynatrace	Dynatrace	1496FF
+e	/e/	000000
+e3	E3	E73D2F
+ea	EA	000000
+eac	EAC	000000
+eagle	Eagle	0072EF
+easyeda	EasyEDA	1765F6
+easyjet	easyJet	FF6600
+ebay	eBay	E53238
+ebox	EBOX	BE2323
+eclipseadoptium	Eclipse Adoptium	FF1464
+eclipseche	Eclipse Che	525C86
+eclipseide	Eclipse IDE	2C2255
+eclipsejetty	Eclipse Jetty	FC390E
+eclipsemosquitto	Eclipse Mosquitto	3C5280
+eclipsevertdotx	Eclipse Vert.x	782A90
+ecosia	Ecosia	008009
+ecovacs	Ecovacs	1E384B
+edeka	EDEKA	1B66B3
+edgeimpulse	Edge Impulse	3B47C2
+editorconfig	EditorConfig	FEFEFE
+edotleclerc	E.Leclerc	0066CC
+educative	Educative	4951F5
+edx	edX	02262B
+effect	Effect	FFFFFF
+egghead	egghead	FCFBFA
+egnyte	Egnyte	00968F
+eight	Eight	0054FF
+eightsleep	Eight Sleep	262729
+ejs	EJS	B4CA65
+elastic	Elastic	005571
+elasticcloud	Elastic Cloud	005571
+elasticsearch	Elasticsearch	005571
+elasticstack	Elastic Stack	005571
+elavon	Elavon	0C2074
+electron	Electron	47848F
+electronbuilder	electron-builder	000000
+electronfiddle	Electron Fiddle	E79537
+elegoo	Elegoo	2C3A83
+element	Element	0DBD8B
+elementary	elementary	64BAFF
+elementor	Elementor	92003B
+elevenlabs	ElevenLabs	000000
+eleventy	Eleventy	222222
+elgato	Elgato	101010
+elixir	Elixir	4B275F
+elk	Elk	EA9E44
+elm	Elm	1293D8
+elsevier	Elsevier	FF6C00
+embarcadero	Embarcadero	ED1F35
+embark	Embark	000000
+emberdotjs	Ember.js	E04E39
+emby	Emby	52B54B
+emirates	Emirates	D71921
+emlakjet	Emlakjet	0AE524
+endeavouros	EndeavourOS	7F7FFF
+enpass	Enpass	0D47A1
+ens	ENS	0080BC
+ente	Ente	00BC45
+enterprisedb	EnterpriseDB	FF3E00
+envato	Envato	87E64B
+envoyproxy	Envoy Proxy	AC6199
+epel	EPEL	FC0000
+epicgames	Epic Games	313131
+epson	Epson	003399
+equinixmetal	Equinix Metal	ED2224
+eraser	Eraser	EC2C40
+ericsson	Ericsson	0082F0
+erlang	Erlang	A90533
+erpnext	ERPNext	0089FF
+esbuild	esbuild	FFCF00
+esea	ESEA	0E9648
+eslgaming	ESLGaming	FFFF09
+eslint	ESLint	4B32C3
+esotericsoftware	Esoteric Software	3FA9F5
+esphome	ESPHome	18BCF2
+espressif	Espressif	E7352C
+esri	ESRI	000000
+etcd	etcd	419EDA
+ethereum	Ethereum	3C3C3D
+ethers	Ethers	2535A0
+ethiopianairlines	Ethiopian Airlines	648B1A
+etihadairways	Etihad Airways	BD8B13
+etsy	Etsy	F16521
+europeanunion	European Union	003399
+eventstore	Event Store	5AB552
+evernote	Evernote	00A82D
+everydotorg	Every.org	2BD7B0
+excalidraw	Excalidraw	6965DB
+exercism	Exercism	009CAB
+exordo	Exordo	DAA449
+exoscale	Exoscale	DA291C
+expedia	Expedia	191E3B
+expensify	Expensify	0185FF
+expertsexchange	Experts Exchange	00AAE7
+expo	Expo	1C2024
+express	Express	0A0A0A
+expressdotcom	Express.com	000000
+expressvpn	ExpressVPN	DA3940
+eyeem	EyeEm	000000
+f1	F1	E10600
+f5	F5	E4002B
+facebook	Facebook	0866FF
+facebookgaming	Facebook Gaming	005FED
+facebooklive	Facebook Live	ED4242
+faceit	FACEIT	FF5500
+facepunch	Facepunch	EC1C24
+fairphone	Fairphone	4495D1
+faker	Faker	779B2E
+falco	Falco	00AEC7
+falcon	Falcon	F0AD4E
+fampay	FamPay	FFAD00
+fandango	Fandango	FF7300
+fandom	Fandom	FA005A
+fanfou	Fanfou	00CCFF
+fantom	Fantom	0928FF
+farcaster	Farcaster	855DCD
+fareharbor	FareHarbor	0A6ECE
+farfetch	FARFETCH	000000
+fastapi	FastAPI	009688
+fastify	Fastify	000000
+fastlane	Fastlane	00F200
+fastly	Fastly	FF282D
+fathom	Fathom	9187FF
+fauna	Fauna	3A1AB6
+favro	Favro	512DA8
+fawry	Fawry	FFD300
+fcc	FCC	1C3664
+fdroid	F-Droid	1976D2
+fedex	FedEx	4D148C
+fedora	Fedora	51A2DA
+feedly	Feedly	2BB24C
+ferrari	Ferrari	D40000
+ferrarinv	Ferrari N.V.	EB2E2C
+ferretdb	FerretDB	042133
+ffmpeg	FFmpeg	007808
+fi	Fi	00B899
+fiat	Fiat	941711
+fidoalliance	Fido Alliance	FFBF3B
+fifa	FIFA	326295
+fig	Fig	000000
+figma	Figma	F24E1E
+figshare	figshare	556472
+fila	Fila	002D62
+filament	Filament	FDAE4B
+filedotio	File.io	3D3C9D
+filen	Filen	000000
+files	Files	4285F4
+filezilla	FileZilla	BF0000
+fillout	Fillout	FFC738
+fineco	Fineco	00549F
+fing	Fing	009AEE
+firebase	Firebase	DD2C00
+firefish	Firefish	F07A5B
+fireflyiii	Firefly III	CD5029
+firefox	Firefox	FF7139
+firefoxbrowser	Firefox Browser	FF7139
+fireship	Fireship	EB844E
+firewalla	Firewalla	C8332D
+first	FIRST	0066B3
+fishaudio	Fish Audio	9B90E8
+fishshell	fish shell	34C534
+fitbit	Fitbit	00B0B9
+fivem	FiveM	F40552
+fiverr	Fiverr	1DBF73
+fizz	Fizz	00D672
+flashforge	Flashforge	000000
+flask	Flask	3BABC3
+flat	Flat	3481FE
+flathub	Flathub	000000
+flatpak	Flatpak	4A90D9
+flickr	Flickr	0063DC
+flightaware	Flightaware	19315B
+flipboard	Flipboard	E12828
+floatplane	Floatplane	00AEEF
+flood	Flood	4285F4
+floorp	Floorp	5309E8
+flower	Flower	F2B705
+fluentbit	Fluent Bit	49BDA5
+fluentd	Fluentd	0E83C8
+fluke	Fluke	FFC20E
+flutter	Flutter	02569B
+flux	Flux	5468FF
+fluxer	Fluxer	4641D9
+flydotio	Fly.io	24175B
+flyway	Flyway	CC0200
+fmod	FMOD	000000
+fnac	Fnac	E1A925
+folium	Folium	77B829
+folo	Folo	FF5C00
+fonoma	Fonoma	02B78F
+fontawesome	Font Awesome	538DD7
+fontbase	FontBase	3D03A7
+fontforge	FontForge	F2712B
+foobar2000	foobar2000	000000
+foodpanda	foodpanda	D70F64
+ford	Ford	00274E
+forgejo	Forgejo	FB923C
+formbricks	Formbricks	00C4B8
+formik	Formik	2563EB
+formspree	Formspree	E5122E
+formstack	Formstack	21B573
+fortinet	Fortinet	EE3124
+fortnite	Fortnite	000000
+fortran	Fortran	734F96
+fossa	Fossa	289E6D
+fossilscm	Fossil SCM	548294
+foundryvirtualtabletop	Foundry Virtual Tabletop	FE6A1F
+foursquare	Foursquare	3333FF
+fox	FOX	000000
+foxtel	Foxtel	EB5205
+fozzy	Fozzy	F15B29
+framer	Framer	0055FF
+framework	Framework	000000
+framework7	Framework7	EE350F
+franprix	Franprix	EC6237
+frappe	Frappe	0089FF
+fraunhofergesellschaft	Fraunhofer-Gesellschaft	179C7D
+freebsd	FreeBSD	AB2B28
+freecad	FreeCAD	418FDE
+freecodecamp	freeCodeCamp	0A0A23
+freedesktopdotorg	freedesktop.org	3B80AE
+freelancer	Freelancer	29B2FE
+freelancermap	freelancermap	00CFD6
+freenas	FreeNAS	343434
+freenet	freenet	84BC34
+freepik	Freepik	1273EB
+freetube	FreeTube	F04242
+fresh	Fresh	FFDB1E
+freshrss	FreshRSS	0062BE
+frigate	Frigate	000000
+fritz	FRITZ!	E2001A
+frontendmentor	Frontend Mentor	3F54A3
+frontify	Frontify	2D3232
+fsharp	F#	378BBA
+fubo	Fubo	C83D1E
+fueler	Fueler	09C9E3
+fugacloud	Fuga Cloud	242F4B
+fujifilm	Fujifilm	FB0020
+fujitsu	Fujitsu	FF0000
+furaffinity	Fur Affinity	36566F
+furrynetwork	Furry Network	2E75B4
+fusionauth	FusionAuth	F58320
+futurelearn	FutureLearn	DE00A5
+fyle	Fyle	FF2E63
+g2	G2	FF492C
+g2a	G2A	F05F00
+g2g	G2G	ED1C24
+galaxus	Galaxus	000000
+gamebanana	GameBanana	FCEF40
+gamedeveloper	Game Developer	E60012
+gamejolt	Game Jolt	CCFF00
+gameloft	Gameloft	000000
+gamemaker	Gamemaker	000000
+gamescience	Game Science	000000
+gandi	Gandi	6640FE
+garmin	Garmin	000000
+garudalinux	Garuda Linux	8839EF
+gatling	Gatling	FF9E2A
+gatsby	Gatsby	663399
+gcore	Gcore	FF4C00
+gdal	GDAL	5CAE58
+geeksforgeeks	GeeksforGeeks	2F8D46
+generalelectric	General Electric	0870D8
+generalmotors	General Motors	0170CE
+genius	Genius	FFFF64
+gentoo	Gentoo	54487A
+geocaching	Geocaching	00874D
+geode	Geode	8D7ACF
+geopandas	GeoPandas	139C5A
+gerrit	Gerrit	EEEEEE
+getx	GetX	8A2BE2
+ghost	Ghost	15171A
+ghostery	Ghostery	00AEF0
+ghostfolio	Ghostfolio	36CFCC
+ghostty	Ghostty	3551F3
+gimp	GIMP	8C8073
+gin	Gin	008ECF
+giphy	GIPHY	FF6666
+git	Git	F03C2E
+gitbook	GitBook	BBDDE5
+gitcode	GitCode	DA203E
+gitconnected	Gitconnected	2E69AE
+gitea	Gitea	609926
+gitee	Gitee	C71D23
+gitextensions	Git Extensions	212121
+gitforwindows	Git for Windows	80B3FF
+github	GitHub	181717
+githubactions	GitHub Actions	2088FF
+githubcopilot	GitHub Copilot	000000
+githubpages	GitHub Pages	222222
+githubsponsors	GitHub Sponsors	EA4AAA
+gitignoredotio	gitignore.io	204ECF
+gitkraken	GitKraken	179287
+gitlab	GitLab	FC6D26
+gitlfs	Git LFS	F64935
+gitpod	Gitpod	FFAE33
+gitter	Gitter	ED1965
+glance	Glance	D9C38C
+glass	Glass	FFCC00
+glassdoor	Glassdoor	00A162
+gldotinet	GL.iNet	636363
+gleam	Gleam	FFAFF3
+glide	Glide	18BED4
+glitch	Glitch	3333FF
+globus	Globus	CA6201
+glovo	Glovo	F2CC38
+gltf	glTF	87C540
+gmail	Gmail	EA4335
+gmx	GMX	1C449B
+gnome	GNOME	4A86CF
+gnometerminal	GNOME Terminal	241F31
+gnu	GNU	A42E2B
+gnubash	GNU Bash	4EAA25
+gnuemacs	GNU Emacs	7F5AB6
+gnuicecat	GNU IceCat	002F5B
+gnuprivacyguard	GNU Privacy Guard	0093DD
+gnusocial	GNU social	A22430
+go	Go	00ADD8
+gocd	GoCD	94399E
+godaddy	GoDaddy	1BDBDB
+godotengine	Godot Engine	478CBF
+gofundme	GoFundMe	00B964
+gogdotcom	GOG.com	86328A
+gojek	Gojek	00AA13
+goland	GoLand	000000
+goldmansachs	Goldman Sachs	7399C6
+goodreads	Goodreads	1E1914
+google	Google	4285F4
+googleadmob	Google AdMob	EA4335
+googleads	Google Ads	4285F4
+googleadsense	Google AdSense	4285F4
+googleanalytics	Google Analytics	E37400
+googleappsscript	Google Apps Script	4285F4
+googleassistant	Google Assistant	4285F4
+googleauthenticator	Google Authenticator	4285F4
+googlebigquery	Google BigQuery	669DF6
+googlebigtable	Google Bigtable	669DF6
+googlecalendar	Google Calendar	4285F4
+googlecampaignmanager360	Google Campaign Manager 360	1E8E3E
+googlecardboard	Google Cardboard	FF7143
+googlecast	Google Cast	4285F4
+googlechat	Google Chat	34A853
+googlechrome	Google Chrome	4285F4
+googlechronicle	Google Chronicle	4285F4
+googleclassroom	Google Classroom	0F9D58
+googlecloud	Google Cloud	4285F4
+googlecloudcomposer	Google Cloud Composer	4285F4
+googlecloudspanner	Google Cloud Spanner	4285F4
+googlecloudstorage	Google Cloud Storage	AECBFA
+googlecolab	Google Colab	F9AB00
+googlecontaineroptimizedos	Google Container Optimized OS	4285F4
+googledataflow	Google Dataflow	AECBFA
+googledataproc	Google Dataproc	AECBFA
+googledisplayandvideo360	Google Display & Video 360	34A853
+googledocs	Google Docs	4285F4
+googledrive	Google Drive	4285F4
+googleearth	Google Earth	4285F4
+googleearthengine	Google Earth Engine	4285F4
+googlefonts	Google Fonts	4285F4
+googleforms	Google Forms	7248B9
+googlegemini	Google Gemini	8E75B2
+googlehome	Google Home	4285F4
+googlejules	Google Jules	715CD7
+googlekeep	Google Keep	FFBB00
+googlelens	Google Lens	4285F4
+googlemaps	Google Maps	4285F4
+googlemarketingplatform	Google Marketing Platform	4285F4
+googlemeet	Google Meet	00897B
+googlemessages	Google Messages	1A73E8
+googlenearby	Google Nearby	4285F4
+googlenews	Google News	174EA6
+googlepay	Google Pay	4285F4
+googlephotos	Google Photos	4285F4
+googleplay	Google Play	414141
+googlepubsub	Google Pub/Sub	AECBFA
+googlescholar	Google Scholar	4285F4
+googlesearchconsole	Google Search Console	458CF5
+googlesheets	Google Sheets	34A853
+googleslides	Google Slides	FBBC04
+googlestreetview	Google Street View	FEC111
+googlesummerofcode	Google Summer of Code	F9AB00
+googletagmanager	Google Tag Manager	246FDB
+googletasks	Google Tasks	2684FC
+googletranslate	Google Translate	4285F4
+googletv	Google TV	4285F4
+gotomeeting	GoToMeeting	F68D2E
+gplv3	GPLv3	BD0000
+grab	Grab	00B14F
+gradio	Gradio	F97316
+gradle	Gradle	02303A
+gradleplaypublisher	Gradle Play Publisher	82B816
+grafana	Grafana	F46800
+grammarly	Grammarly	027E6F
+grandfrais	Grand Frais	ED2D2F
+grapheneos	GrapheneOS	0053A3
+graphite	Graphite	000000
+graphite_editor	Graphite	473A3A
+graphql	GraphQL	E10098
+grav	Grav	221E1F
+gravatar	Gravatar	1E8CBE
+graylog	Graylog	FF3633
+greasyfork	Greasy Fork	670000
+greatlearning	Great Learning	0E39A9
+greenhouse	Greenhouse	24A47F
+greensock	GreenSock	88CE02
+greptimedb	GreptimeDB	8322FF
+griddotai	Grid.ai	78FF96
+gridsome	Gridsome	00A672
+grocy	Grocy	337AB7
+groupme	GroupMe	00AFF0
+groupon	Groupon	53A318
+grunt	Grunt	FAA918
+gsap	GSAP	0AE448
+gsk	GSK	F36633
+gsma	GSMA	DC002B
+gsmarenadotcom	GSMArena.com	D50000
+gstreamer	GStreamer	FF3131
+gtk	GTK	7FE719
+guangzhoumetro	Guangzhou Metro	C51935
+guilded	Guilded	F5C400
+guitarpro	Guitar Pro	569FFF
+gulp	gulp	CF4647
+gumroad	Gumroad	FF90E8
+gumtree	Gumtree	72EF36
+gunicorn	Gunicorn	499848
+gurobi	Gurobi	EE3524
+gusto	Gusto	F45D48
+gutenberg	Gutenberg	000000
+h2database	H2 Database	09476B
+h3	H3	1E54B7
+habr	Habr	65A3BE
+hackaday	Hackaday	1A1A1A
+hackclub	Hack Club	EC3750
+hackerearth	HackerEarth	2C3454
+hackernoon	Hacker Noon	00FE00
+hackerone	HackerOne	494649
+hackerrank	HackerRank	00EA64
+hackmd	HackMD	453AFF
+hackster	Hackster	2E9FE6
+hackthebox	Hack The Box	9FEF00
+hal	HAL	B03532
+handlebarsdotjs	Handlebars.js	000000
+handm	H&M	E50010
+handshake	Handshake	D3FB52
+handshake_protocol	Handshake	000000
+happycow	HappyCow	7C4EC4
+harbor	Harbor	60B932
+harmonyos	HarmonyOS	000000
+hashcat	Hashcat	FFFFFF
+hashicorp	HashiCorp	000000
+hashnode	Hashnode	2962FF
+haskell	Haskell	5D4F85
+hasura	Hasura	1EB4D4
+hatenabookmark	Hatena Bookmark	00A4DE
+haveibeenpwned	Have I Been Pwned	030304
+havells	Havells	ED1C24
+haxe	Haxe	EA8220
+haystack	Haystack	0EAF9C
+hbo	HBO	000000
+hbomax	HBO Max	000000
+hcl	HCL	006BB6
+hdfcbank	HDFC Bank	004B8D
+headlessui	Headless UI	66E3FF
+headphonezone	Headphone Zone	3C07FF
+headspace	Headspace	F47D31
+hearth	Hearth	A33035
+hearthisdotat	hearthis.at	000000
+hedera	Hedera	222222
+hedgedoc	HedgeDoc	B51F08
+helium	Helium	0ACF83
+heliumbrowser	Helium Browser	3450D1
+helix	Helix	281733
+hellofresh	HelloFresh	99CC33
+hellyhansen	Helly Hansen	DA2128
+helm	Helm	0F1689
+helpdesk	HelpDesk	2FC774
+helpscout	Help Scout	1292EE
+hepsiemlak	Hepsiemlak	E1251B
+here	HERE	00AFAA
+hermes	Hermes	0091CD
+heroicgameslauncher	Heroic Games Launcher	4B93FF
+heroui	HeroUI	000000
+hetzner	Hetzner	D50C2D
+hevy	Hevy	000000
+hexlet	Hexlet	116EF5
+hexo	Hexo	0E83CD
+hey	HEY	5522FA
+hibernate	Hibernate	59666C
+hibob	Hi Bob	E42C51
+hilton	Hilton	231F20
+hiltonhotelsandresorts	Hilton Hotels & Resorts	1E4380
+hitachi	Hitachi	E60027
+hive	Hive	FF7A00
+hive_blockchain	Hive	E31337
+hivemq	HiveMQ	FFC000
+homarr	Homarr	FA5252
+homeadvisor	HomeAdvisor	F68315
+homeassistant	Home Assistant	18BCF2
+homeassistantcommunitystore	Home Assistant Community Store	41BDF5
+homebrew	Homebrew	FBB040
+homebridge	Homebridge	491F59
+homepage	Homepage	009BD5
+homify	homify	7DCDA3
+honda	Honda	E40521
+honey	Honey	FF6801
+honeybadger	Honeybadger	EA5937
+honeygain	Honeygain	F9C900
+hono	Hono	E36002
+honor	Honor	000000
+hootsuite	Hootsuite	FF4C46
+hoppscotch	Hoppscotch	09090B
+hostinger	Hostinger	673DE6
+hotelsdotcom	Hotels.com	EF3346
+hotjar	Hotjar	FF3C00
+hotwire	Hotwire	FFE801
+houdini	Houdini	FF4713
+houzz	Houzz	4DBC15
+hp	HP	0096D6
+hsbc	HSBC	DB0011
+htc	HTC	A5CF4C
+htcvive	HTC Vive	00B2E3
+html5	HTML5	E34F26
+htmlacademy	HTML Academy	302683
+htmx	htmx	3366CC
+htop	htop	009020
+httpie	HTTPie	73DC8C
+huawei	Huawei	FF0000
+hubspot	HubSpot	FF7A59
+huggingface	Hugging Face	FFD21E
+hugo	Hugo	FF4088
+humblebundle	Humble Bundle	CC2929
+humhub	HumHub	1B8291
+hungryjacks	Hungry Jack's	D0021B
+husqvarna	Husqvarna	273A60
+hyper	Hyper	000000
+hyperskill	Hyperskill	8C5AFF
+hyperx	HyperX	E21836
+hypothesis	Hypothesis	BD1C2B
+hyprland	Hyprland	58E1FF
+hyundai	Hyundai	002C5E
+i18next	i18next	26A69A
+i3	i3	52C0FF
+iata	IATA	004E81
+ibeacon	iBeacon	3D7EBB
+iberia	Iberia	D7192D
+iced	Iced	3645FF
+iceland	Iceland	CC092F
+icicibank	ICICI Bank	AE282E
+icinga	Icinga	06062C
+icloud	iCloud	3693F3
+icomoon	IcoMoon	825794
+icon	ICON	31B8BB
+iconfinder	Iconfinder	1A1B1F
+iconify	Iconify	026C9C
+iconjar	IconJar	16A5F3
+icons8	Icons8	1FB141
+icq	ICQ	24FF00
+ieee	IEEE	00629B
+ifixit	iFixit	0071CE
+ifood	iFood	EA1D2C
+ifttt	IFTTT	000000
+igdb	IGDB	9147FF
+ign	IGN	BF1313
+iheartradio	iHeartRadio	C6002B
+ikea	IKEA	0058A3
+iledefrancemobilites	Île-de-France Mobilités	67B4E7
+ilovepdf	iLovePDF	E5322D
+imagedotsc	Image.sc	039CB2
+imagej	ImageJ	00D8E0
+imagetoolbox	Image Toolbox	60EA78
+imdb	IMDb	F5C518
+imessage	iMessage	34DA50
+imgur	Imgur	1BB76E
+immer	Immer	00E7C3
+immersivetranslate	Immersive Translate	EA4C89
+immich	Immich	4250AF
+imou	Imou	E89313
+improvmx	ImprovMX	2FBEFF
+indeed	Indeed	003A9B
+indiansuperleague	Indian Super League	ED2F21
+indiehackers	Indie Hackers	0E2439
+indieweb	IndieWeb	FF0000
+indigo	IndiGo	09009B
+inductiveautomation	Inductive Automation	445C6D
+inertia	Inertia	9553E9
+infiniti	INFINITI	020B24
+infinityfree	InfinityFree	7738C8
+influxdb	InfluxDB	22ADF6
+infomaniak	Infomaniak	0098FF
+infoq	InfoQ	2C6CAF
+infosys	Infosys	007CC3
+infracost	Infracost	DB44B8
+infuse	Infuse	FF8000
+ingress	Ingress	783CBD
+inkdrop	Inkdrop	7A78D7
+inkscape	Inkscape	000000
+inoreader	Inoreader	1875F3
+inquirer	Inquirer	F0DB4F
+insomnia	Insomnia	4000BF
+inspire	INSPIRE	00E5FF
+insta360	Insta360	FFEE00
+instacart	Instacart	43B02A
+instagram	Instagram	FF0069
+instapaper	Instapaper	1F1F1F
+instatus	Instatus	4EE3C2
+instructables	Instructables	FABF15
+instructure	Instructure	2A7BA0
+intel	Intel	0071C5
+intellijidea	IntelliJ IDEA	000000
+interactiondesignfoundation	Interaction Design Foundation	2B2B2B
+interactjs	InteractJS	2599ED
+interbase	Interbase	E62431
+intercom	Intercom	6AFDEF
+intermarche	Intermarche	E2001A
+internetarchive	Internet Archive	666666
+internetcomputer	Internet Computer	3B00B9
+intigriti	Intigriti	161A36
+intuit	Intuit	236CFF
+invidious	Invidious	00B6F0
+invoiceninja	Invoice Ninja	000000
+iobroker	ioBroker	3399CC
+ionic	Ionic	3880FF
+ionos	Ionos	003D8F
+ios	iOS	000000
+iota	IOTA	131F37
+ipfs	IPFS	65C2CB
+iris	IRIS	25313C
+irobot	iRobot	6CB86A
+isc2	ISC2	468145
+isro	ISRO	F58220
+issuu	Issuu	F36D5D
+istio	Istio	466BB0
+itchdotio	Itch.io	FA5C5C
+iterm2	iTerm2	000000
+itunes	iTunes	FB5BC5
+itvx	ITVx	DEEB52
+iveco	IVECO	1554FF
+jabber	Jabber	CC0000
+jaeger	Jaeger	66CFE3
+jameson	Jameson	004027
+jamstack	Jamstack	F0047F
+japanairlines	Japan Airlines	C00000
+jasmine	Jasmine	8A4182
+javascript	JavaScript	F7DF1E
+jbl	JBL	FF3300
+jcb	JCB	0B4EA2
+jdoodle	JDoodle	FD5200
+jeep	Jeep	000000
+jekyll	Jekyll	CC0000
+jellyfin	Jellyfin	00A4DC
+jenkins	Jenkins	D24939
+jest	Jest	C21325
+jet	JET	FBBA00
+jetblue	JetBlue	001E59
+jetbrains	JetBrains	000000
+jetpackcompose	Jetpack Compose	4285F4
+jfrog	JFrog	40BE46
+jfrogpipelines	JFrog Pipelines	40BE46
+jhipster	JHipster	3E8ACC
+jinja	Jinja	7E0C1B
+jio	Jio	0A2885
+jira	Jira	0052CC
+jirasoftware	Jira Software	0052CC
+jitpack	JitPack	000000
+jitsi	Jitsi	97979A
+johndeere	John Deere	367C2B
+joomla	Joomla	5091CD
+joplin	Joplin	1071D3
+jordan	Jordan	000000
+jouav	JOUAV	E1B133
+jovian	Jovian	0D61FF
+jpeg	JPEG	8A8A8A
+jquery	jQuery	0769AD
+jrgroup	JR Group	44AF35
+jsdelivr	jsDelivr	E84D3D
+jsfiddle	JSFiddle	0084FF
+json	JSON	000000
+jsonwebtokens	JSON Web Tokens	000000
+jsr	JSR	F7DF1E
+jss	JSS	F7DF1E
+juce	JUCE	8DC63F
+juejin	Juejin	007FFF
+juke	JUKE	6CD74A
+julia	Julia	9558B2
+junipernetworks	Juniper Networks	84B135
+junit5	JUnit5	25A162
+jupyter	Jupyter	F37626
+just	Just	000000
+justeat	Just Eat	FF8000
+justgiving	JustGiving	AD29B6
+k3s	K3s	FFC61C
+k6	k6	7D64FF
+kaggle	Kaggle	20BEFF
+kagi	Kagi	FFB319
+kahoot	Kahoot!	46178F
+kaios	KaiOS	6F02B5
+kakao	Kakao	FFCD00
+kakaotalk	KakaoTalk	FFCD00
+kalilinux	Kali Linux	557C94
+kamailio	Kamailio	506365
+kando	Kando	EACFCF
+kaniko	Kaniko	FFA600
+karakeep	Karakeep	000000
+karlsruherverkehrsverbund	Karlsruher Verkehrsverbund	9B2321
+kasasmart	Kasa Smart	4ACBD6
+kashflow	KashFlow	E5426E
+kaspersky	Kaspersky	006D5C
+katana	Katana	000000
+kaufland	Kaufland	E10915
+kde	KDE	1D99F3
+kdeneon	KDE neon	3DC08D
+kdenlive	Kdenlive	527EB2
+kdeplasma	KDE Plasma	1D99F3
+kedro	Kedro	FFC900
+keenetic	Keenetic	009EE2
+keepachangelog	Keep a Changelog	E05735
+keepassxc	KeePassXC	6CAC4D
+keeper	Keeper	FFC700
+keeweb	KeeWeb	528BFF
+kenmei	Kenmei	545C64
+kentico	Kentico	F05A22
+keploy	Keploy	FF914D
+keras	Keras	D00000
+keybase	Keybase	33A0FF
+keycdn	KeyCDN	047AED
+keycloak	Keycloak	4D4D4D
+keystone	Keystone	166BFF
+kfc	KFC	F40027
+khanacademy	Khan Academy	14BF96
+khronosgroup	Khronos Group	CC3333
+kia	Kia	05141F
+kibana	Kibana	005571
+kicad	KiCad	314CB0
+kick	Kick	53FC19
+kickstarter	Kickstarter	05CE78
+kik	Kik	82BC23
+kimi	Kimi	000000
+kingstontechnology	Kingston Technology	000000
+kinopoisk	Kinopoisk	FF5500
+kinsta	Kinsta	5333ED
+kirby	Kirby	000000
+kit	Kit	000000
+kitsu	Kitsu	FD755C
+kiwix	Kiwix	000000
+klarna	Klarna	FFB3C7
+kleinanzeigen	Kleinanzeigen	1D4B00
+klm	KLM	00A1DE
+klook	Klook	FF5722
+knative	Knative	0865AD
+knexdotjs	Knex.js	D26B38
+knime	KNIME	FDD800
+knip	Knip	F56E0F
+knowledgebase	KnowledgeBase	9146FF
+known	Known	333333
+koa	Koa	33333D
+koc	Koc	F9423A
+kodak	Kodak	ED0000
+kodi	Kodi	17B2E7
+kodular	Kodular	4527A0
+koenigsegg	Koenigsegg	000000
+kofax	Kofax	00558C
+kofi	Ko-fi	FF6433
+komoot	Komoot	6AA127
+konami	Konami	B60014
+kong	Kong	003459
+kongregate	Kongregate	F04438
+konva	Konva	0D83CD
+koreader	KOReader	00A89C
+kotlin	Kotlin	7F52FF
+koyeb	Koyeb	121212
+kred	Kred	72BE50
+krita	Krita	3BABFF
+ktm	KTM	FF6600
+ktor	Ktor	087CFA
+kuaishou	Kuaishou	FF4906
+kubernetes	Kubernetes	326CE5
+kubespray	Kubespray	3D647F
+kubuntu	Kubuntu	0079C1
+kucoin	KuCoin	01BC8D
+kueski	Kueski	0075FF
+kuma	Kuma	290B53
+kununu	Kununu	FFC62E
+kuula	Kuula	4092B4
+kx	KX	101820
+kyocera	Kyocera	DF0522
+labex	LabEx	2E7EEE
+labview	LabVIEW	FFDB00
+lada	LADA	ED6B21
+lamborghini	Lamborghini	B6A272
+langchain	LangChain	7FC8FF
+langchaincorporate	LangChain Corporate	7FC8FF
+langflow	Langflow	000000
+langgraph	LangGraph	7FC8FF
+languagetool	LanguageTool	45A1FC
+lapce	Lapce	3B82F6
+laragon	Laragon	0E83CD
+laravel	Laravel	FF2D20
+laravelhorizon	Laravel Horizon	405263
+laravelnova	Laravel Nova	252D37
+lastdotfm	Last.fm	D51007
+lastpass	LastPass	D32D27
+latex	LaTeX	008080
+launchpad	Launchpad	E95420
+lazarus	Lazarus	000000
+lazyvim	LazyVim	2E7DE9
+lbry	LBRY	2F9176
+leaderprice	Leader Price	E50005
+leaflet	Leaflet	199900
+leagueoflegends	League of Legends	C28F2C
+leanpub	Leanpub	262425
+leetcode	LeetCode	FFA116
+lefthook	Lefthook	FF1E1E
+legacygames	Legacy Games	144B9E
+leica	Leica	E20612
+lemmy	Lemmy	000000
+lemonsqueezy	Lemon Squeezy	FFC233
+lenovo	Lenovo	E2231A
+lens	Lens	3D90CE
+leptos	Leptos	EF3939
+lequipe	L'Équipe	E42829
+lerna	Lerna	C084FC
+leroymerlin	Leroy Merlin	78BE20
+leslibraires	Les libraires	CF4A0C
+less	Less	1D365D
+letsencrypt	Let's Encrypt	003A70
+letterboxd	Letterboxd	202830
+levelsdotfyi	levels.fyi	788B95
+lg	LG	A50034
+liberadotchat	Libera.Chat	FF55DD
+liberapay	Liberapay	F6C915
+librariesdotio	Libraries.io	337AB7
+librarything	LibraryThing	251A15
+libreoffice	LibreOffice	18A303
+libreofficebase	LibreOffice Base	7324A9
+libreofficecalc	LibreOffice Calc	007C3C
+libreofficedraw	LibreOffice Draw	CB6D30
+libreofficeimpress	LibreOffice Impress	D0120D
+libreofficemath	LibreOffice Math	C10018
+libreofficewriter	LibreOffice Writer	083FA6
+libretranslate	LibreTranslate	1565C0
+libretube	LibreTube	FF9699
+librewolf	LibreWolf	00ACFF
+libuv	libuv	403C3D
+lichess	Lichess	000000
+lidl	Lidl	0050AA
+lifx	LIFX	000000
+lightburn	LightBurn	57182D
+lighthouse	Lighthouse	F44B21
+lightning	Lightning	792EE5
+limesurvey	LimeSurvey	14AE5C
+line	LINE	00C300
+lineageos	LineageOS	167C80
+linear	Linear	5E6AD2
+lining	Li-Ning	C5242C
+linkerd	Linkerd	2BEDA7
+linkfire	Linkfire	FF3850
+linksys	Linksys	000000
+linktree	Linktree	43E55E
+linkvertise	Linkvertise	FF8114
+linphone	Linphone	FF5E00
+lintcode	LintCode	13B4FF
+linux	Linux	FCC624
+linuxcontainers	Linux Containers	333333
+linuxfoundation	Linux Foundation	003778
+linuxmint	Linux Mint	86BE43
+linuxprofessionalinstitute	Linux Professional Institute	FDC300
+linuxserver	LinuxServer	DA3B8A
+lionair	Lion Air	ED3237
+liquibase	Liquibase	2962FF
+listenhub	ListenHub	000000
+listmonk	listmonk	0055D4
+lit	Lit	324FFF
+litecoin	Litecoin	A6A9AA
+literal	Literal	000000
+litiengine	LITIENGINE	00A5BC
+livechat	LiveChat	FF5100
+livejournal	LiveJournal	00B0EA
+livekit	LiveKit	FFFFFF
+livewire	Livewire	4E56A6
+llvm	LLVM	262D3A
+lmms	LMMS	10B146
+lmstudio	LM Studio	000000
+lobsters	Lobsters	AC130D
+local	Local	51BB7B
+localsend	LocalSend	008080
+localxpose	LocalXpose	6023C0
+locust	Locust	B8EE4B
+lodash	Lodash	3492FF
+logmein	LogMeIn	45B6F2
+logseq	Logseq	85C8C8
+logstash	Logstash	005571
+longhorn	Longhorn	5F224B
+looker	Looker	4285F4
+loom	Loom	625DF5
+loop	Loop	F29400
+loopback	LoopBack	3F5DFF
+loops	Loops	FC5200
+lootcrate	Loot Crate	1E1E1E
+lospec	Lospec	EAEAEA
+lotpolishairlines	LOT Polish Airlines	11397E
+lottiefiles	LottieFiles	00DDB3
+ltspice	LTspice	900028
+lua	Lua	000080
+luanti	Luanti	53AC56
+luau	Luau	00A2FF
+lubuntu	Lubuntu	0068C8
+lucia	Lucia	5F57FF
+lucid	Lucid	282C33
+lucide	Lucide	F56565
+ludwig	Ludwig	FFFFFF
+lufthansa	Lufthansa	05164D
+lumen	Lumen	E74430
+lunacy	Lunacy	179DE3
+luogu	Luogu	5B9BD5
+lutris	Lutris	FF9900
+lvgl	LVGL	343839
+lydia	Lydia	0180FF
+lyft	Lyft	FF00BF
+m5stack	M5Stack	0077C8
+maas	MAAS	E95420
+macos	macOS	000000
+macpaw	MacPaw	000000
+macports	MacPorts	1E79E9
+macys	Macy's	E21A2C
+magasinsu	Magasins U	E71B34
+magic	Magic	6851FF
+magisk	Magisk	00AF9C
+mahindra	Mahindra	DD052B
+mailbox	mailbox	ABE659
+mailchimp	MailChimp	FFE01B
+maildotcom	mail.com	004788
+maildotru	Mail.Ru	005FF9
+mailgun	Mailgun	F06B66
+mailtrap	Mailtrap	22D172
+mainwp	MainWP	7FB100
+majorleaguehacking	Major League Hacking	265A8F
+make	Make	6D00CC
+makerbot	MakerBot	FF1E0D
+malt	Malt	FC5757
+malwarebytes	Malwarebytes	0D3ECC
+mambaui	Mamba UI	6D28D9
+mamp	MAMP	02749C
+man	MAN	E40045
+manageiq	ManageIQ	EF2929
+mangacollec	Mangacollec	DA1F05
+mangaupdates	MangaUpdates	FF8C15
+manjaro	Manjaro	35BFA4
+mantine	Mantine	339AF0
+mapbox	Mapbox	000000
+mapillary	Mapillary	00AF66
+maplibre	MapLibre	396CB2
+maptiler	MapTiler	323357
+mariadb	MariaDB	003545
+mariadbfoundation	MariaDB Foundation	1F305F
+markdown	Markdown	000000
+marko	Marko	2596BE
+marriott	Marriott	A70023
+marvelapp	MarvelApp	1FB6FF
+maserati	Maserati	0C2340
+mastercard	MasterCard	EB001B
+mastercomfig	mastercomfig	009688
+mastodon	Mastodon	6364FF
+materialdesign	Material Design	6750A4
+materialdesignicons	Material Design Icons	2196F3
+materialformkdocs	Material for MkDocs	526CFE
+matillion	Matillion	19E57F
+matomo	Matomo	3152A0
+matrix	Matrix	000000
+matterdotjs	Matter.js	4B5562
+mattermost	Mattermost	0058CC
+matternet	Matternet	261C29
+mautic	Mautic	4E5E9E
+max	Max	525252
+maxplanckgesellschaft	Max-Planck-Gesellschaft	006C66
+maytag	Maytag	002E5F
+mazda	Mazda	101010
+maze	Maze	000000
+mcafee	McAfee	C01818
+mcdonalds	McDonald's	FBC817
+mclaren	McLaren	FF0000
+mdblist	MDBList	4284CA
+mdbook	mdBook	000000
+mdnwebdocs	MDN Web Docs	000000
+mdx	MDX	1B1F24
+mealie	Mealie	E58325
+mediafire	MediaFire	1299F3
+mediamarkt	MediaMarkt	DF0000
+mediapipe	MediaPipe	0097A7
+mediatek	MediaTek	EC9430
+medibangpaint	MediBang Paint	00DBDE
+medium	Medium	000000
+medusa	Medusa	000000
+meetup	Meetup	ED1C40
+mega	MEGA	D9272E
+meilisearch	Meilisearch	FF5CAA
+meituan	Meituan	FFD100
+meizu	Meizu	FF4132
+mendeley	Mendeley	9D1620
+mentorcruise	MentorCruise	172E59
+mercadopago	Mercado Pago	00B1EA
+merck	Merck	007A73
+mercurial	Mercurial	999999
+mermaid	Mermaid	FF3670
+messenger	Messenger	0866FF
+meta	Meta	0467DF
+metaai	Meta AI	9844FF
+metabase	Metabase	509EE3
+metacritic	Metacritic	000000
+metafilter	MetaFilter	065A8F
+metager	MetaGer	F47216
+metasploit	Metasploit	2596CD
+meteor	Meteor	DE4F4F
+metro	Metro	EF4242
+metrodelaciudaddemexico	Metro de la Ciudad de México	F77E1C
+metrodemadrid	Metro de Madrid	255E9C
+metrodeparis	Métro de Paris	003E95
+mewe	MeWe	17377F
+mezmo	Mezmo	E9FF92
+mg	MG	FF0000
+microbit	micro:bit	00ED00
+microdotblog	Micro.blog	FF8800
+microeditor	Micro Editor	2E3192
+micropython	MicroPython	2B2728
+microstation	Microstation	62BB47
+microstrategy	MicroStrategy	D9232E
+midi	MIDI	000000
+migadu	Migadu	0043CE
+mihon	Mihon	0058A0
+mihoyo	miHoYo	4EA4DD
+mikrotik	MikroTik	293239
+milanote	Milanote	31303A
+milvus	Milvus	00A1EA
+minds	Minds	FED12F
+mingww64	MinGW-w64	000000
+mini	Mini	000000
+minimax	MiniMax	E73562
+minio	MinIO	C72E49
+mintlify	Mintlify	18E299
+minutemailer	Minutemailer	30B980
+miraheze	Miraheze	FFFC00
+miro	Miro	050038
+misskey	Misskey	A1CA03
+mistralai	Mistral AI	FA520F
+mitsubishi	Mitsubishi	E60012
+mix	Mix	FF8126
+mixcloud	Mixcloud	5000FF
+mixpanel	Mixpanel	7856FF
+mlb	MLB	041E42
+mlflow	MLflow	0194E2
+mobx	MobX	FF9955
+mobxstatetree	MobX-State-Tree	FF7102
+mocha	Mocha	8D6748
+mockserviceworker	Mock Service Worker	FF6A33
+modal	Modal	7FEE64
+modelcontextprotocol	Model Context Protocol	000000
+modelscope	ModelScope	624AFF
+modin	Modin	001729
+modrinth	Modrinth	00AF5C
+modx	MODX	102C53
+mojeek	Mojeek	7AB93C
+moleculer	Moleculer	3CAFCE
+momenteo	Momenteo	5A6AB1
+monero	Monero	FF6600
+moneygram	MoneyGram	DA291C
+mongodb	MongoDB	47A248
+mongoose	Mongoose	880000
+mongoosedotws	Mongoose	F04D35
+monica	Monica	2C2B29
+monkeytie	monkey tie	1A52C2
+monkeytype	Monkeytype	E2B714
+monogame	MonoGame	E73C00
+monoprix	Monoprix	FB1911
+monster	Monster	6D4C9F
+monzo	Monzo	14233C
+moo	Moo	00945E
+moodle	Moodle	F98012
+moonrepo	Moonrepo	6F53F3
+moonshotai	Moonshot AI	000000
+moq	Moq	F4BE00
+moqups	Moqups	006BE5
+morrisons	Morrisons	007531
+moscowmetro	Moscow Metro	D9232E
+motorola	Motorola	E1140A
+movistar	Movistar	019DF4
+mozilla	Mozilla	161616
+mpv	mpv	691F69
+mqtt	MQTT	660066
+msi	MSI	FF0000
+msibusiness	MSI Business	9A8555
+mta	MTA	0039A6
+mtr	MTR	AC2E45
+mubi	MUBI	000000
+mui	MUI	007FFF
+muller	Müller	F46519
+mullvad	Mullvad	294D73
+multisim	Multisim	57B685
+mumble	Mumble	000000
+muo	MUO	C60D0D
+mural	Mural	FF4B4B
+musicbrainz	MusicBrainz	BA478F
+mxlinux	MX Linux	000000
+myanimelist	MyAnimeList	2E51A2
+myget	MyGet	0C79CE
+myob	MYOB	7B14EF
+myshows	MyShows	CC0000
+myspace	Myspace	030303
+mysql	MySQL	4479A1
+n26	N26	48AC98
+n8n	n8n	EA4B71
+namebase	Namebase	0068FF
+namecheap	Namecheap	DE3723
+namemc	NameMC	12161A
+namesilo	NameSilo	031B4E
+namuwiki	Namu Wiki	008275
+nano	Nano	209CE9
+nanostores	Nano Stores	000000
+napster	Napster	2259FF
+nasa	NASA	E03C31
+nationalgrid	National Grid	00148C
+nationalrail	National Rail	003366
+nativescript	NativeScript	65ADF1
+natsdotio	NATS.io	27AAE1
+naver	Naver	03C75A
+nba	NBA	253B73
+nbb	NBB	FF7100
+nbc	NBC	222222
+ndi	NDI	000000
+ndr	NDR	0C1754
+near	NEAR	000000
+nebula	Nebula	2CADFE
+nec	NEC	1414A0
+nederlandsespoorwegen	Nederlandse Spoorwegen	003082
+neo4j	Neo4j	4581C3
+neon	Neon	34D59A
+neovim	Neovim	57A143
+neptune	Neptune	5B69C2
+nestjs	NestJS	E0234E
+netapp	NetApp	0067C5
+netbsd	NetBSD	FF6600
+netcup	netcup	056473
+netdata	Netdata	00AB44
+neteasecloudmusic	NetEase Cloud Music	D43C33
+netflix	Netflix	E50914
+netgear	NETGEAR	2C262D
+netim	Netim	FE8427
+netlify	Netlify	00C7B7
+nette	Nette	3484D2
+netto	Netto	FFE500
+neutralinojs	Neutralinojs	F89901
+newbalance	New Balance	CF0A2C
+newegg	Newegg	E05E00
+newgrounds	Newgrounds	FDA238
+newjapanprowrestling	New Japan Pro-Wrestling	FF160B
+newpipe	NewPipe	CD201F
+newrelic	New Relic	1CE783
+newyorktimes	New York Times	000000
+nexon	NEXON	000000
+nextbike	nextbike	0046D7
+nextbilliondotai	NextBillion.ai	8D5A9E
+nextcloud	Nextcloud	0082C9
+nextdns	NextDNS	007BFF
+nextdoor	Nextdoor	8ED500
+nextdotjs	Next.js	000000
+nextflow	Nextflow	0DC09D
+nextra	Nextra	000000
+nfc	NFC	002E5F
+nfcore	nf-core	24B064
+nginx	NGINX	009639
+nginxproxymanager	Nginx Proxy Manager	F15833
+ngrok	ngrok	1F1E37
+ngrx	NgRx	BA2BD2
+nhl	NHL	000000
+nhost	Nhost	0052CD
+nicehash	NiceHash	FBC342
+niconico	niconico	231815
+nike	Nike	111111
+nikon	Nikon	FFE100
+nim	Nim	FFE953
+niri	niri	D55C44
+nissan	Nissan	C3002F
+nixos	NixOS	5277C3
+nobaralinux	Nobara Linux	000000
+nodebb	NodeBB	1E5EBC
+nodedotjs	Node.js	5FA04E
+nodegui	NodeGui	000000
+nodemon	Nodemon	76D04B
+nodered	Node-RED	8F0000
+nokia	Nokia	005AFF
+nomad	Nomad	00CA8E
+norco	Norco	00FF00
+nordicsemiconductor	Nordic Semiconductor	00A9CE
+nordvpn	NordVPN	4687FF
+normalizedotcss	Normalize.css	E3695F
+norton	Norton	FFE01A
+norwegian	Norwegian	D81939
+note	Note	000000
+notebooklm	NotebookLM	000000
+notepadplusplus	Notepad++	90E59A
+notion	Notion	000000
+notist	Notist	333333
+nounproject	Noun Project	000000
+novu	Novu	000000
+now	NOW	001211
+npm	npm	CB3837
+nrwl	Nrwl	96D7E8
+nsis	NSIS	01B0F0
+ntfy	ntfy	317F6F
+nubank	Nubank	820AD1
+nucleo	Nucleo	252B2D
+nuget	NuGet	004880
+nuke	Nuke	000000
+numba	Numba	00A3E0
+numpy	NumPy	013243
+nunjucks	Nunjucks	1C4913
+nushell	Nushell	4E9A06
+nutanix	Nutanix	024DA1
+nuxt	Nuxt	00DC82
+nvidia	NVIDIA	76B900
+nvm	nvm	F4DD4B
+nx	Nx	143055
+nxp	NXP	000000
+nzxt	NZXT	000000
+o2	O2	0050FF
+obb	ÖBB	E40327
+observable	Observable	353E58
+obsidian	Obsidian	7C3AED
+obsstudio	OBS Studio	302E31
+obtainium	Obtainium	D2BCFD
+ocaml	OCaml	EC6813
+oclc	OCLC	007DBA
+oclif	oclif	000000
+octanerender	Octane Render	000000
+octave	Octave	0790C0
+octobercms	October CMS	DB6A26
+octoprint	OctoPrint	13C100
+octopusdeploy	Octopus Deploy	2F93E0
+oculus	Oculus	1C1E20
+odido	Odido	2C72FF
+odin	Odin	3882D2
+odnoklassniki	Odnoklassniki	EE8208
+odoo	Odoo	714B67
+odysee	Odysee	EF1970
+ohdear	Oh Dear	FF3900
+okcupid	okcupid	0500BE
+okta	Okta	007DC1
+okx	OKX	000000
+ollama	Ollama	000000
+omadacloud	Omada Cloud	10C1D0
+omarchy	Omarchy	9ECE6A
+oneplus	OnePlus	F5010C
+onestream	OneStream	000000
+onlyfans	OnlyFans	00AFF0
+onlyoffice	ONLYOFFICE	444444
+onnx	ONNX	005CED
+onstar	OnStar	003D7D
+opel	Opel	F7FF14
+open3d	Open3D	000000
+openaccess	Open Access	F68212
+openaigym	OpenAI Gym	0081A5
+openapiinitiative	OpenAPI Initiative	6BA539
+openbadges	Open Badges	073B5A
+openbao	OpenBao	336D5C
+openbsd	OpenBSD	F2CA30
+openbugbounty	Open Bug Bounty	F67909
+opencage	OpenCage	1A8865
+opencode	OpenCode	000000
+opencollective	Open Collective	7FADF2
+opencontainersinitiative	Open Containers Initiative	262261
+opencritic	OpenCritic	FC3E04
+opencv	OpenCV	5C3EE8
+openfaas	OpenFaaS	3B5EE9
+opengl	OpenGL	5586A4
+openhab	openHAB	E64A19
+openid	OpenID	F78C40
+openjdk	OpenJDK	000000
+openjsfoundation	OpenJS Foundation	0075C9
+openlayers	Openlayers	1F6B75
+openmediavault	openmediavault	5DACDF
+openmined	OpenMined	ED986C
+opennebula	OpenNebula	0097C2
+openproject	OpenProject	0770B8
+openrouter	OpenRouter	94A3B8
+openscad	OpenSCAD	F9D72C
+opensea	OpenSea	2081E2
+opensearch	OpenSearch	005EB8
+opensourcehardware	Open Source Hardware	0099B0
+opensourceinitiative	Open Source Initiative	3DA639
+openssl	OpenSSL	721412
+openstack	OpenStack	ED1944
+openstreetmap	OpenStreetMap	7EBC6F
+opensuse	openSUSE	73BA25
+opentelemetry	OpenTelemetry	000000
+opentext	OpenText	000000
+opentofu	OpenTofu	FFDA18
+opentui	OpenTUI	000000
+openverse	Openverse	FFE033
+openvpn	OpenVPN	EA7E20
+openwrt	OpenWrt	00B5E2
+openzeppelin	OpenZeppelin	4E5EE4
+openzfs	OpenZFS	2A667F
+opera	Opera	FF1B2D
+operagx	Opera GX	EE2950
+opnsense	OPNsense	E44A20
+oppo	OPPO	2D683D
+opsgenie	Opsgenie	172B4D
+opslevel	OpsLevel	0A53E0
+optimism	Optimism	FF0420
+optuna	Optuna	002C76
+orange	Orange	FF7900
+orchardcore	Orchard Core	41B670
+orcid	ORCID	A6CE39
+oreilly	O'Reilly	D3002D
+org	Org	77AA99
+organicmaps	Organic Maps	006C35
+origin	Origin	F56C2D
+ory	Ory	4F46E5
+osano	Osano	7764FA
+osf	OSF	2CB9F1
+osgeo	OSGeo	4CB05B
+oshkosh	Oshkosh	E6830F
+osmand	OsmAnd	FF8800
+osmc	OSMC	17394A
+osu	osu!	FF66AA
+otto	Otto	D4021D
+outline	Outline	000000
+overcast	Overcast	FC7E0F
+overleaf	Overleaf	47A141
+ovh	OVH	123F6D
+owasp	OWASP	000000
+owncloud	ownCloud	041E42
+oxc	Oxc	00F7F1
+oxygen	Oxygen	3A209E
+oyo	OYO	EE2E24
+p5dotjs	p5.js	ED225D
+packagist	Packagist	F28D1A
+packer	Packer	02A8EF
+packt	Packt	F37143
+paddle	Paddle	FDDD35
+paddlepaddle	PaddlePaddle	0062B0
+paddypower	Paddy Power	004833
+padlet	Padlet	FF4081
+pagekit	Pagekit	212121
+pagerduty	PagerDuty	06AC38
+pagespeedinsights	PageSpeed Insights	4285F4
+pagseguro	PagSeguro	FFC801
+palantir	Palantir	101113
+paloaltonetworks	Palo Alto Networks	F04E23
+paloaltosoftware	Palo Alto Software	83DA77
+panasonic	Panasonic	0049AB
+pandas	pandas	150458
+pandoc	Pandoc	4093DA
+pandora	Pandora	224099
+pangolin	Pangolin	F36118
+pantheon	Pantheon	FFDC28
+paperlessngx	Paperless-ngx	17541F
+paperspace	Paperspace	000000
+paperswithcode	Papers With Code	21CBCE
+paradoxinteractive	Paradox Interactive	101010
+paramountplus	Paramount+	0064FF
+paritysubstrate	Parity Substrate	282828
+parrotsecurity	Parrot Security	15E0ED
+parsedotly	Parse.ly	5BA745
+passbolt	Passbolt	D40101
+passport	Passport	34E27A
+pastebin	Pastebin	02456C
+patreon	Patreon	000000
+payback	PAYBACK	003EB0
+paychex	Paychex	004B8D
+payhip	Payhip	5C6AC4
+payloadcms	Payload CMS	000000
+payoneer	Payoneer	FF4800
+paypal	PayPal	002991
+paysafe	Paysafe	5A28FF
+paytm	Paytm	20336B
+pcgamingwiki	PCGamingWiki	556DB3
+pdm	PDM	AC75D7
+pdq	PDQ	231F20
+peakdesign	Peak Design	1C1B1C
+pearson	Pearson	000000
+peerlist	Peerlist	00AA45
+peertube	PeerTube	F1680D
+pegasusairlines	Pegasus Airlines	FDC43E
+pelican	Pelican	14A0C4
+peloton	Peloton	181A1D
+penny	Penny	CD1414
+penpot	Penpot	000000
+percy	Percy	9E66BF
+perforce	Perforce	4C00FF
+perl	Perl	0073A1
+perplexity	Perplexity	1FB8CD
+persistent	Persistent	FD5F07
+personio	Personio	000000
+petsathome	Pets at Home	00AA28
+peugeot	Peugeot	000000
+pexels	Pexels	05A081
+pfsense	pfSense	212121
+phabricator	Phabricator	4A5F88
+philipshue	Philips Hue	0065D3
+phoenixframework	Phoenix Framework	FD4F00
+phonepe	PhonePe	5F259F
+phosphoricons	Phosphor Icons	3C402B
+photobucket	Photobucket	1C47CB
+photocrowd	Photocrowd	3DAD4B
+photon	Photon	004480
+photopea	Photopea	18A497
+php	PHP	777BB4
+phpbb	phpBB	009BDF
+phpmyadmin	phpMyAdmin	6C78AF
+phpstorm	PhpStorm	000000
+pi	Pi	000000
+piaggiogroup	Piaggio Group	000000
+piapro	Piapro	E4007B
+picardsurgeles	Picard Surgelés	2D4999
+picartodottv	Picarto.TV	1DA456
+picnic	Picnic	E1171E
+picpay	PicPay	21C25E
+picrew	Picrew	FFBD16
+picsart	Picsart	C209C1
+picxy	Picxy	2E3192
+pihole	Pi-hole	96060C
+pimcore	Pimcore	6428B4
+pinboard	Pinboard	0000FF
+pinescript	Pine Script	00B453
+pinetwork	Pi Network	F4AF47
+pingdom	Pingdom	FFF000
+pinia	Pinia	FFD859
+pino	pino	687634
+pinterest	Pinterest	BD081C
+pioneerdj	Pioneer DJ	1A1928
+pipecat	Pipecat	000000
+piped	Piped	F84330
+pipx	pipx	2CFFAA
+pivotaltracker	Pivotal Tracker	517A9E
+piwigo	Piwigo	FF7700
+pix	Pix	77B6A8
+pixabay	Pixabay	191B26
+pixelfed	Pixelfed	6366F1
+pixiv	pixiv	0096FA
+pixlr	Pixlr	3EBBDF
+pkgsrc	pkgsrc	FF6600
+plane	Plane	121212
+planet	Planet	009DB1
+planetscale	PlanetScale	000000
+plangrid	PlanGrid	0085DE
+platformdotsh	Platform.sh	1A182A
+platformio	PlatformIO	F5822A
+platzi	Platzi	98CA3F
+plausibleanalytics	Plausible Analytics	5850EC
+playcanvas	PlayCanvas	E05F2C
+playerdotme	Player.me	C0379A
+playerfm	Player FM	C8122A
+playstation	PlayStation	0070D1
+playstation2	PlayStation 2	003791
+playstation3	PlayStation 3	003791
+playstation4	PlayStation 4	003791
+playstation5	PlayStation 5	003791
+playstationportable	PlayStation Portable	003791
+playstationvita	PlayStation Vita	003791
+pleroma	Pleroma	FBA457
+plesk	Plesk	52BBE6
+plex	Plex	EBAF00
+plotly	Plotly	7A76FF
+plume	Plume	7C5CDF
+pluralsight	Pluralsight	F15B2A
+plurk	Plurk	FF574D
+pm2	PM2	2B037A
+pnpm	pnpm	F69220
+pocketbase	PocketBase	B8DBE4
+pocketcasts	Pocket Casts	F43E37
+podcastaddict	Podcast Addict	F4842D
+podcastindex	Podcast Index	F90000
+podman	Podman	892CA0
+poe	Poe	5D5CDE
+poetry	Poetry	60A5FA
+polars	Polars	0075FF
+polestar	Polestar	000000
+polkadot	Polkadot	E6007A
+poly	Poly	EB3C00
+polygon	Polygon	7B3FE4
+polymerproject	Polymer Project	FF4470
+polywork	Polywork	543DE0
+pomerium	Pomerium	6F43E7
+pond5	Pond5	000000
+popos	Pop!_OS	48B9C7
+porkbun	Porkbun	EF7878
+porsche	Porsche	B12B28
+portableappsdotcom	PortableApps.com	818F95
+portainer	Portainer	13BEF9
+portswigger	PortSwigger	FF6633
+posit	Posit	447099
+postcss	PostCSS	DD3A0A
+postgresql	PostgreSQL	4169E1
+posthog	PostHog	000000
+postiz	Postiz	612BD3
+postman	Postman	FF6C37
+postmates	Postmates	FFDF18
+powers	POWERS	E74536
+prdotco	pr.co	0080FF
+preact	Preact	673AB8
+precommit	pre-commit	FAB040
+prefect	Prefect	070E10
+prek	prek	F54327
+premid	PreMiD	7289DA
+premierleague	Premier League	360D3A
+prepbytes	PrepBytes	5A87C6
+prestashop	PrestaShop	DF0067
+presto	Presto	5890FF
+prettier	Prettier	F7B93E
+pretzel	Pretzel	1BB3A4
+prevention	Prevention	44C1C5
+prezi	Prezi	3181FF
+primefaces	PrimeFaces	263238
+primeng	PrimeNG	DD0031
+primereact	PrimeReact	03C4E8
+primevue	PrimeVue	41B883
+printables	Printables	FA6831
+prisma	Prisma	2D3748
+prismic	Prismic	5163BA
+privatedivision	Private Division	000000
+privateinternetaccess	Private Internet Access	1E811F
+probot	Probot	00B0D8
+processingfoundation	Processing Foundation	006699
+processon	ProcessOn	067BEF
+processwire	ProcessWire	2480E6
+producthunt	Product Hunt	DA552F
+progate	Progate	380953
+progress	Progress	5CE500
+prometheus	Prometheus	E6522C
+pronounsdotpage	Pronouns.page	C71585
+prosemirror	ProseMirror	000000
+prosieben	ProSieben	E6000F
+proteus	Proteus	1C79B3
+protocolsdotio	protocols.io	4D9FE7
+protodotio	Proto.io	34A7C1
+proton	Proton	6D4AFF
+protoncalendar	Proton Calendar	50B0E9
+protondb	ProtonDB	F50057
+protondrive	Proton Drive	EB508D
+protonmail	Proton Mail	6D4AFF
+protonvpn	Proton VPN	66DEB1
+protools	Pro Tools	7ACB10
+protractor	Protractor	ED163A
+proxmox	Proxmox	E57000
+pterodactyl	Pterodactyl	10539F
+pubg	PUBG	F4B942
+publons	Publons	336699
+pubmed	PubMed	326599
+pug	Pug	A86454
+pulumi	Pulumi	8A3391
+puma	Puma	242B2F
+puppet	Puppet	FFAE1A
+puppeteer	Puppeteer	40B5A4
+purescript	PureScript	14161A
+purgecss	PurgeCSS	14161A
+purism	Purism	2D2D2D
+pushbullet	Pushbullet	4AB367
+pusher	Pusher	300D4F
+pwa	PWA	5A0FC8
+pycharm	PyCharm	000000
+pycqa	PyCQA	201B44
+pydantic	Pydantic	E92063
+pyg	PyG	3C2179
+pypi	PyPI	3775A9
+pypy	PyPy	193440
+pyscaffold	PyScaffold	005CA0
+pysyft	PySyft	F1BF7A
+pytest	Pytest	0A9EDC
+python	Python	3776AB
+pythonanywhere	PythonAnywhere	1D9FD7
+pytorch	PyTorch	EE4C2C
+pyup	PyUp	9F55FF
+qantas	Qantas	E40000
+qase	Qase	4F46DC
+qatarairways	Qatar Airways	5C0D34
+qbittorrent	qbittorrent	2F67BA
+qdrant	Qdrant	DC244C
+qemu	QEMU	FF6600
+qgis	QGIS	589632
+qi	Qi	000000
+qiita	Qiita	55C500
+qiskit	Qiskit	6929C4
+qiwi	QIWI	FF8C00
+qlik	Qlik	009848
+qlty	Qlty	66FAEC
+qmk	QMK	333333
+qnap	QNAP	0C2E82
+qodo	Qodo	7968FA
+qq	QQ	1EBAFC
+qt	Qt	41CD52
+quad9	Quad9	DC205E
+qualcomm	Qualcomm	3253DC
+qualtrics	Qualtrics	00B4EF
+qualys	Qualys	ED2E26
+quantcast	Quantcast	000000
+quantconnect	QuantConnect	F98309
+quarkus	Quarkus	4695EB
+quarto	Quarto	39729E
+quasar	Quasar	050A14
+qubesos	Qubes OS	3874D8
+quest	Quest	FB4F14
+quickbooks	QuickBooks	2CA01C
+quicklook	QuickLook	0078D3
+quicktime	QuickTime	1C69F0
+quicktype	quicktype	159588
+quizlet	Quizlet	4255FF
+quora	Quora	B92B27
+qwant	Qwant	282B2F
+qwen	QWen	6950EF
+qwik	Qwik	AC7EF4
+qwiklabs	Qwiklabs	F5CD0E
+qzone	Qzone	FECE00
+r	R	276DC3
+r3	R3	EC1D24
+rabbitmq	RabbitMQ	FF6600
+racket	Racket	9F1D20
+radar	Radar	007AFF
+radarr	radarr	FFCB3D
+radiantearth	Radiant Earth	469695
+radiofrance	Radio France	2B00E7
+radixui	Radix UI	161618
+radstudio	RAD Studio	E62431
+railway	Railway	0B0D0E
+rainmeter	Rainmeter	19519B
+rainyun	RainYun	DAD9D9
+rakuten	Rakuten	BF0000
+rakutenkobo	Rakuten Kobo	BF0000
+ram	Ram	000000
+rancher	Rancher	0075A8
+rapid	Rapid	0055DA
+rarible	Rarible	FEDA03
+rasa	Rasa	5A17EE
+raspberrypi	Raspberry Pi	A22846
+ratatui	Ratatui	000000
+ravelry	Ravelry	EE6E62
+ray	Ray	028CF0
+raycast	Raycast	FF6363
+raylib	Raylib	000000
+razer	Razer	00FF00
+razorpay	Razorpay	0C2451
+rclone	Rclone	3F79AD
+react	React	61DAFB
+reactbootstrap	React Bootstrap	41E0FD
+reacthookform	React Hook Form	EC5990
+reactiveresume	Reactive Resume	000000
+reactivex	ReactiveX	B7178C
+reactos	ReactOS	0088CC
+reactquery	React Query	FF4154
+reactrouter	React Router	CA4245
+reacttable	React Table	FF4154
+readdotcv	Read.cv	111111
+readme	ReadMe	018EF5
+readthedocs	Read the Docs	000000
+reason	Reason	DD4B39
+reasonstudios	Reason Studios	FFFFFF
+recoil	Recoil	3578E5
+red	Red	B32629
+redash	Redash	FF7964
+redbubble	Redbubble	E41321
+redbull	Red Bull	DB0A40
+redcandlegames	Red Candle Games	D23735
+reddit	Reddit	FF4500
+redhat	Red Hat	EE0000
+redhatopenshift	Red Hat Open Shift	EE0000
+redis	Redis	FF4438
+redmine	Redmine	B32024
+redox	Redox	000000
+redragon	Redragon	E60012
+redsys	Redsys	DC7C26
+redux	Redux	764ABC
+reduxsaga	Redux-Saga	999999
+redwoodjs	RedwoodJS	BF4722
+reebok	Reebok	E41D1B
+refine	Refine	14141F
+refinedgithub	Refined GitHub	9E95B7
+reflex	Reflex	6E56CF
+rekaui	Reka UI	16A353
+relay	Relay	F26B00
+relianceindustrieslimited	Reliance Industries Limited	D1AB66
+remark	remark	000000
+remedyentertainment	Remedy Entertainment	D6001C
+remix	Remix	000000
+removedotbg	remove.bg	54616C
+renault	Renault	FFCC33
+render	Render	000000
+renovate	Renovate	308BE3
+renpy	Ren'Py	FF7F7F
+renren	Renren	217DC6
+replicate	Replicate	000000
+replit	Replit	F26207
+republicofgamers	Republic of Gamers	FF0029
+rescript	ReScript	E6484F
+rescuetime	RescueTime	161A3B
+researchgate	ResearchGate	00CCBB
+resend	Resend	000000
+resharper	ReSharper	000000
+resurrectionremixos	Resurrection Remix OS	000000
+retool	Retool	3D3D3D
+retroachievements	Retro Achievements	1065DF
+retroarch	RetroArch	000000
+retropie	RetroPie	CC0000
+revanced	ReVanced	9ED5FF
+revealdotjs	reveal.js	F2E142
+revenuecat	RevenueCat	F2545B
+reverbnation	ReverbNation	E43526
+revoltdotchat	Revolt.chat	FF4655
+revolut	Revolut	191C1F
+rewe	REWE	CC071E
+rezgo	Rezgo	F76C00
+rhinoceros	Rhinoceros	801010
+rich	Rich	FAE742
+rider	Rider	000000
+rimacautomobili	Rimac Automobili	0A222E
+rime	Rime	000000
+ring	Ring	1C9AD6
+riotgames	Riot Games	EB0029
+ripple	Ripple	0085C0
+riscv	RISC-V	283272
+riseup	Riseup	FF0000
+ritzcarlton	Ritz Carlton	000000
+rive	Rive	1D1D1D
+roadmapdotsh	roadmap.sh	000000
+roamresearch	Roam Research	343A40
+robinhood	Robinhood	CCFF00
+roblox	Roblox	000000
+robloxstudio	Roblox Studio	00A2FF
+roboflow	Roboflow	6706CE
+robotframework	Robot Framework	000000
+rocket	Rocket	D33847
+rocketdotchat	Rocket.Chat	F5455C
+rocksdb	RocksDB	2A2A2A
+rockstargames	Rockstar Games	FCAF17
+rockwellautomation	Rockwell Automation	CD163F
+rockylinux	Rocky Linux	10B981
+roku	Roku	662D91
+roll20	Roll20	E10085
+rollbar	Rollbar	3569F3
+rolldown	Rolldown	FF4100
+rollsroyce	Rolls-Royce	281432
+rollupdotjs	rollup.js	EC4A3F
+rook	Rook	2AC6EA
+roon	Roon	2039F3
+root	ROOT	1ED3E4
+rootme	Root Me	000000
+roots	Roots	525DDC
+rootsbedrock	Roots Bedrock	525DDC
+rootssage	Roots Sage	525DDC
+ros	ROS	22314E
+rossmann	Rossmann	C3002D
+rotaryinternational	Rotary International	F7A81B
+rottentomatoes	Rotten Tomatoes	FA320A
+roundcube	Roundcube	37BEFF
+rsocket	RSocket	EF0092
+rss	RSS	FFA500
+rstudioide	RStudio IDE	75AADB
+rte	RTÉ	00A7B3
+rtl	RTL	FA002E
+rtlzwei	RTLZWEI	00BCF6
+rtm	RTM	36474F
+rubocop	RuboCop	000000
+ruby	Ruby	CC342D
+rubygems	RubyGems	E9573F
+rubymine	RubyMine	000000
+rubyonrails	Ruby on Rails	D30001
+rubysinatra	Ruby Sinatra	000000
+ruff	Ruff	D7FF64
+rumahweb	Rumahweb	2EB4E3
+rumble	Rumble	85C742
+rundeck	Rundeck	F73F39
+runkeeper	Runkeeper	001E62
+runkit	RunKit	491757
+runrundotit	Runrun.it	DB3729
+rust	Rust	000000
+rustdesk	RustDesk	024EFF
+rustfs	RustFS	0196D0
+rxdb	RxDB	8D1F89
+ryanair	Ryanair	073590
+rye	Rye	000000
+s7airlines	S7 Airlines	C4D600
+sabanci	Sabanci	004B93
+safari	Safari	006CFF
+sage	Sage	00D639
+sagemath	SageMath	3333FF
+sahibinden	Sahibinden	FFE800
+sailfishos	Sailfish OS	053766
+sailsdotjs	Sails.js	14ACC2
+salla	Salla	BAF3E6
+saltproject	Salt Project	57BCAD
+samsclub	Sam's Club	0067A0
+samsung	Samsung	1428A0
+samsungpay	Samsung Pay	1428A0
+sanfranciscomunicipalrailway	San Francisco Municipal Railway	BA0C2F
+sanic	Sanic	FF0D68
+sanity	Sanity	0D0E12
+saopaulometro	São Paulo Metro	004382
+sap	SAP	0FAAFF
+sartorius	Sartorius	FFED00
+sass	Sass	CC6699
+sat1	Sat.1	047DA3
+satellite	Satellite	000000
+saturn	Saturn	EB680B
+saucelabs	Sauce Labs	3DDC91
+saudia	Saudia	026938
+scala	Scala	DC322F
+scalar	Scalar	1A1A1A
+scaleway	Scaleway	4F0599
+scan	Scan	004C97
+scania	Scania	041E42
+schneiderelectric	Schneider Electric	3DCD58
+scikitlearn	scikit-learn	F7931E
+scilab	Scilab	CD1925
+scipy	SciPy	8CAAE6
+scopus	Scopus	E9711C
+scpfoundation	SCP Foundation	FFFFFF
+scrapbox	Scrapbox	06B632
+scrapy	Scrapy	60A839
+scratch	Scratch	855CD6
+screencastify	Screencastify	FF8282
+scrimba	Scrimba	2B283A
+scrollreveal	ScrollReveal	FFCB36
+scrumalliance	Scrum Alliance	009FDA
+scrutinizerci	Scrutinizer CI	8A9296
+scylladb	ScyllaDB	6CD5E7
+seafile	Seafile	FF9800
+seagate	Seagate	6EBE49
+searxng	SearXNG	3050FF
+seat	SEAT	33302E
+seatgeek	SeatGeek	FF5B49
+securityscorecard	SecurityScorecard	7033FD
+sefaria	Sefaria	212E50
+sega	Sega	0089CF
+selenium	Selenium	43B02A
+sellfy	Sellfy	21B352
+semanticrelease	semantic-release	494949
+semanticscholar	Semantic Scholar	1857B6
+semanticui	Semantic UI	00B5AD
+semanticuireact	Semantic UI React	35BDB2
+semanticweb	Semantic Web	005A9C
+semaphoreci	Semaphore CI	19A974
+semrush	Semrush	FF642D
+semver	SemVer	3F4551
+sencha	Sencha	86BC40
+sennheiser	Sennheiser	000000
+sensu	Sensu	89C967
+sentry	Sentry	362D59
+sepa	SEPA	2350A9
+sequelize	Sequelize	52B0E7
+servbay	ServBay	00103C
+serverfault	Server Fault	E7282D
+serverless	Serverless	FD5750
+session	Session	000000
+sessionize	Sessionize	1AB394
+setapp	Setapp	E6C3A5
+setuptools	Setuptools	336790
+sfml	SFML	8CC445
+shadcnui	shadcn/ui	000000
+shadow	Shadow	0A0C0D
+shanghaimetro	Shanghai Metro	EC1C24
+sharex	ShareX	2885F1
+sharp	sharp	99CC00
+shazam	Shazam	0088FF
+shell	Shell	FFD500
+shelly	Shelly	4495D1
+shenzhenmetro	Shenzhen Metro	009943
+shieldsdotio	Shields.io	000000
+shikimori	Shikimori	343434
+shopee	Shopee	EE4D2D
+shopify	Shopify	7AB55C
+shopware	Shopware	189EFF
+shortcut	Shortcut	58B1E4
+showpad	Showpad	2D2E83
+showtime	Showtime	B10000
+showwcase	Showwcase	0A0D14
+sidekiq	Sidekiq	B1003E
+sidequest	SideQuest	101227
+siemens	Siemens	009999
+sifive	SiFive	252323
+signal	Signal	3B45FD
+silverairways	Silver Airways	D0006F
+similarweb	Similarweb	092540
+simkl	Simkl	000000
+simpleanalytics	Simple Analytics	FF4F64
+simpleicons	Simple Icons	111111
+simplelocalize	SimpleLocalize	222B33
+simplelogin	SimpleLogin	EA319F
+simplenote	Simplenote	3361CC
+simplex	SimpleX	000000
+sinaweibo	Sina Weibo	E6162D
+singaporeairlines	Singapore Airlines	F99F1C
+singlestore	SingleStore	AA00FF
+sitecore	Sitecore	EB1F1F
+sitepoint	SitePoint	258AAF
+siyuan	SiYuan	D23F31
+skaffold	Skaffold	2AA2D6
+skeleton	Skeleton	000000
+sketch	Sketch	F7B500
+sketchfab	Sketchfab	1CAAD9
+sketchup	SketchUp	005F9E
+skillshare	Skillshare	00FF84
+skoda	ŠKODA	0E3A2F
+sky	Sky	0072C9
+skypack	Skypack	3167FF
+slackware	Slackware	000000
+slashdot	Slashdot	026664
+slickpic	SlickPic	FF880F
+slides	Slides	E4637C
+slideshare	SlideShare	008ED2
+slint	Slint	2379F4
+smart	smart	D7E600
+smartthings	SmartThings	15BFFF
+smashingmagazine	Smashing Magazine	E85C33
+smoothcomp	Smoothcomp	000000
+smrt	SMRT	EE2E24
+smugmug	SmugMug	6DB944
+snapchat	Snapchat	FFFC00
+snapcraft	Snapcraft	E95420
+snapdragon	Snapdragon	C33139
+sncf	SNCF	CA0939
+snort	Snort	F6A7AA
+snowflake	Snowflake	29B5E8
+snowpack	Snowpack	2E5E82
+snyk	Snyk	4C4A73
+socialblade	Social Blade	B3382C
+society6	Society6	000000
+socket	Socket	C93CD7
+socketdotio	Socket.io	010101
+softcatala	Softcatalà	BA2626
+softpedia	Softpedia	002873
+sogou	Sogou	FB6022
+solana	Solana	9945FF
+solid	Solid	2C4F7C
+solidity	Solidity	363636
+sololearn	Sololearn	149EF2
+solus	Solus	5294E2
+solveddotac	solved.ac	17CE3A
+sonar	Sonar	FD3456
+sonarqubecloud	SonarQube Cloud	126ED3
+sonarqubeforide	SonarQube for IDE	126ED3
+sonarqubeserver	SonarQube Server	126ED3
+sonarr	sonarr	2596BE
+sonatype	Sonatype	1B1C30
+songkick	Songkick	F80046
+songoda	Songoda	FC494A
+sonicwall	SonicWall	FF791A
+sonos	Sonos	000000
+sony	Sony	FFFFFF
+soriana	Soriana	D52B1E
+soundcharts	Soundcharts	0C1528
+soundcloud	SoundCloud	FF5500
+sourceengine	Source Engine	F79A10
+sourceforge	SourceForge	FF6600
+sourcehut	SourceHut	000000
+sourcetree	Sourcetree	0052CC
+southwestairlines	Southwest Airlines	304CB2
+spacemacs	Spacemacs	9266CC
+spaceship	Spaceship	394EFF
+spacex	SpaceX	000000
+spacy	spaCy	09A3D5
+sparkar	Spark AR	FF5C83
+sparkasse	Sparkasse	FF0000
+sparkfun	SparkFun	E53525
+sparkpost	SparkPost	FA6423
+spdx	SPDX	4398CC
+speakerdeck	Speaker Deck	009287
+spectrum	Spectrum	7B16FF
+speedtest	Speedtest	141526
+speedypage	SpeedyPage	1C71F9
+sphinx	Sphinx	000000
+spidermonkey	SpiderMonkey	FFD681
+spigotmc	SpigotMC	ED8106
+spine	Spine	FF4000
+spinnaker	Spinnaker	139BB4
+splunk	Splunk	000000
+spoj	Sphere Online Judge	337AB7
+spond	Spond	EE4353
+spotify	Spotify	1ED760
+spotlight	Spotlight	352A71
+spreadshirt	Spreadshirt	00B2A5
+spreaker	Spreaker	F5C300
+spring	Spring	6DB33F
+spring_creators	Spring	000000
+springboot	Spring Boot	6DB33F
+springsecurity	Spring Security	6DB33F
+spyderide	Spyder IDE	8C0000
+sqlalchemy	SQLAlchemy	D71F00
+sqlite	SQLite	003B57
+square	Square	3E4348
+squareenix	Square Enix	ED1C24
+squarespace	Squarespace	000000
+srgssr	SRG SSR	AF001E
+ssrn	SSRN	154881
+sst	SST	E27152
+stackbit	Stackbit	207BEA
+stackblitz	StackBlitz	1269D3
+stackedit	StackEdit	606060
+stackexchange	Stack Exchange	1E5397
+stackhawk	StackHawk	00CBC6
+stackoverflow	Stack Overflow	F58025
+stackshare	StackShare	0690FA
+stadia	Stadia	CD2640
+staffbase	Staffbase	00A4FD
+stagetimer	Stagetimer	00A66C
+standardjs	StandardJS	F3DF49
+standardresume	Standard Resume	2A3FFB
+starbucks	Starbucks	006241
+stardock	Stardock	004B8D
+starlingbank	Starling Bank	6935D3
+starship	Starship	DD0B78
+startdotgg	start.gg	2E75BA
+startpage	Startpage	6563FF
+startrek	Star Trek	FFE200
+starz	STARZ	082125
+statamic	Statamic	FF269E
+statista	Statista	001327
+statuspage	Statuspage	172B4D
+statuspal	Statuspal	4934BF
+steam	Steam	000000
+steamdb	SteamDB	000000
+steamdeck	Steam Deck	1A9FFF
+steamworks	Steamworks	1E1E1E
+steelseries	Steelseries	FF5200
+steem	Steem	171FC9
+steemit	Steemit	06D6A9
+steinberg	Steinberg	C90827
+stellar	Stellar	FDDA24
+stencil	Stencil	5530FF
+stencyl	Stencyl	8E1C04
+stimulus	Stimulus	77E8B9
+stmicroelectronics	STMicroelectronics	03234B
+stockx	StockX	006340
+stopstalk	StopStalk	536DFE
+storyblok	Storyblok	09B3AF
+storybook	Storybook	FF4785
+strapi	Strapi	4945FF
+strava	Strava	FC4C02
+streamlabs	Streamlabs	80F5D2
+streamlit	Streamlit	FF4B4B
+streamrunners	StreamRunners	6644F8
+stremio	Stremio	685CEE
+stripe	Stripe	635BFF
+strongswan	strongSwan	E00033
+stryker	Stryker	E74C3C
+stubhub	StubHub	003168
+studio3t	Studio 3T	17AF66
+styledcomponents	styled-components	DB7093
+stylelint	stylelint	263238
+styleshare	StyleShare	212121
+stylus	Stylus	333333
+subaru	Subaru	013C74
+sublimetext	Sublime Text	FF9800
+substack	Substack	FF6719
+subtitleedit	Subtitle Edit	CC2424
+subversion	Subversion	809CC9
+suckless	suckless	1177AA
+sui	Sui	4DA2FF
+suitest	Suitest	F06060
+sumologic	Sumo Logic	000099
+suno	Suno	000000
+sunrise	Sunrise	DA291C
+supabase	Supabase	3FCF8E
+supercell	Supercell	FFFFFF
+supercrease	Supercrease	000000
+supermicro	Supermicro	151F6D
+superuser	Super User	38A1CE
+surfshark	Surfshark	1EBFBF
+surrealdb	SurrealDB	FF00A0
+surveymonkey	SurveyMonkey	00BF6F
+suse	SUSE	0C322C
+suzuki	Suzuki	E30613
+svelte	Svelte	FF3E00
+svg	SVG	FFB13B
+svgdotjs	SVG.js	FF0066
+svgo	SVGO	3E7FC1
+svgtrace	SvgTrace	F453C4
+swagger	Swagger	85EA2D
+swarm	Swarm	FFA633
+sway	Sway	68751C
+swc	SWC	F8C457
+swift	Swift	F05138
+swiggy	Swiggy	FC8019
+swiper	Swiper	6332F6
+swisscows	Swisscows	000000
+swr	SWR	000000
+symantec	Symantec	FDB511
+symbolab	Symbolab	DB3F59
+symfony	Symfony	000000
+symphony	Symphony	0098FF
+sympy	SymPy	3B5526
+syncthing	Syncthing	0891D1
+synology	Synology	B5B5B6
+system76	System76	585048
+tabelog	Tabelog	F2CC38
+tablecheck	TableCheck	7935D2
+tacobell	Taco Bell	38096C
+tado	tado°	FFA900
+taichigraphics	Taichi Graphics	000000
+taichilang	Taichi Lang	000000
+tails	Tails	56347C
+tailscale	Tailscale	242424
+tailwindcss	Tailwind CSS	06B6D4
+taipy	Taipy	FF371A
+taketwointeractivesoftware	Take-Two Interactive Software	000000
+talend	Talend	FF6D70
+talenthouse	Talenthouse	000000
+talos	Talos	FF7300
+tamiya	Tamiya	000000
+tampermonkey	Tampermonkey	00485B
+tangled	Tangled	000000
+tanstack	TanStack	ECE8D1
+taobao	Taobao	E94F20
+tapas	Tapas	FFCE00
+target	Target	CC0000
+tarom	TAROM	003366
+tarteaucitron	Tarteaucitron	F7D917
+task	Task	29BEB0
+tasmota	Tasmota	1FA3EC
+tata	Tata	486AAE
+tauri	Tauri	24C8D8
+taxbuzz	TaxBuzz	ED8B0B
+tcs	Tata Consultancy Services	EE3984
+teal	Teal	005149
+teamcity	TeamCity	000000
+teamspeak	TeamSpeak	4B69B6
+teamviewer	TeamViewer	050A52
+techcrunch	TechCrunch	029F00
+ted	TED	E62B1E
+teepublic	TeePublic	4E64DF
+teespring	Teespring	ED2761
+tekton	Tekton	FD495C
+tele5	TELE 5	FF00FF
+telefonica	Telefónica	0066FF
+telegram	Telegram	26A5E4
+telegraph	Telegraph	FAFAFA
+telenor	Telenor	00C8FF
+telequebec	Télé-Québec	1343FB
+temporal	Temporal	000000
+tensorflow	TensorFlow	FF6F00
+teradata	Teradata	F37440
+teratail	teratail	F4C51C
+termius	Termius	000000
+terraform	Terraform	844FBA
+tesco	Tesco	00539F
+tesla	Tesla	CC0000
+testcafe	TestCafe	36B6E5
+testin	Testin	007DD7
+testinglibrary	Testing Library	E33332
+testrail	TestRail	65C179
+tether	Tether	50AF95
+textpattern	Textpattern	FFDA44
+textual	Textual	FFFFFF
+tga	TGA	0014FF
+thangs	Thangs	FFBC00
+thanos	Thanos	6D41FF
+thealgorithms	The Algorithms	00BCB4
+theboringcompany	The Boring Company	000000
+theconversation	The Conversation	D8352A
+thefinals	THE FINALS	D31F3C
+theguardian	The Guardian	052962
+theirishtimes	The Irish Times	000000
+themighty	The Mighty	D0072A
+themodelsresource	The Models Resource	3A75BD
+themoviedatabase	The Movie Database	01B4E4
+thenorthface	The North Face	000000
+theodinproject	The Odin Project	A9792B
+theplanetarysociety	The Planetary Society	000000
+theregister	The Register	FF0000
+thesoundsresource	The Sounds Resource	39BE6B
+thespritersresource	The Spriters Resource	BE3939
+thestorygraph	The StoryGraph	000000
+thewashingtonpost	The Washington Post	231F20
+theweatherchannel	The Weather Channel	003399
+thingiverse	Thingiverse	248BFB
+things	Things	2473E7
+thinkpad	ThinkPad	EE2624
+thirdweb	thirdweb	F213A4
+threadless	Threadless	0099FF
+threads	Threads	000000
+threedotjs	Three.js	000000
+threema	Threema	3FE669
+thumbtack	Thumbtack	009FD9
+thunderbird	Thunderbird	0A84FF
+thunderstore	Thunderstore	23FFB0
+thurgauerkantonalbank	Thurgauer Kantonalbank	006D41
+thymeleaf	Thymeleaf	005F0F
+ticketmaster	Ticketmaster	026CDF
+tickettailor	Ticket Tailor	222432
+ticktick	TickTick	4772FA
+tidal	TIDAL	000000
+tidb	TiDB	DC150B
+tiddlywiki	TiddlyWiki	111111
+tide	Tide	4050FB
+tidyverse	Tidyverse	1A162D
+tietoevry	TietoEVRY	063752
+tiktok	TikTok	000000
+tildapublishing	Tilda Publishing	FFA282
+tile	Tile	000000
+timescale	Timescale	FDB515
+tina	Tina	EC4815
+tinder	Tinder	FF6B6B
+tindie	Tindie	17AEB9
+tinkercad	Tinkercad	1477D1
+tinygrad	tinygrad	FFFFFF
+tinyletter	TinyLetter	ED1C24
+tistory	Tistory	000000
+tldraw	tldraw	FAFAFA
+tmux	tmux	1BB91F
+todoist	Todoist	E44332
+toggl	Toggl	FFDE91
+toggltrack	Toggl Track	E57CD8
+tokio	Tokio	000000
+tokyometro	Tokyo Metro	149DD3
+toll	Toll	007A68
+toml	TOML	9C4121
+tomorrowland	Tomorrowland	000000
+tomtom	TomTom	DF1B12
+ton	TON	0098EA
+topcoder	Topcoder	29A7DF
+topdotgg	Top.gg	FF3366
+toptal	Toptal	3863A0
+torbrowser	Tor Browser	7D4698
+torizon	Torizon	FAAF00
+torproject	Tor Project	7D4698
+toshiba	Toshiba	FF0000
+totvs	TOTVS	363636
+tourbox	TourBox	231F20
+tower	Tower	00CAF4
+toyota	Toyota	EB0A1E
+tplink	TP-Link	4ACBD6
+tqdm	tqdm	FFC107
+traccar	Traccar	000000
+tradingview	TradingView	131622
+trae	TRAE	32F08C
+traefikmesh	Traefik Mesh	9D0FB0
+traefikproxy	Traefik Proxy	24A1C1
+trailforks	Trailforks	FFCD00
+trainerroad	TrainerRoad	DA291C
+trakt	Trakt	9F42C6
+transifex	Transifex	0064AB
+transmission	Transmission	D70008
+transportforireland	Transport for Ireland	00B274
+transportforlondon	Transport for London	113B92
+travisci	Travis CI	3EAAAF
+treehouse	Treehouse	5FCF80
+trello	Trello	0052CC
+trendmicro	Trend Micro	D71921
+tresorit	Tresorit	00A9E2
+treyarch	Treyarch	000000
+trezor	Trezor	141609
+tricentis	Tricentis	12438C
+trilium	Trilium	000000
+triller	Triller	FF0089
+trillertv	TrillerTV	E61414
+trimble	Trimble	0063A3
+trino	Trino	DD00A1
+tripadvisor	Tripadvisor	34E0A1
+tripdotcom	Trip.com	287DFA
+trivago	trivago	E32851
+trivy	Trivy	1904DA
+trmnl	TRMNL	F8654B
+trove	Trove	2D004B
+trpc	tRPC	2596BE
+truenas	TrueNAS	0095D5
+trueup	TrueUp	4E71DA
+trulia	trulia	0A0B09
+trustedshops	Trusted Shops	FFDC0F
+trustpilot	Trustpilot	00B67A
+tryhackme	TryHackMe	212C42
+tryitonline	Try It Online	303030
+tsnode	ts-node	3178C6
+tubi	Tubi	7408FF
+tui	TUI	D40E14
+tumblr	Tumblr	36465D
+turbo	Turbo	5CD8E5
+turborepo	Turborepo	FF1E56
+turbosquid	TurboSquid	FF8135
+turkishairlines	Turkish Airlines	C70A0C
+turso	Turso	4FF8D2
+tuta	Tuta	850122
+tuxedocomputers	TUXEDO Computers	000000
+tv4play	TV4 Play	E0001C
+tvtime	TV Time	FFD400
+twenty	Twenty	000000
+twinkly	Twinkly	FCC15E
+twinmotion	Twinmotion	000000
+twitch	Twitch	9146FF
+ty	ty	46EBE1
+typeform	Typeform	262627
+typeorm	TypeORM	FE0803
+typer	Typer	000000
+typescript	TypeScript	3178C6
+typo3	TYPO3	FF8700
+typst	Typst	239DAD
+uber	Uber	000000
+ubereats	Uber Eats	06C167
+ubiquiti	Ubiquiti	0559C9
+ubisoft	Ubisoft	000000
+ublockorigin	uBlock Origin	800000
+ubuntu	Ubuntu	E95420
+ubuntumate	Ubuntu MATE	84A454
+udacity	Udacity	02B3E4
+udemy	Udemy	A435F0
+udotsdotnews	U.S. News	005EA6
+ufc	UFC	D20A0A
+uikit	UIkit	2396F3
+uipath	UiPath	FA4616
+ukca	UKCA	000000
+ultralytics	Ultralytics	111F68
+ulule	Ulule	18A5D6
+umami	Umami	000000
+umbraco	Umbraco	3544B1
+umbrel	Umbrel	5351FB
+uml	UML	FABD14
+unacademy	Unacademy	08BD80
+underarmour	Under Armour	1D1D1D
+underscoredotjs	Underscore.js	0371B5
+undertale	Undertale	E71D29
+unicode	Unicode	5455FE
+unilever	Unilever	1F36C7
+uniqlo	Uniqlo	FF0000
+uniqlo_ja	Uniqlo	FF0000
+unitedairlines	United Airlines	002244
+unitednations	United Nations	009EDB
+unity	Unity	FFFFFF
+unjs	UnJS	ECDC5A
+unlicense	Unlicense	808080
+unocss	UnoCSS	333333
+unpkg	unpkg	000000
+unraid	Unraid	F15A2C
+unrealengine	Unreal Engine	0E1128
+unsplash	Unsplash	000000
+unstop	Unstop	1C4980
+untappd	Untappd	FFC000
+upcloud	UpCloud	7B00FF
+uphold	Uphold	49CC68
+uplabs	UpLabs	3930D8
+upptime	Upptime	1ABC9C
+ups	UPS	150400
+upstash	Upstash	00E9A3
+uptimekuma	Uptime Kuma	5CDD8B
+upwork	Upwork	6FDA44
+uservoice	UserVoice	FF6720
+usps	USPS	333366
+utorrent	uTorrent	76B83F
+uv	uv	DE5FE9
+v	V	5D87BF
+v0	v0	000000
+v2ex	V2EX	1F1F1F
+v8	V8	4B8BF5
+vaadin	Vaadin	00B4F0
+vagrant	Vagrant	1868F2
+vala	Vala	7239B3
+valorant	Valorant	FA4454
+valve	Valve	F74843
+vanillaextract	Vanilla Extract	F786AD
+vapor	Vapor	0D0D0D
+vault	Vault	FFEC6E
+vaultwarden	Vaultwarden	000000
+vauxhall	Vauxhall	EB001E
+vbulletin	vBulletin	184D66
+vectary	Vectary	6100FF
+vectorlogozone	Vector Logo Zone	184D66
+vectorworks	Vectorworks	000000
+veeam	Veeam	00B336
+veed	VEED	B6FF60
+veepee	Veepee	EC008C
+vega	Vega	2450B2
+vegas	VEGAS	1A1A1A
+velocity	Velocity	1BBAE0
+velog	Velog	20C997
+vencord	Vencord	EB7396
+venmo	Venmo	008CFF
+vercel	Vercel	000000
+verdaccio	Verdaccio	4B5E40
+veritas	Veritas	B1181E
+verizon	Verizon	CD040B
+vespa	Vespa	85B09A
+vestel	Vestel	DD052B
+vexxhost	VEXXHOST	2A1659
+vfairs	vFairs	EF4678
+viadeo	Viadeo	F07355
+viaplay	Viaplay	FE365F
+viber	Viber	7360F2
+viblo	Viblo	5387C6
+victoriametrics	VictoriaMetrics	621773
+victronenergy	Victron Energy	0066B2
+vikunja	Vikunja	196AFF
+vim	Vim	019733
+vimeo	Vimeo	1AB7EA
+vimeolivestream	Vimeo Livestream	0A0A20
+vinted	Vinted	007782
+virgin	Virgin	E10A0A
+virginatlantic	Virgin Atlantic	DA0530
+virginmedia	Virgin Media	ED1A37
+virtualbox	VirtualBox	2F61B4
+virustotal	VirusTotal	394EFF
+visa	Visa	1A1F71
+visualparadigm	Visual Paradigm	CC3333
+visx	visx	FF1231
+vite	Vite	9135FF
+vitepress	VitePress	5C73E7
+vitess	Vitess	F16728
+vitest	Vitest	00FF74
+vivaldi	Vivaldi	EF3939
+vivawallet	Viva Wallet	1F263A
+vivino	Vivino	A61A30
+vivint	Vivint	212721
+vivo	vivo	415FFF
+vk	VK	0077FF
+vlcmediaplayer	VLC media player	FF8800
+vllm	vLLM	30A2FF
+vmware	VMware	607078
+vodafone	Vodafone	E60000
+voelkner	voelkner	94C125
+voidlinux	Void Linux	478061
+voipdotms	VoIP.ms	E1382D
+volkswagen	Volkswagen	151F5D
+volvo	Volvo	003057
+vonage	Vonage	000000
+vorondesign	Voron Design	ED3023
+vowpalwabbit	Vowpal Wabbit	FF81F9
+vox	VOX	DA074A
+vrchat	VRChat	000000
+vsco	VSCO	000000
+vscodium	VSCodium	2F80ED
+vtex	VTEX	ED125F
+vuedotjs	Vue.js	4FC08D
+vuetify	Vuetify	1867C0
+vueuse	VueUse	41B883
+vulkan	Vulkan	A41E22
+vultr	Vultr	007BFC
+vyond	Vyond	D95E26
+w3schools	W3Schools	04AA6D
+wacom	Wacom	000000
+wagmi	Wagmi	000000
+wagtail	Wagtail	43B1B0
+wails	Wails	DF0000
+wakatime	WakaTime	000000
+walkman	WALKMAN	000000
+wallabag	Wallabag	3F6184
+walletconnect	WalletConnect	3B99FC
+wantedly	Wantedly	21BDDB
+wappalyzer	Wappalyzer	4608AD
+warp	Warp	01A4FF
+wasabi	Wasabi	01CD3E
+wasmcloud	wasmCloud	00BC8E
+wasmer	Wasmer	4946DD
+watchtower	Watchtower	416271
+wattpad	Wattpad	FF500A
+wayland	Wayland	FFBC00
+waze	Waze	33CCFF
+wazirx	WazirX	3067F0
+wearos	Wear OS	4285F4
+weasyl	Weasyl	990000
+web3dotjs	Web3.js	F16822
+webassembly	WebAssembly	654FF0
+webauthn	WebAuthn	3423A6
+webawesome	Web Awesome	F36944
+webcomponentsdotorg	webcomponents.org	29ABE2
+webdotde	WEB.DE	FFD800
+webdriverio	WebdriverIO	EA5906
+webex	Webex	000000
+webflow	Webflow	146EF5
+webgl	WebGL	990000
+webgpu	WebGPU	005A9C
+weblate	Weblate	2ECCAA
+webmin	Webmin	7DA0D0
+webmoney	WebMoney	036CB5
+webpack	Webpack	8DD6F9
+webrtc	WebRTC	333333
+webstorm	WebStorm	000000
+webtoon	WEBTOON	00D564
+webtrees	webtrees	2694E8
+wechat	WeChat	07C160
+wegame	WeGame	FAAB00
+weightsandbiases	Weights & Biases	FFBE00
+welcometothejungle	Welcome to the Jungle	FFCD00
+wellfound	Wellfound	000000
+wellsfargo	Wells Fargo	D71E28
+wemo	WEMO	72D44C
+weread	WeRead	37A7FF
+westernunion	Western Union	FFDD00
+wetransfer	WeTransfer	409FFF
+wezterm	WezTerm	4E49EE
+wgpu	wgpu	40E0D0
+what3words	what3words	E11F26
+whatsapp	WhatsApp	25D366
+wheniwork	When I Work	51A33D
+wikibooks	Wikibooks	006699
+wikidata	Wikidata	006699
+wikidotgg	wiki.gg	FF1985
+wikidotjs	Wiki.js	1976D2
+wikimediacommons	Wikimedia Commons	006699
+wikimediafoundation	Wikimedia Foundation	000000
+wikipedia	Wikipedia	000000
+wikiquote	Wikiquote	006699
+wikisource	Wikisource	006699
+wikiversity	Wikiversity	00649A
+wikivoyage	Wikivoyage	006699
+winamp	Winamp	F93821
+windsurf	Windsurf	0B100F
+wine	Wine	800000
+wipro	Wipro	341C53
+wire	Wire	000000
+wireguard	WireGuard	88171A
+wireshark	Wireshark	1679A7
+wise	Wise	9FE870
+wish	Wish	32E476
+wistia	Wistia	58B7FE
+wix	Wix	0C6EFC
+wizzair	Wizz Air	C6007E
+wolfram	Wolfram	DD1100
+wolframlanguage	Wolfram Language	DD1100
+wolframmathematica	Wolfram Mathematica	DD1100
+wondershare	Wondershare	000000
+wondersharefilmora	Wondershare Filmora	07273D
+woo	Woo	873EFF
+woocommerce	WooCommerce	96588A
+wordpress	WordPress	21759B
+workplace	Workplace	4526CE
+worldhealthorganization	World Health Organization	0093D5
+wpengine	WP Engine	0ECAD4
+wpexplorer	WPExplorer	2563EB
+wprocket	WP Rocket	F56640
+writedotas	Write.as	5AC4EE
+wwe	WWE	000000
+wwise	Wwise	00549F
+wxt	WXT	67D55E
+wykop	Wykop	367DA9
+wyze	Wyze	1DF0BB
+x	X	000000
+xampp	XAMPP	FB7A24
+xcode	Xcode	147EFB
+xdadevelopers	XDA Developers	EA7100
+xdotorg	X.Org	F28834
+xendit	Xendit	4573FF
+xero	Xero	13B5EA
+xfce	XFCE	2284F2
+xiaohongshu	Xiaohongshu	FF2442
+xiaomi	Xiaomi	FF6900
+xing	Xing	006567
+xml	XML	005FAD
+xmpp	XMPP	002B5C
+xo	XO	5ED9C7
+xrp	XRP	25A768
+xsplit	XSplit	0095DE
+xstate	XState	2C3E50
+xubuntu	Xubuntu	0044AA
+xyflow	xyflow	1A192B
+yaak	Yaak	814EDF
+yabai	yabai	00364B
+yale	Yale	FFD900
+yamahacorporation	Yamaha Corporation	4B1E78
+yamahamotorcorporation	Yamaha Motor Corporation	E60012
+yaml	YAML	CB171E
+yandexcloud	Yandex Cloud	5282FF
+yarn	Yarn	2C8EBB
+ycombinator	Y Combinator	F0652F
+yelp	Yelp	FF1A1A
+yeti	Yeti	00263C
+yew	Yew	009A5B
+yii	Yii	40B3D8
+yoast	Yoast	A61E69
+yolo	YOLO	111F68
+youhodler	YouHodler	546DF9
+youtube	YouTube	FF0000
+youtubegaming	YouTube Gaming	FF0000
+youtubekids	YouTube Kids	FF0000
+youtubemusic	YouTube Music	FF0000
+youtubeshorts	YouTube Shorts	FF0000
+youtubestudio	YouTube Studio	FF0000
+youtubetv	YouTube TV	FF0000
+yr	Yr	00B9F1
+yubico	Yubico	84BD00
+yunohost	YunoHost	000000
+zabka	Żabka	006420
+zaim	Zaim	50A135
+zalando	Zalando	FF6900
+zalo	Zalo	0068FF
+zap	ZAP	00549E
+zapier	Zapier	FF4F00
+zara	Zara	000000
+zazzle	Zazzle	212121
+zcash	Zcash	F3B724
+zcool	ZCOOL	FFF200
+zdf	ZDF	FA7D19
+zdotai	Z.ai	2D2D2D
+zebpay	ZebPay	2072EF
+zebratechnologies	Zebra Technologies	000000
+zectrix	ZecTrix	000000
+zedindustries	Zed Industries	084CCF
+zelle	Zelle	6D1ED4
+zenbrowser	Zen Browser	F76F53
+zend	Zend	0679EA
+zendesk	Zendesk	03363D
+zenn	Zenn	3EA8FF
+zenodo	Zenodo	1682D4
+zensar	Zensar	000000
+zerodha	Zerodha	387ED1
+zerotier	ZeroTier	FFB441
+zettlr	Zettlr	1CB27E
+zhihu	Zhihu	0084FF
+zig	Zig	F7A41D
+zigbee	Zigbee	EB0443
+zigbee2mqtt	Zigbee2MQTT	FFC135
+ziggo	Ziggo	F48C00
+zilch	Zilch	00D287
+zillow	Zillow	006AFF
+zincsearch	ZincSearch	5BA37F
+zingat	Zingat	009CFB
+zod	Zod	408AFF
+zoho	Zoho	E42527
+zoiper	Zoiper	F47920
+zola	Zola	EAE7D6
+zomato	Zomato	E23744
+zoom	Zoom	0B5CFF
+zorin	Zorin	15A6F0
+zotero	Zotero	CC2936
+zsh	Zsh	F15A24
+zulip	Zulip	6492FE
+zx	zx	F11A7B
+zyte	Zyte	B02CCE

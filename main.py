@@ -759,6 +759,24 @@ UHR_JS = """() => {
   };
 }"""
 
+# In JEDEM gebauten Element stand ein lila Klecks in der Bildmitte. Er kam aus
+# blob-cursor.js und target-cursor.js in der Effektbibliothek: beide haengen
+# sich ungefragt beim Laden ein und parken ihren Zeiger in der Mitte des
+# Fensters. Beide steigen aus, wenn das Geraet keinen Hover kennt — und genau
+# das trifft hier zu: ein Video hat keinen Mauszeiger. Also wird die Abfrage
+# beantwortet, statt fremden Code zu patchen. Nimmt gleich alle anderen
+# zeigergebundenen Spielereien mit (splash-cursor, click-spark, trail).
+# prefers-reduced-motion bleibt unangetastet — waere es true, stuende alles.
+KEIN_ZEIGER_JS = """(() => {
+  const echt = window.matchMedia.bind(window);
+  window.matchMedia = (q) => {
+    if (/hover:\\s*none|pointer:\\s*coarse|any-hover:\\s*none/.test(q))
+      return {matches: true, media: q, addListener(){}, removeListener(){},
+              addEventListener(){}, removeEventListener(){}, onchange: null};
+    return echt(q);
+  };
+})();"""
+
 SEEK_JS = """(t) => {
     if (window.gsap) gsap.globalTimeline.seek(t, false);
     document.getAnimations().forEach(a => { a.currentTime = t * 1000; });
@@ -790,7 +808,10 @@ def _icons_laden() -> dict:
 def _icon_sprite(markup: str) -> str:
     """Nur die benutzten Symbole, als kleines Sprite vor das Markup."""
     alle = _icons_laden()
-    ids = set(re.findall(r'href="#(ic-[a-z0-9_\-]+)"', markup or "", re.I))
+    # Beide Anfuehrungszeichen. Das Kit schreibt einfache, der Gestalter meist
+    # doppelte — mit nur einer Variante bleibt die Haelfte der Symbole leer,
+    # und zwar lautlos: <use> auf ein fehlendes Ziel rendert einfach nichts.
+    ids = set(re.findall(r'href=[\'"]#(ic-[a-z0-9_\-]+)[\'"]', markup or "", re.I))
     teile = [alle[i] for i in sorted(ids) if i in alle]
     if not teile:
         return ""
@@ -813,6 +834,80 @@ def _icon_namen(n: int = 150) -> str:
         namen = nach_kat[kat][:12]
         zeilen.append("  %-14s %s" % (kat, " ".join(namen)))
     return "\n".join(zeilen[:24])
+
+
+# ── MARKEN-LOGOS ────────────────────────────────────────────────────────────
+# simple-icons, CC0 (LICENSE.md und NOTICE liegen daneben). Gleiche Bauart wie
+# das reicon-Sprite: 3453 Symbole in einer Datei, eingebettet wird nur, was das
+# Markup benutzt. Warum ueberhaupt: wenn er von n8n redet und daneben steht ein
+# generisches Zahnrad, ist das eine Ausrede. Das Logo IST die Verankerung.
+# OpenAI fehlt — auf Wunsch des Inhabers aus simple-icons entfernt.
+LOGO_DIR = Path("vendor/simple-icons")
+LOGO_SVG = LOGO_DIR / "logos.svg"
+LOGO_TXT = LOGO_DIR / "logos.txt"
+_LOGOS: dict = {}
+_LOGO_META: dict = {}
+
+
+def _logos_laden() -> dict:
+    if _LOGOS or not LOGO_SVG.exists():
+        return _LOGOS
+    roh = LOGO_SVG.read_text(encoding="utf-8")
+    for m in re.finditer(r'<symbol id="(lg-[^"]+)"([^>]*)>(.*?)</symbol>', roh, re.S):
+        _LOGOS[m.group(1)] = '<symbol id="%s"%s>%s</symbol>' % (m.group(1), m.group(2), m.group(3))
+    log.info("[FX] %d Logos geladen", len(_LOGOS))
+    return _LOGOS
+
+
+def _logo_meta() -> dict:
+    """slug -> (Titel, Markenfarbe). Fuer die Zuordnung Wort → Logo."""
+    if _LOGO_META or not LOGO_TXT.exists():
+        return _LOGO_META
+    for zeile in LOGO_TXT.read_text(encoding="utf-8").splitlines():
+        teile = zeile.split("\t")
+        if len(teile) >= 2:
+            _LOGO_META[teile[0]] = (teile[1], "#" + (teile[2] if len(teile) > 2 else "").strip())
+    return _LOGO_META
+
+
+def _logo_sprite(markup: str) -> str:
+    alle = _logos_laden()
+    ids = set(re.findall(r'href=[\'"]#(lg-[a-z0-9_\-\.]+)[\'"]', markup or "", re.I))
+    teile = [alle[i] for i in sorted(ids) if i in alle]
+    if not teile:
+        return ""
+    return ('<svg xmlns="http://www.w3.org/2000/svg" style="display:none" '
+            'aria-hidden="true">' + "".join(teile) + "</svg>")
+
+
+# Marken, deren Name so kurz oder so mehrdeutig ist, dass ein Textabgleich mehr
+# Unsinn faende als Treffer ("Go", "R", "C", "Rust" in "Vertrauen rostet").
+_LOGO_ZU_KURZ = 2
+
+
+def _marken_im_text(text: str, hoechstens: int = 8) -> list:
+    """Welche Marken kommen im Anzeigetext wirklich vor.
+
+    Nicht die 3453 Namen in den Prompt — der Gestalter bekommt nur die Handvoll,
+    um die es in DIESEM Element geht, mit Slug und Markenfarbe."""
+    meta = _logo_meta()
+    if not meta or not text:
+        return []
+    roh = str(text)
+    treffer = []
+    for slug, (titel, farbe) in meta.items():
+        if len(titel) <= _LOGO_ZU_KURZ:
+            continue
+        # Wortgrenze, damit "Notion" nicht in "Emotionen" anspringt. Punkte und
+        # Bindestriche im Markennamen ("Node.js", "Next.js") maskieren.
+        # Dreibuchstabige Namen NUR mit Gross-/Kleinschreibung: "n8n" und "AWS"
+        # sollen treffen, "Dev" in einem Satz nicht. Bei laengeren Namen ist
+        # die Verwechslungsgefahr klein genug, dass Schreibweise egal ist.
+        flags = 0 if len(titel) == 3 else re.I
+        if re.search(r"(?<![\w])" + re.escape(titel) + r"(?![\w])", roh, flags):
+            treffer.append({"slug": slug, "titel": titel, "farbe": farbe})
+    treffer.sort(key=lambda t: -len(t["titel"]))
+    return treffer[:hoechstens]
 
 
 async def _render_html_alpha(markup: str, width: int, height: int, seconds: float,
@@ -846,9 +941,9 @@ async def _render_html_alpha(markup: str, width: int, height: int, seconds: floa
         "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
         f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}"
         f"</style><style>{fx_css}</style></head>"
-        f"<body>{_icon_sprite(markup)}{markup}"
+        f"<body>{_icon_sprite(markup)}{_logo_sprite(markup)}{markup}"
         # Die Rezepte NACH dem Markup, damit ihr init die Elemente findet.
-        f"<script>{fx_js}</script>"
+        f"<script>{KEIN_ZEIGER_JS}</script><script>{fx_js}</script>"
         "</body></html>"
     )
     src = job_dir / "tool.html"
@@ -1404,9 +1499,17 @@ def transcribe_audio(video_path: Path, prompt: str = "") -> list:
 
 
 # ── Deterministic max-gap silence trimmer ─────────────────────────────────────
+# Vor einem betonten Wort bleibt eine echte Pause stehen. Jede andere Luecke
+# wird auf 2*pad zusammengezogen — damit klingt das Ergebnis gleichmaessig
+# schnell, und genau das nimmt der Betonung ihre Wirkung: sie entsteht nicht
+# durch Lautstaerke, sondern durch die Stille davor.
+PAUSE_HALTEN_S = 0.34
+
+
 def _compute_keep_segments(words: list, duration: float,
                            max_gap: float = 0.30, pad: float = 0.05,
-                           tail_pad: float = 0.35) -> list:
+                           tail_pad: float = 0.35,
+                           betonung: Optional[list] = None) -> list:
     """Max-Gap rule on Whisper word timestamps. Gaps <= max_gap stay (natural cadence);
     gaps > max_gap keep only `pad` after the previous word and `pad` before the next,
     the dead-air between is discarded. Leading/trailing dead-air trimmed the same way.
@@ -1426,7 +1529,11 @@ def _compute_keep_segments(words: list, duration: float,
         e  = float(words[i]["end"])
         s2 = float(words[i + 1]["start"])
         if s2 - e > max_gap:
-            a, b = e + pad, s2 - pad
+            # Steht danach ein betontes Wort, bleibt die Pause — gekappt auf
+            # PAUSE_HALTEN_S, damit aus einem Aussetzer kein Stilmittel wird.
+            vorne = (PAUSE_HALTEN_S if (betonung and i + 1 < len(betonung)
+                                        and betonung[i + 1]) else pad)
+            a, b = e + pad, s2 - vorne
             if b > a:
                 removes.append((a, b))
     last = float(words[-1]["end"])
@@ -1602,6 +1709,151 @@ def _hook_guard_end(words: list) -> float:
         if gap >= 0.35:
             return max(HOOK_GUARD_S, min(12.0, float(words[i]["end"]) + 0.15))
     return max(HOOK_GUARD_S, min(12.0, float(words[-1]["end"])))
+
+
+# ── PAPER EDIT ──────────────────────────────────────────────────────────────
+# Bis hierher wurde NUR an Pausen geschnitten: Fehlstarts, Fuellwoerter, Luft.
+# Damit ist das Rohmaterial hinterher sauber, aber ungekuerzt — jeder Nebensatz,
+# jede zweite Erklaerung, jedes Ausklingen steht noch drin. Genau deshalb sitzt
+# vieles "irgendwo": es ist gar keine Entscheidung darueber gefallen, WAS ins
+# Video kommt. Das ist der erste Schritt jedes echten Schnittplatzes, und er
+# fehlte.
+#
+# Wichtiger Unterschied zur Kohaerenz-Stufe: die entfernt, was MISSLUNGEN ist.
+# Der Paper Edit entfernt, was GELUNGEN, aber entbehrlich ist. Deshalb eine
+# eigene Stufe und kein groesserer Prompt.
+PAPER_MAX_WEG = 0.40        # mehr als 40% weg heisst: er hat den Take nicht verstanden
+PAPER_MIN_REST_S = 15.0     # was darunter uebrig bleibt, ist kein Video mehr
+PAPER_MIN_STUECK_S = 0.9    # Schnipsel darunter sind ein Zucken, kein Satz
+PAPER_PAUSE_S = 0.18        # nur an echten Pausen, sonst hoert man den Schnitt
+
+PAPER_SYS = """Du bist Cutter und machst den PAPER EDIT: du entscheidest, welche
+Passagen ins Video kommen und welche nicht. Du bewertest nicht die Aufnahme,
+du waehlst aus.
+
+Du bekommst das Wort-Transkript mit Zeiten (je Zeile: INDEX<TAB>SEKUNDE<TAB>WORT).
+
+WAS BLEIBT
+- der HOOK: der erste Satz. Unantastbar, egal wie er dir gefaellt.
+- jeder Beat, der die Sache VORANBRINGT: eine Behauptung, ein Beleg, eine
+  Zahl, ein Beispiel, ein Schritt.
+- der PAYOFF: die Aufloesung, das Ergebnis, die Folgerung.
+- alles, was er nur EINMAL sagt und was gebraucht wird.
+
+WAS RAUS MUSS
+- Anlauf und Aufwaermen vor der eigentlichen Aussage ("also, ich wollte mal
+  erzaehlen, dass...") — der Satz faengt da an, wo die Aussage anfaengt.
+- die zweite und dritte Erklaerung derselben Sache. Er erklaert oft dreimal,
+  weil er beim Reden denkt. Behalte die klarste, nicht die erste.
+- Nebenaeste, die nirgendwohin fuehren und aus denen er zurueckkommt.
+- Ausklingen am Ende eines Gedankens ("...ja. Genau. So ist das halt.").
+- Absicherungen, Relativierungen, Entschuldigungen fuer die eigene Aussage.
+
+WIE DU SCHNEIDEST
+- Immer GANZE Gedanken. Nie ein paar Woerter mitten aus einem Satz.
+- Ein Schnitt beginnt und endet an einer Sprechpause.
+- Das erste Wort nach einem Schnitt ist ein Satzanfang.
+- Was du entfernst, darf den Rest nicht unverstaendlich machen: bezieht sich
+  ein spaeterer Satz auf etwas Entferntes, lass es stehen.
+
+WIE VIEL
+Kuerz so weit, wie es das Video staerker macht — nicht weiter. Ein Take, in
+dem nichts entbehrlich ist, kommt ungekuerzt zurueck. Das ist ein
+vollstaendiges Ergebnis, keine Faulheit.
+
+AUSGABE — nur JSON
+{"weg": [{"von": 12, "bis": 34, "grund": "zweite Erklaerung derselben Sache"}]}
+von/bis sind WORT-INDIZES, einschliesslich, aufsteigend, ohne Ueberlappung.
+Nichts zu kuerzen: {"weg": []}"""
+
+
+def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
+    """Selects auf dem Transkript. Gibt (keeps, protokoll) zurueck.
+
+    Faellt IMMER sicher auf 'alles behalten' zurueck — und sagt im Protokoll,
+    warum. Ein Paper Edit, der still nichts tut, waere von einem kaputten nicht
+    zu unterscheiden."""
+    prot = {"weg_s": 0.0, "schnitte": [], "verworfen": ""}
+    if not words or len(words) < 25:
+        prot["verworfen"] = "zu wenig Material fuer eine Auswahl"
+        return [(0.0, duration)], prot
+    zeilen = "\n".join("%d\t%.2f\t%s" % (i, float(w.get("start") or 0), w.get("word", ""))
+                       for i, w in enumerate(words))
+    try:
+        roh = call_openrouter(PAPER_SYS, zeilen[:24000],
+                              model="anthropic/claude-sonnet-4.5", max_tokens=2000,
+                              tool="paper-edit")
+        m = re.search(r"\{[\s\S]*\}", roh)
+        weg = json.loads(m.group(0)).get("weg", []) if m else []
+    except Exception as exc:
+        log.warning("[PAPER] Auswahl fehlgeschlagen: %s", exc)
+        prot["verworfen"] = f"Modell: {str(exc)[:120]}"
+        return [(0.0, duration)], prot
+
+    n = len(words)
+    guard = _hook_guard_end(words)
+    entfernt, worte_weg = [], 0
+    for e in weg:
+        try:
+            a, b = int(e.get("von")), int(e.get("bis"))
+        except Exception:
+            continue
+        a, b = max(0, a), min(n - 1, b)
+        if b < a:
+            continue
+        grund = str(e.get("grund") or "")[:120]
+        if float(words[a]["start"]) < guard:
+            log.info("[PAPER] %d-%d verworfen — Hook laeuft bis %.2fs", a, b, guard)
+            continue
+        vor = float(words[a]["start"]) - float(words[a - 1]["end"]) if a > 0 else 99.0
+        nach = float(words[b + 1]["start"]) - float(words[b]["end"]) if b < n - 1 else 99.0
+        if vor < PAPER_PAUSE_S or nach < PAPER_PAUSE_S:
+            log.info("[PAPER] %d-%d verworfen — keine Pause (vor %.2fs, nach %.2fs)",
+                     a, b, vor, nach)
+            continue
+        von = max(0.0, float(words[a]["start"]) - pad)
+        bis = min(duration, float(words[b]["end"]) + pad)
+        if bis > von:
+            entfernt.append((von, bis))
+            worte_weg += (b - a + 1)
+            prot["schnitte"].append({"von": round(von, 2), "bis": round(bis, 2),
+                                     "grund": grund})
+
+    if not entfernt:
+        prot["verworfen"] = prot["verworfen"] or "nichts Entbehrliches gefunden"
+        return [(0.0, duration)], prot
+
+    entfernt.sort()
+    keeps, cursor = [], 0.0
+    for a, b in entfernt:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    keeps = [(a, b) for a, b in keeps if b - a >= PAPER_MIN_STUECK_S]
+
+    rest = sum(b - a for a, b in keeps)
+    weg_s = duration - rest
+    # Zwei Reissleinen. Beide sind schon einmal noetig gewesen, an der
+    # Kohaerenz-Stufe: ein Modell, das den Take nicht versteht, wirft nicht
+    # ein bisschen zu viel weg, sondern fast alles.
+    if weg_s > duration * PAPER_MAX_WEG:
+        log.warning("[PAPER] %.0f%% sollen weg (Grenze %.0f%%) — Auswahl verworfen",
+                    100 * weg_s / max(duration, 1e-6), 100 * PAPER_MAX_WEG)
+        prot["verworfen"] = "mehr als %.0f%% vorgeschlagen" % (100 * PAPER_MAX_WEG)
+        prot["schnitte"] = []
+        return [(0.0, duration)], prot
+    if rest < PAPER_MIN_REST_S:
+        log.warning("[PAPER] nur %.1fs uebrig — Auswahl verworfen", rest)
+        prot["verworfen"] = "Rest waere nur %.1fs" % rest
+        prot["schnitte"] = []
+        return [(0.0, duration)], prot
+
+    prot["weg_s"] = round(weg_s, 2)
+    log.info("[PAPER] %d Selects, %.1fs von %.1fs entfernt (%d Woerter)",
+             len(prot["schnitte"]), weg_s, duration, worte_weg)
+    return (keeps or [(0.0, duration)]), prot
 
 
 def _coherence_keep_segments(words: list, duration: float, pad: float = 0.12):
@@ -4779,21 +5031,86 @@ _HOT_WORD_RE = re.compile(
     r"\d+[.,]?\d*\s*(%|x|€|k|mio)?|\d+)$", re.IGNORECASE)
 
 
-def _remotion_chunks(words: list, max_words: int = 3) -> list:
+# Der Untertitel traegt jetzt zwei Schriftwelten: betonte Woerter in der
+# kursiven Serife, alles andere in der Sans. Damit haengt an der Erkennung mehr
+# als vorher, wo sie nur Farbe und Groesse entschied. Die Wortliste allein
+# reicht dafuer nicht — sie kennt "krass" und Zahlen, aber nicht das eine Wort,
+# auf dem er wirklich steht.
+BETONUNG_NAH_S = 0.14      # Abstand Wortanfang zu Transiente
+BETONUNG_PAUSE_S = 0.32    # Pause DANACH: er laesst es stehen
+BETONUNG_LANG = 1.55       # Dauer im Verhaeltnis zum Mittel
+BETONUNG_JE_BLOCK = 1      # sonst wird die ganze Zeile kursiv und nichts betont
+FUELLWOERTER = frozenset(
+    "und der die das ein eine einen einem eines ist sind war du ich er es wir "
+    "ihr sie in im zu zum zur auf an am mit von vom fuer für den dem des aber "
+    "oder wie so dann noch auch mal ja halt eben nur schon nicht kein keine "
+    "man da dass wenn weil als bei nach ueber über um vor durch ohne hat habe "
+    "haben wird werden kann koennen können muss soll sich mein dein sein "
+    "diese dieser dieses hier dort jetzt".split())
+
+
+def _betont(words: list, onsets: Optional[list] = None) -> list:
+    """Fuer jedes Wort: traegt es die Betonung? Rein aus Ton und Zeitachse
+    abgeleitet, kein Modellaufruf — das ist eine Messung, keine Deutung.
+
+    Drei Anzeichen, jedes fuer sich schon ein Grund:
+      - es steht auf einer Transiente (er schlaegt darauf)
+      - danach kommt eine Pause (er laesst es stehen)
+      - er zieht es deutlich laenger als seine uebrigen Woerter
+    Dazu die alte Wortliste fuer Zahlen und Absolutbegriffe."""
+    n = len(words)
+    dauern = [max(0.0, float(w.get("end", 0)) - float(w.get("start", 0))) for w in words]
+    echte = [d for d in dauern if d > 0.04]
+    mittel = (sum(echte) / len(echte)) if echte else 0.0
+    on = sorted(float(o) for o in (onsets or []))
+    aus = []
+    for i, w in enumerate(words):
+        clean = str(w.get("word", "")).strip()
+        kern = clean.strip(".,!?;:—-\"'„“»«")
+        if not kern:
+            aus.append(False)
+            continue
+        start, ende = float(w.get("start", 0)), float(w.get("end", 0))
+        grund = bool(_HOT_WORD_RE.match(kern))
+        if not grund and on:
+            # bisect waere hier schneller, aber die Listen sind dreistellig und
+            # eine Suche, die man lesen kann, ist eine, die man auch aendert.
+            grund = any(abs(o - start) <= BETONUNG_NAH_S for o in on)
+        if not grund and i + 1 < n:
+            grund = float(words[i + 1].get("start", ende)) - ende >= BETONUNG_PAUSE_S
+        if not grund and mittel > 0 and len(kern) >= 4:
+            grund = (ende - start) >= mittel * BETONUNG_LANG
+        # Fuellwoerter tragen keine Betonung, auch wenn er darauf schlaegt.
+        # Ueber die LAENGE zu filtern war falsch: "Abo", "n8n" und "KI" sind
+        # kurz und genau die Woerter, um die es geht. Also eine Liste, und
+        # Grossgeschriebenes bleibt ohnehin drin — im Deutschen ist das ein
+        # Substantiv.
+        if grund and kern.lower() in FUELLWOERTER and not kern[:1].isupper():
+            grund = False
+        aus.append(grund)
+    return aus
+
+
+def _remotion_chunks(words: list, max_words: int = 3,
+                     onsets: Optional[list] = None) -> list:
     """Word-level caption chunks: [{start,end,words:[{text,start,end,hot}]}].
 
     JustusPunches reveals one word at a time, so unlike _remotion_captions the
     per-word timings have to survive into the props."""
     chunks, cur = [], []
-    for w in words:
+    betonungen = _betont(words, onsets)
+    for idx, w in enumerate(words):
         clean = w["word"].strip()
         if not clean:
             continue
+        # Hoechstens eine Betonung je Block: stuenden zwei kursive Woerter
+        # nebeneinander, waere der Wechsel kein Wechsel mehr.
+        hot = betonungen[idx] and not any(x["hot"] for x in cur[-BETONUNG_JE_BLOCK:])
         cur.append({
             "text":  clean,
             "start": round(float(w["start"]), 3),
             "end":   round(float(w["end"]), 3),
-            "hot":   bool(_HOT_WORD_RE.match(clean.strip(".,!?;:"))),
+            "hot":   bool(hot),
         })
         # Frueher wurde zusaetzlich an Satzzeichen umgebrochen — dann standen
         # zwischendurch ein oder zwei Woerter statt drei. Justus' Caption-Stil
@@ -6760,7 +7077,7 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
         else:  # JustusPunches
             face = _face_track(facecam_path, duration)
             matte_url = _matte_video(facecam_path, job_dir) if req.bg_mode == "canvas" else ""
-            chunks = _remotion_chunks(words)
+            chunks = _remotion_chunks(words, onsets=onsets)
             hook_end_f, outro_start_f = _remotion_scenes(chunks, duration)
             hook_end_s = hook_end_f / FPS
             # punches (audio hits) from the briefing/impacts; lands on real words.
@@ -7861,6 +8178,7 @@ class OpenSessionRequest(BaseModel):
     briefing:     Optional[dict] = None
     material:     Optional[list] = None   # Fundstuecke, eigene Uploads
     trim:         bool = True
+    paper_edit:   bool = True             # Selects auf dem Transkript
     turn_budget:  int = TURN_BUDGET
 
 
@@ -7879,6 +8197,21 @@ def tool_session_open(req: OpenSessionRequest):
         trimmed, _ = _trim_pipeline(cam, job)
         if trimmed != cam:
             cam = trimmed
+    # Der Paper Edit laeuft NACH dem Saeubern und VOR allem anderen: Face-Track,
+    # Transienten, Kontaktblatt und der ganze Plan beziehen sich auf die
+    # Zeitachse, die hier entsteht. Liefe er spaeter, zeigte jeder Zeitstempel
+    # im Plan auf eine Stelle, die es nicht mehr gibt.
+    paper = {"weg_s": 0.0, "schnitte": [], "verworfen": "nicht ausgefuehrt"}
+    if req.paper_edit:
+        pw = transcribe_audio(cam) or []
+        keeps, paper = _paper_edit(pw, probe_duration(cam))
+        if len(keeps) > 1 or paper.get("weg_s"):
+            geschnitten = job / "paper.mp4"
+            if _trim_dead_air(cam, keeps, geschnitten):
+                cam = geschnitten
+            else:
+                paper["verworfen"] = "Schnitt technisch fehlgeschlagen"
+                paper["schnitte"] = []
     cam = _fit_size(cam, job, target_mb=46, name="facecam_fit.mp4")
     face_url = upload_supabase(cam, f"facecam_{sid}", folder="uploads")
 
@@ -7915,7 +8248,7 @@ def tool_session_open(req: OpenSessionRequest):
         "style_guide": style, "colors": _tpl_colors(tpl),
         "brand": _brand_fuer(req.client_id, tpl),
         "caption_stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
-        "briefing": req.briefing, "sfx": [],
+        "briefing": req.briefing, "sfx": [], "paper": paper,
         "material": req.material or [], "material_abgelehnt": {},
         "touched": time.time(),
         "turns_used": 0, "turn_budget": req.turn_budget, "abbruch_grund": "",
@@ -7939,7 +8272,8 @@ def tool_session_open(req: OpenSessionRequest):
             # Stilmittel. Verschieben darf er sie, wegnehmen nicht.
             _layer_defaults({
                 "id": "captions", "z": 29,
-                "source": {"kind": "captions", "chunks": _remotion_chunks(words),
+                "source": {"kind": "captions",
+                           "chunks": _remotion_chunks(words, onsets=onsets),
                            "stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
                            "y": round(min(0.68, float(face.get("bottom", 0.63)) + 0.05), 3),
                            "fontSize": 66, "duckFor": [], "duckY": 0.62,
@@ -7962,6 +8296,11 @@ def tool_session_open(req: OpenSessionRequest):
     return {"ok": True, "session_id": sid, "duration": round(duration, 3), "frames": frames,
             "fps": FPS, "face_url": face_url, "contact_sheet": sheet_url,
             "words": len(words), "face": face, "onsets": len(onsets),
+            # Der Paper Edit muss SICHTBAR sein. Eine Kuerzung, die niemand
+            # meldet, ist von einem uebersprungenen Schritt nicht zu
+            # unterscheiden — und genau so ist der alte smart_cut jahrelang
+            # nie gelaufen, ohne dass es jemandem auffiel.
+            "paper_edit": paper,
             "layers": [l["id"] for l in s["layers"]]}
 
 
@@ -7983,6 +8322,7 @@ class SessionRef(BaseModel):
 # entweder wiederherstellbar oder gehoert nicht in eine Datenbank.
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
+                "paper",
                 "material", "material_abgelehnt",
                 "layers", "turns_used", "turn_budget", "abbruch_grund",
                 "prefix", "prefix_sha", "gelesen", "verlauf", "tokens",
@@ -9275,6 +9615,69 @@ def tool_validate(req: SessionRef):
 
 
 # ── Rendern ───────────────────────────────────────────────────────────────────
+# ── TONPASS ─────────────────────────────────────────────────────────────────
+# Bis hierher wurde die Tonspur der Facecam unveraendert durchgereicht: keine
+# Pegelfuehrung, kein Platz fuer die Impacts. Beides hoert man sofort — der
+# Anfang laut, das Ende leise, und jeder Schlag steht entweder im Weg oder ist
+# nicht da.
+#
+# Drei Dinge, und nur die, die hier auch wirklich hingehoeren:
+#   Pegel     loudnorm ueber den ganzen Bogen, danach ein weicher Kompressor
+#             gegen den Abfall zum Schluss (er wird leiser, wenn er fertig
+#             gedacht hat).
+#   Platz     unter jedem Impact senkt sich die Stimme kurz ab. Sonst muesste
+#             man den Schlag lauter machen, und dann uebersteuert der Mix.
+#   Pausen    steht NICHT hier, sondern im Schnitt (_compute_keep_segments,
+#             PAUSE_HALTEN_S) — eine Pause nachtraeglich in den Ton zu legen
+#             wuerde jedes Bild dahinter verschieben.
+TONPASS_DIP_DB = 3.5       # so viel weicht die Stimme unter einem Impact
+TONPASS_DIP_VOR_S = 0.09   # sie geht schon davor runter, sonst kommt sie zu spaet
+TONPASS_DIP_NACH_S = 0.26
+TONPASS_MAX_DIPS = 8
+
+
+def _tonpass(src: Path, job_dir: Path, impacts: Optional[list] = None,
+             tag: str = "a") -> Path:
+    """Pegel und Platz. Gibt bei jedem Fehlschlag `src` zurueck — ein Video
+    ohne Tonpass ist besser als keines."""
+    zeiten = []
+    for ev in (impacts or []):
+        try:
+            zeiten.append(float(ev.get("time") if isinstance(ev, dict) else ev))
+        except Exception:
+            continue
+    zeiten = sorted(t for t in zeiten if t > 0.05)[:TONPASS_MAX_DIPS]
+
+    af = ["loudnorm=I=-16:LRA=11:TP=-1.5",
+          # Ratio bewusst flach: das ist Pegelfuehrung, keine Verdichtung.
+          # Staerker gedrueckt klingt eine Facecam nach Radiowerbung.
+          "acompressor=threshold=-20dB:ratio=2.5:attack=12:release=260:makeup=2"]
+    if zeiten:
+        summe = "+".join("between(t,%.3f,%.3f)" % (max(0.0, t - TONPASS_DIP_VOR_S),
+                                                   t + TONPASS_DIP_NACH_S)
+                         for t in zeiten)
+        faktor = 10 ** (-TONPASS_DIP_DB / 20.0)
+        # min(1,...) faengt den Fall ab, dass zwei Impacts dicht beieinander
+        # liegen: ohne das addieren sich die Senken und die Stimme verschwindet.
+        af.append("volume=eval=frame:volume='1-%.3f*min(1,%s)'"
+                  % (1 - faktor, summe))
+
+    ziel = job_dir / f"tonpass_{tag}.mp4"
+    try:
+        run(["ffmpeg", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+             "-c:v", "copy", "-af", ",".join(af),
+             "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_HZ),
+             "-movflags", "+faststart", str(ziel)], f"tonpass_{tag}")
+    except Exception as exc:
+        log.warning("[TON] Tonpass fehlgeschlagen: %s", str(exc)[:160])
+        return src
+    if not ziel.exists() or ziel.stat().st_size < 1024:
+        log.warning("[TON] Tonpass ergab nichts — Ton bleibt wie er war")
+        return src
+    log.info("[TON] Pegel gefuehrt, %d Senken unter Impacts", len(zeiten))
+    return ziel
+
+
 @app.post("/tool/session/render")
 def tool_session_render(req: SessionRef):
     """Die Sitzung zu Ende bringen: Metapher-Ebenen dazu, Ebenen → Remotion,
@@ -9358,6 +9761,10 @@ def tool_session_render(req: SessionRef):
         except Exception as exc:
             log.warning("[SESSION] Impact-Erkennung fehlgeschlagen: %s", exc)
             sfx_events = []
+    # Tonpass VOR dem SFX-Mix: die Senken sollen die Stimme treffen, nicht den
+    # Schlag. Danach angewandt wuerde loudnorm die Impacts gleich wieder
+    # einebnen — und der Platz, den sie brauchen, waere weg.
+    out = _tonpass(out, job, sfx_events, "a")
     if sfx_events:
         mixed = mix_sfx_into_video(out, sfx_events, job, dauer)
         if mixed:
@@ -9398,6 +9805,7 @@ def tool_session_render(req: SessionRef):
             sicher.append({**l, "transform": t})
         log.info("[SESSION] QA ISSUES → eine Korrekturrunde auf sicheren Schienen")
         out_b = _render_session(sicher, "b")
+        out_b = _tonpass(out_b, job, sfx_events, "b")
         if sfx_events:
             mixed_b = mix_sfx_into_video(out_b, sfx_events, job, dauer)
             if mixed_b:
@@ -9441,6 +9849,10 @@ def tool_session_render(req: SessionRef):
               "qa": qa.get("overall"), "qa_korrigiert": bool(qa.get("auto_fixed"))})
     log.info("[SESSION] %s gerendert: %d Ebenen → %s", s["id"], len(s["layers"]), url)
     return {"ok": True, "url": url, "render_id": rid, "layers": len(s["layers"]),
+            # Der oertliche Pfad, damit die Abnahme das Video ANSEHEN kann,
+            # ohne es sich aus Supabase zurueckzuladen. Nur fuer den Aufrufer
+            # im selben Prozess — nach draussen zaehlt die URL.
+            "pfad": str(out),
             "turns_used": s["turns_used"], "grund": s.get("abbruch_grund") or "manuell",
             "fertig": stand["fertig"], "offen": stand["offen"],
             "metapher_ebenen": len(meta_ebenen), "sfx": len(sfx_events), "qa": qa}
@@ -9477,7 +9889,7 @@ AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
 KOMPOSITIONEN = ("vollbild", "punch", "drift",
                  "unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                  "haelften", "bubble", "bubble_wandert",
-                 "uebernahme", "beleg", "metapher", "durchforsten",
+                 "uebernahme", "hell_dunkel", "beleg", "metapher", "durchforsten",
                  "overlay_wandert", "flaeche_kippt")
 # Bei den wichtigsten Saetzen soll nichts zwischen ihm und dem Zuschauer stehen.
 VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_kippt")
@@ -9500,7 +9912,7 @@ EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_k
 # Die Skelette gibt es seit Wochen — nur kam nie eines an: art_element wurde
 # nie gesetzt, also bekam JEDES Element das Titel-Layout. Deshalb sah alles
 # gleich aus, egal ob Zahl, Vergleich oder Zitat.
-ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel")
+ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel", "befund", "marke")
 SCHMALE = ("seite_links", "seite_rechts", "bubble", "bubble_wandert")
 SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
@@ -9639,6 +10051,14 @@ ER TEILT SICH DAS BILD
 
 ER IST WEG
   uebernahme      vollflaechig etwas anderes, er komplett weg
+  hell_dunkel     wie uebernahme, aber die Helligkeit KIPPT: dunkler Kanal wird
+                  hell, heller wird dunkel. Derselbe Akzent, dieselbe Schrift —
+                  nur der Grund dreht sich um
+                  → das ist der Rhythmus des Videos, nicht Dekoration. Nach
+                    zwanzig Sekunden im selben Licht ist der Umschlag ein
+                    Ereignis. Setz ihn dorthin, wo das Thema wechselt: vom
+                    Problem zur Loesung, von der Klage zur Anleitung
+                  → uebernahme und hell_dunkel teilen sich EIN Budget
   beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
   metapher        ein Bild fuer eine abstrakte Aussage
   durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
@@ -9695,8 +10115,23 @@ WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
                  vergleich zwei Seiten gegeneinander            (vorher/nachher)
                  ablauf    Schritte nacheinander                (1 → 2 → 3)
                  zitat     ein Satz, der wirkt                  (seine Aussage)
+                 befund    was geht und was nicht               (Haken/X-Liste)
+                 marke     ein Werkzeug ist der Held            (Logo-Kachel)
                  titel     Ueberschrift mit Unterzeile          (nur wenn nichts
                            anderes passt — nicht der Standard)
+
+  ZUSTAND AN EINER TEXTZEILE — ein Zeichen davor, mehr nicht:
+                 "+ laeuft lokal"     gruener Haken, es geht
+                 "- braucht GPU"      rotes X, es geht nicht
+                 "! nur mit Key"      Warnung
+               Das Zeichen steht NIE im Bild, es waehlt die Marke. Bei
+               art_element "befund" und "vergleich" gehoert an jede Zeile eines.
+               Nutz es nur, wo er wirklich etwas bejaht oder verneint — eine
+               Aufzaehlung mit fuenf Haken sagt nichts mehr.
+
+  logo         nur bei art_element "marke": der Slug des Werkzeugs, so wie es
+               heisst — "n8n", "supabase", "github", "railway", "claude".
+               Kein Slug bekannt: dann nimm eine andere art_element
   zeigt        immer, wenn braucht gesetzt ist: WAS zu sehen ist, konkret
   bewegung     bei unten_aufbau, oben_unterbau, bubble, bubble_wandert,
                overlay_wandert, flaeche_kippt — ohne Bewegung ist es eine Folie
@@ -9980,8 +10415,13 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         fehler.append(f"{zaehler['beleg']} Belege, hoechstens 2 — der dritte "
                       f"Fund gehoert neben ihn (seite_links/seite_rechts) oder "
                       f"hinter ihn (bubble), nicht noch einmal formatfuellend")
-    if zaehler.get("uebernahme", 0) > MAX_UEBERNAHMEN:
-        fehler.append(f"{zaehler['uebernahme']} Uebernahmen, hoechstens "
+    # hell_dunkel zaehlt mit: es ist eine Uebernahme, nur in der anderen
+    # Helligkeit. Getrennt gezaehlt waere aus zwei Grenzen von je zwei
+    # stillschweigend eine von vier geworden — vier Abschnitte ohne sein
+    # Gesicht in einem 60-Sekunden-Video.
+    weg = sum(zaehler.get(x, 0) for x in ("uebernahme", "hell_dunkel"))
+    if weg > MAX_UEBERNAHMEN:
+        fehler.append(f"{weg} Uebernahmen (uebernahme + hell_dunkel), hoechstens "
                       f"{MAX_UEBERNAHMEN} — er soll nicht dauernd verschwinden")
     anteil = voll_s / max(dauer, 1e-6)
     if anteil < MIN_VOLLBILD_ANTEIL:
@@ -10625,6 +11065,10 @@ def _auftrag_aus_braucht(a: dict) -> dict:
     t = b.get("text")
     zeilen = ([str(x).strip() for x in t if str(x).strip()] if isinstance(t, list)
               else [str(t).strip()] if t else [])
+    # Das Zustandszeichen waehlt die Marke, es ist kein Anzeigetext. Bliebe es
+    # stehen, stuende "+ laeuft lokal" im Bild — und die Inhaltspruefung suchte
+    # danach und meldete die Zeile als fehlend, obwohl sie dasteht.
+    zeilen = [kit._zustand(z)[1] for z in zeilen]
     if isinstance(t, dict):     # alte Fassung: hauptwert/beschriftung/einordnung
         zeilen = [str(t.get(f) or "").strip()
                   for f in ("hauptwert", "beschriftung", "einordnung")
@@ -10806,8 +11250,23 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                               auftrag.get("einordnung")] if z]
         if isinstance(b.get("text"), list):
             zeilen = [str(z).strip() for z in b["text"] if str(z).strip()]
-        markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or "")},
-                          s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S))
+        # Der Slug aus dem Plan, sonst aus dem Anzeigetext. Ein Logo, das der
+        # Plan nicht kennt, aber im Text steht, ist trotzdem das richtige.
+        slug = str(b.get("logo") or "").strip().lower().lstrip("#").replace("lg-", "")
+        farbe = ""
+        gefunden = _marken_im_text(" ".join(zeilen))
+        if slug and slug in _logo_meta():
+            farbe = _logo_meta()[slug][1]
+        elif gefunden:
+            slug, farbe = gefunden[0]["slug"], gefunden[0]["farbe"]
+        elif slug:
+            log.warning("[BAU] %d Logo-Slug '%s' gibt es nicht — ohne Kachel", i, slug)
+            slug = ""
+        markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or ""),
+                                "logo": slug, "logo_farbe": farbe,
+                                "geprueft": bool(b.get("geprueft"))},
+                          s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S),
+                          wende=(k in GEWENDET))
         if markup:
             # Das Kit ist das GERUEST, nicht das fertige Bild: Layout, Marke,
             # Hierarchie und Zeiten stehen. Der Gestalter veredelt es — Haken,
@@ -10823,6 +11282,14 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         # Abschnitte auf vollbild gefallen.
         _auftrag = _auftrag_aus_braucht(a)
         _auftrag["platz"] = _platz_fuer_gestalter(k, kasten, s.get("face") or {})
+        if k in GEWENDET:
+            # Ohne diesen Satz baut der Gestalter helle Schrift auf hellen Grund:
+            # er kennt nur das Kit des Kanals, und das ist hier gewendet.
+            hell = not kit.kit_fuer(s["client_id"])["serif"]
+            _auftrag["platz"]["grund"] = (
+                "GEWENDET — dieser Abschnitt laeuft auf %s Grund, umgekehrt zum "
+                "Rest des Videos. Schrift und Linien entsprechend, Akzentfarbe "
+                "bleibt." % ("hellem" if hell else "dunklem"))
         if _kit_geruest:
             _auftrag["geruest"] = _kit_geruest
         res = await asyncio.to_thread(
@@ -10912,6 +11379,8 @@ KOMP_BOXEN = {
     "bubble_wandert":  ({"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
                         {"x": 0, "y": 0, "w": 1, "h": 1}),
     "uebernahme":      (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    # Dieselbe Vollflaeche wie uebernahme — der Unterschied ist die Helligkeit.
+    "hell_dunkel":     (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "beleg":           (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "metapher":        (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "durchforsten":    (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
@@ -10922,6 +11391,9 @@ KOMP_BOXEN = {
 # Wer das Bild NICHT ganz fuer sich hat, braucht eine Flaeche hinter sich.
 BRAUCHT_FLAECHE = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                    "haelften", "bubble", "bubble_wandert")
+# Kompositionen, in denen die Helligkeit kippt. Das Element bringt seinen
+# eigenen Grund mit — deshalb steht es NICHT in BRAUCHT_FLAECHE.
+GEWENDET = ("hell_dunkel",)
 # Diese holen kein Material — sie sind reine Kamerabewegung auf ihm selbst.
 # flaeche_kippt ist eine FARBE ueber seinem Gesicht. Dafuer braucht es keinen
 # Gestalter: eine Flaeche in der Markenfarbe kann das System selbst legen —
@@ -10931,8 +11403,8 @@ OHNE_MATERIAL = ("vollbild", "punch", "drift", "flaeche_kippt")
 # Kompositionen, deren Element eigenen Text ins Bild bringt. Nur dort ducken
 # die Untertitel — bei einem Stockclip ohne Schrift waere es unnoetig.
 TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
-               "haelften", "uebernahme", "overlay_wandert", "flaeche_kippt",
-               "beleg", "durchforsten",
+               "haelften", "uebernahme", "hell_dunkel", "overlay_wandert",
+               "flaeche_kippt", "beleg", "durchforsten",
                # Bubble fehlte: bei Sekunde 52 lag "PREISEN UND KATEGORIEN"
                # mitten im Doku-Text, weil hinter der Bubble ein voller
                # Screenshot laeuft. Der traegt Text wie jedes Element.
@@ -10987,6 +11459,17 @@ def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
                       "start": von_f, "end": bis_f, "easing": "easeInOut"},
                      {"property": "opacity", "from": 0.0, "to": 1.0,
                       "start": von_f, "end": rein, "easing": "easeOut"}])
+    if k == "hell_dunkel":
+        # Ein Umschlag, kein Uebergang. Drei Frames Deckkraft ist praktisch ein
+        # Schnitt; das Absetzen der Skalierung danach nimmt ihm nur die Haerte,
+        # nicht die Wirkung. Eine langsame Blende waere genau das Gegenteil des
+        # Rhythmus, um den es hier geht.
+        return ([], [{"property": "opacity", "from": 0.0, "to": 1.0,
+                      "start": von_f, "end": min(bis_f, von_f + 3),
+                      "easing": "linear"},
+                     {"property": "scale", "from": 1.05, "to": 1.0,
+                      "start": von_f, "end": min(bis_f, von_f + 12),
+                      "easing": "easeOut"}])
     if k == "flaeche_kippt":
         # Die Flaeche legt sich UEBER ihn und wieder weg — das ist der Umschlag.
         weg = max(rein, bis_f - max(3, int(0.4 * FPS)))
@@ -11434,9 +11917,337 @@ async def _build_impl(req: BuildRequest):
            "kurs_usd_je_eur": USD_JE_EUR,
            "zurueckgestuft": len(zurueckgestuft),
            "sekunden": round(time.time() - t0, 1)}
-    if req.rendern:
-        aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))
+    if not req.rendern:
+        return aus
+
+    aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))
+
+    # ── STUFE 3: ABNAHME, genau eine Reparaturrunde ──────────────────────────
+    pfad = Path(aus["render"].get("pfad") or "")
+    ab = _abnahme(pfad, plan, protokoll, s["frames"] / FPS)
+    aus["abnahme"] = ab
+    hart = [m for m in ab.get("maengel") or [] if m.get("schwere") == "hart"]
+    if hart:
+        getan = _abnahme_reparieren(s, hart)
+        aus["abnahme"]["repariert"] = getan
+        if any(g.get("ebene") for g in getan):
+            log.info("[ABNAHME] %d Eingriffe → einmal neu rendern", len(getan))
+            zweiter = tool_session_render(SessionRef(session_id=s["id"]))
+            zweite_ab = _abnahme(Path(zweiter.get("pfad") or ""), plan, protokoll,
+                                 s["frames"] / FPS)
+            hart2 = [m for m in zweite_ab.get("maengel") or []
+                     if m.get("schwere") == "hart"]
+            # Nur uebernehmen, wenn es BESSER geworden ist. Sonst haette eine
+            # Reparatur, die es schlimmer macht, das letzte Wort — genau der
+            # Fehler der alten QA-Korrektur.
+            if len(hart2) <= len(hart):
+                aus["render"], aus["abnahme"] = zweiter, {**zweite_ab,
+                                                          "repariert": getan,
+                                                          "runde": 2}
+                pfad = Path(zweiter.get("pfad") or "")
+            else:
+                aus["abnahme"]["verworfen"] = (
+                    "Reparatur brachte %d statt %d harte Maengel — erste "
+                    "Fassung bleibt" % (len(hart2), len(hart)))
+                log.warning("[ABNAHME] %s", aus["abnahme"]["verworfen"])
+        else:
+            aus["abnahme"]["verworfen"] = "nichts mechanisch reparierbar"
+
+    # ── QC: die mechanische Liste, immer, ganz zum Schluss ───────────────────
+    aus["qc"] = _qc(pfad, s, plan)
+    offen = [x["punkt"] for x in aus["qc"]["punkte"] if x["hart"] and not x["ok"]]
+    if offen:
+        # Nicht blockieren — melden. Ob ein Video mit einem harten Punkt
+        # rausgeht, entscheidet der Aufrufer, nicht der Renderer.
+        log.warning("[QC] AUSLIEFERUNG FRAGLICH — offen: %s", ", ".join(offen))
+    _log_run(s["client_id"], "abnahme", "ok" if aus["qc"]["ok"] else "warn",
+             {"session_id": s["id"],
+              "maengel": len(aus["abnahme"].get("maengel") or []),
+              "hart": len(hart), "urteil": aus["abnahme"].get("urteil", "")[:200],
+              "qc_hart_offen": aus["qc"]["hart_offen"],
+              "qc_offen": offen})
     return aus
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STUFE 3 — ABNAHME
+#
+# Die alte QA hat ihre Befunde ins Leere gemeldet: `overall: ISSUES` stand im
+# Protokoll, und niemand hat je etwas damit gemacht. Im Plan-Pfad war sie sogar
+# ausdruecklich stumm geschaltet, weil ihre eigene Korrektur mehr kaputt machte
+# als sie fand (die fuenf Uebernahmen, die zu 0.24-Bannern wurden).
+#
+# Was hier anders ist:
+#   - sie sieht das FERTIGE Video am Stueck, nicht sechs Stichprobenframes
+#   - sie kennt den PLAN und prueft dagegen, nicht gegen ihren Geschmack
+#   - sie korrigiert NICHT selbst, sie meldet mit Zeitstempel und Abschnitt
+#   - die Reparatur ist mechanisch und macht GENAU eine Runde
+# ══════════════════════════════════════════════════════════════════════════════
+ABNAHME_MAENGEL = ("text_abgeschnitten", "element_ausserhalb", "gesicht_verdeckt",
+                   "leer", "falscher_text", "unlesbar", "doppelter_text")
+# Nur diese lassen sich mechanisch reparieren. Alles andere wird gemeldet und
+# bleibt stehen — eine Reparatur, die raet, ist schlimmer als ein bekannter
+# Mangel.
+ABNAHME_REPARIERBAR = ("text_abgeschnitten", "element_ausserhalb",
+                       "gesicht_verdeckt", "leer", "unlesbar", "doppelter_text")
+
+ABNAHME_SYS = """Du bist die ABNAHME. Du siehst das fertige Video und den Plan,
+nach dem es gebaut wurde. Du pruefst, ob das Video den Plan einloest.
+
+Du baust nichts und aenderst nichts. Du meldest Maengel — mit Zeitstempel.
+
+WORAUF DU SIEHST
+- Steht in jedem Abschnitt das, was der Plan dort vorsieht?
+- Ist jeder Text VOLLSTAENDIG zu sehen? Abgeschnittene Woerter am Rand,
+  Buchstaben, die im Kasten verschwinden, Zahlen ohne ihre Einheit.
+- Liegt ein Element ausserhalb des Bildes oder ragt es heraus?
+- Ist sein Gesicht verdeckt, wo es sichtbar sein soll? (Bei einer Uebernahme
+  ist es ABSICHT, dass er ganz weg ist — das ist kein Mangel.)
+- Steht irgendwo ein leerer Rahmen, eine leere Flaeche, ein Kasten ohne Inhalt?
+- Ueberlagern sich zwei Texte, sodass beide unlesbar werden?
+- Ist Schrift zu klein oder zu kontrastarm, um sie auf einem Handy zu lesen?
+
+WAS KEIN MANGEL IST
+- Geschmack. Du sagst nicht, was schoener waere.
+- Eine Gestaltung, die dir zu schlicht ist, aber lesbar.
+- Das Fehlen von etwas, das der Plan gar nicht vorsieht.
+- Die Untertitel: sie laufen immer und gehoeren dazu.
+
+SCHWERE
+  hart   man sieht es sofort und es stoert die Aussage
+  weich  es faellt auf, wenn man darauf achtet
+
+AUSGABE — nur JSON
+{"maengel": [{"bei": 12.4, "abschnitt": 2, "art": "text_abgeschnitten",
+              "was": "'Firecrawl Star' — das Wort ist am rechten Rand ab",
+              "schwere": "hart"}],
+ "urteil": "ein Satz: geht das so raus oder nicht"}
+Kein Mangel: {"maengel": [], "urteil": "..."}
+'art' ist eines von: """ + ", ".join(ABNAHME_MAENGEL) + """
+'abschnitt' ist die Nummer aus dem Plan, oder -1 wenn du sie nicht zuordnen
+kannst."""
+
+
+def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float) -> dict:
+    """Ein Blick aufs fertige Video gegen den Plan. Faellt bei jedem Fehler
+    weich aus — eine Abnahme, die den Lauf killt, waere schlimmer als keine."""
+    aus = {"maengel": [], "urteil": "", "kosten_usd": 0.0, "gelaufen": False}
+    if not video or not Path(video).exists():
+        aus["urteil"] = "kein Video zum Ansehen"
+        return aus
+    # Der Plan, aber nur das, was man im Bild ueberpruefen kann. Die internen
+    # Begruendungen gehoeren nicht hinein — sonst prueft sie Absichten.
+    knapp = []
+    for i, a in enumerate(plan.get("abschnitte") or []):
+        b = a.get("braucht") or {}
+        p = protokoll[i] if i < len(protokoll) else {}
+        knapp.append({"nr": i, "von": a.get("von"), "bis": a.get("bis"),
+                      "komposition": p.get("umgesetzt") or _komposition(a),
+                      "zeigt": str(b.get("zeigt") or "")[:160],
+                      "text": b.get("text"),
+                      "gebaut_als": p.get("quelle_art") or ""})
+    try:
+        uri = _gemini_upload(Path(video))
+        text = (f"LAUFZEIT {dauer:.1f}s\n\nDER PLAN:\n"
+                + json.dumps(knapp, ensure_ascii=False, indent=1))
+        roh, modell, tok = _gemini_plan_call(uri, ABNAHME_SYS + "\n\n" + text,
+                                             AD_MODELLE)
+    except Exception as exc:
+        log.warning("[ABNAHME] fehlgeschlagen: %s", str(exc)[:200])
+        aus["urteil"] = f"Abnahme nicht gelaufen: {str(exc)[:140]}"
+        return aus
+
+    maengel = []
+    for m in (roh.get("maengel") or [])[:20]:
+        art = str(m.get("art") or "").strip().lower()
+        if art not in ABNAHME_MAENGEL:
+            # Eine erfundene Mangelart laesst sich nicht reparieren und nicht
+            # zaehlen. Sie wird gemeldet, aber als 'weich' — sonst blockiert
+            # ein Wort, das niemand kennt, die Auslieferung.
+            log.info("[ABNAHME] unbekannte Art '%s' — als weich gefuehrt", art[:40])
+            m = {**m, "art": art or "unbekannt", "schwere": "weich"}
+        try:
+            m["bei"] = round(float(m.get("bei") or 0.0), 2)
+        except Exception:
+            m["bei"] = 0.0
+        try:
+            m["abschnitt"] = int(m.get("abschnitt", -1))
+        except Exception:
+            m["abschnitt"] = -1
+        m["schwere"] = "hart" if str(m.get("schwere")).lower() == "hart" else "weich"
+        maengel.append(m)
+    aus.update({"maengel": maengel, "urteil": str(roh.get("urteil") or "")[:300],
+                "modell": modell, "tokens": tok, "gelaufen": True})
+    hart = sum(1 for m in maengel if m["schwere"] == "hart")
+    log.info("[ABNAHME] %d Maengel (%d hart) — %s", len(maengel), hart, aus["urteil"][:120])
+    return aus
+
+
+def _abnahme_reparieren(s: dict, maengel: list) -> list:
+    """EINE Runde, rein mechanisch. Gibt zurueck, was getan wurde.
+
+    Bewusst keine zweite Bestellung beim Gestalter: die kostet und kann
+    dasselbe wieder liefern. Repariert wird durch VERSCHIEBEN und WEGNEHMEN —
+    zwei Eingriffe, die nicht danebengehen koennen."""
+    getan = []
+    face = s.get("face") or {}
+    oben = round(max(0.04, float(face.get("top", 0.15)) - 0.18), 3)
+    unten = round(min(0.80, float(face.get("bottom", 0.66)) + 0.04), 3)
+    for m in maengel:
+        if m.get("schwere") != "hart" or m.get("art") not in ABNAHME_REPARIERBAR:
+            continue
+        bei = float(m.get("bei") or 0.0)
+        f = int(round(bei * FPS))
+        # Die Ebene, die zu diesem Zeitpunkt laeuft und nicht dem System gehoert.
+        treffer = [l for l in s["layers"]
+                   if l["from"] <= f < l["to"] and not _ist_pflicht(l)]
+        if not treffer:
+            getan.append({"bei": bei, "art": m.get("art"), "tat": "keine Ebene "
+                          "an dieser Stelle — nichts zu reparieren"})
+            continue
+        # Die oberste: die sieht man.
+        l = sorted(treffer, key=lambda x: -x["z"])[0]
+        art = m.get("art")
+        if art in ("leer", "unlesbar") or (art == "doppelter_text"
+                                           and not _ist_uebernahme(l)):
+            s["layers"] = [x for x in s["layers"] if x is not l]
+            getan.append({"bei": bei, "art": art, "ebene": l["id"],
+                          "tat": "Ebene entfernt — dahinter steht er selbst"})
+            continue
+        if _ist_uebernahme(l):
+            # Eine Vollflaeche laesst sich nicht auf eine Schiene ziehen, ohne
+            # sie zu zerstoeren. Genau das war der Fehler der alten Korrektur.
+            getan.append({"bei": bei, "art": art, "ebene": l["id"],
+                          "tat": "Uebernahme bleibt — nur gemeldet"})
+            continue
+        t = dict(l["transform"])
+        if art == "gesicht_verdeckt":
+            t["y"] = oben if (t.get("y", 0) + t.get("h", 0) / 2) < 0.5 else unten
+            t["h"] = min(float(t.get("h", 0.2)), 0.24)
+            tat = "auf die sichere Schiene ueber/unter dem Gesicht"
+        else:
+            # Herausgeragt: in die Safe Area zurueckholen, Groesse behalten.
+            t["w"] = min(float(t.get("w", 0.8)), 0.88)
+            t["x"] = min(max(float(t.get("x", 0.06)), 0.06), 1 - t["w"] - 0.06)
+            t["h"] = min(float(t.get("h", 0.3)), 0.88)
+            t["y"] = min(max(float(t.get("y", 0.1)), 0.06), 1 - t["h"] - 0.06)
+            tat = "in die Safe Area zurueckgeholt"
+        l["transform"] = t
+        getan.append({"bei": bei, "art": art, "ebene": l["id"], "tat": tat})
+    return getan
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# QC — die mechanische Liste vor der Auslieferung
+#
+# Kein Modell, kein Urteil, nur Messungen. Sie beantwortet die Frage, die am
+# 06.08. niemand gestellt hat: ist das ueberhaupt ein auslieferbares Video?
+# Damals sagten alle Kennzahlen "fertig", und es waren 62 Sekunden schwarzer
+# Rahmen. Zwei der Punkte hier haetten das gefangen.
+# ══════════════════════════════════════════════════════════════════════════════
+QC_MAX_MB = 50.0            # Telegram und der Supabase-Bucket
+QC_MIN_LUFS = -24.0
+QC_MAX_LUFS = -11.0
+QC_MIN_TONSPUR_S = 0.5
+
+
+def _lautheit(video: Path) -> Optional[float]:
+    """Integrierte Lautheit in LUFS. None, wenn ffmpeg nichts sagt."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostats", "-i", str(video),
+             "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=180)
+        treffer = re.findall(r"I:\s*(-?\d+(?:\.\d+)?)\s*LUFS", r.stderr or "")
+        return float(treffer[-1]) if treffer else None
+    except Exception as exc:
+        log.warning("[QC] Lautheit nicht messbar: %s", str(exc)[:120])
+        return None
+
+
+def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
+    """Die Liste. Jeder Punkt: bestanden ja/nein, und wenn nein, was gemessen
+    wurde. `hart` heisst: so geht es nicht raus."""
+    punkte = []
+
+    def p(name: str, ok: bool, hart: bool, befund: str = ""):
+        punkte.append({"punkt": name, "ok": bool(ok), "hart": bool(hart),
+                       "befund": befund})
+
+    if not video or not Path(video).exists():
+        p("Datei vorhanden", False, True, "kein Video")
+        return {"ok": False, "punkte": punkte, "hart_offen": 1}
+    video = Path(video)
+
+    mb = video.stat().st_size / 1e6
+    p("Dateigroesse", mb <= QC_MAX_MB, True, "%.1f MB (Grenze %.0f)" % (mb, QC_MAX_MB))
+
+    dauer = probe_duration(video)
+    soll = s["frames"] / FPS
+    # Die Endkarte haengt hinten dran, deshalb darf es laenger sein.
+    p("Laufzeit", dauer >= soll - 0.6, True,
+      "%.1fs gerendert, %.1fs geplant" % (dauer, soll))
+
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "stream=codec_type,width,height,r_frame_rate",
+                            "-of", "json", str(video)],
+                           capture_output=True, text=True, timeout=60)
+        streams = json.loads(r.stdout or "{}").get("streams") or []
+    except Exception as exc:
+        streams = []
+        log.warning("[QC] ffprobe: %s", str(exc)[:120])
+    vid = next((x for x in streams if x.get("codec_type") == "video"), {})
+    aud = next((x for x in streams if x.get("codec_type") == "audio"), None)
+    breit, hoch = int(vid.get("width") or 0), int(vid.get("height") or 0)
+    p("Hochformat", hoch > breit > 0, True, "%dx%d" % (breit, hoch))
+    p("Tonspur", aud is not None, True, "keine" if aud is None else "vorhanden")
+
+    lufs = _lautheit(video)
+    if lufs is None:
+        p("Lautheit", True, False, "nicht messbar")
+    else:
+        p("Lautheit", QC_MIN_LUFS <= lufs <= QC_MAX_LUFS, False,
+          "%.1f LUFS (Fenster %.0f bis %.0f)" % (lufs, QC_MIN_LUFS, QC_MAX_LUFS))
+
+    # Der Fall vom 06.08.: kleine Facecam, nichts dahinter, 62 Sekunden Rahmen.
+    leer = _leerer_rahmen(s["layers"], s["frames"]) / FPS
+    p("Kein leerer Rahmen", leer < 2.0, True, "%.1fs mit leerem Grund" % leer)
+
+    eigene = [l for l in s["layers"] if not _ist_pflicht(l)]
+    p("Es steht etwas im Bild", len(eigene) >= 1, True,
+      "%d Ebenen ausser Facecam und Untertiteln" % len(eigene))
+
+    draussen = []
+    for l in eigene:
+        t = l.get("transform") or {}
+        x, y = float(t.get("x", 0)), float(t.get("y", 0))
+        w, h = float(t.get("w", 1)), float(t.get("h", 1))
+        if _ist_uebernahme(l):
+            continue
+        if x < -0.01 or y < -0.01 or x + w > 1.01 or y + h > 1.01:
+            draussen.append(l["id"])
+    p("Nichts ragt heraus", not draussen, False, ", ".join(draussen[:5]))
+
+    cap = next((l for l in s["layers"]
+                if (l.get("source") or {}).get("kind") == "captions"), None)
+    chunks = ((cap or {}).get("source") or {}).get("chunks") or []
+    p("Untertitel vorhanden", bool(chunks), True, "%d Bloecke" % len(chunks))
+
+    if plan:
+        gebaut = {int(round(l["from"] / FPS)) for l in eigene}
+        offen = [i for i, a in enumerate(plan.get("abschnitte") or [])
+                 if _komposition(a) not in OHNE_MATERIAL
+                 and not any(abs(g - float(a.get("von") or 0)) < 1.5 for g in gebaut)]
+        p("Jeder gebaute Abschnitt hat eine Ebene", not offen, False,
+          "offen: " + ", ".join(str(i) for i in offen[:6]))
+
+    hart_offen = sum(1 for x in punkte if x["hart"] and not x["ok"])
+    weich = sum(1 for x in punkte if not x["hart"] and not x["ok"])
+    log.info("[QC] %d Punkte, %d hart offen, %d weich offen",
+             len(punkte), hart_offen, weich)
+    return {"ok": hart_offen == 0, "punkte": punkte,
+            "hart_offen": hart_offen, "weich_offen": weich}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11771,6 +12582,12 @@ SKELETTE = {
     "ablauf": "<div class='wrap'><div class='schritt aktiv'></div><div class='schritt'></div>"
               "<div class='schritt'></div></div>",
     "titel": "<div class='wrap'><div class='zeile e1'></div><div class='zeile e2'></div></div>",
+    "befund": "<div class='wrap'><div class='kicker'></div><div class='liste'>"
+              "<span class='befund gut'></span><span class='befund grenze'></span>"
+              "</div><div class='geprueft'></div></div>",
+    "marke": "<div class='wrap'><div class='kachel_reihe'><span class='kachel'>"
+             "<svg class='lg'><use/></svg></span><div class='kachel_name'></div>"
+             "</div><div class='stuetze'></div></div>",
 }
 
 HTML_AGENT_SYS = """Du baust EIN einzelnes Grafikelement als HTML mit CSS und GSAP.
@@ -11889,11 +12706,19 @@ async def _html_pruefstand(markup: str, width: int, height: int, t_s: float,
         from playwright.async_api import async_playwright
     except ImportError:
         return {"ok": False, "grund": "Playwright fehlt"}
+    # Der Kommentar oben stimmte nicht: hier fehlten fx.css, fx.js und beide
+    # Sprites. Also mass der Pruefstand ein Layout OHNE die Effektklassen und
+    # zeigte im Vorschaubild ein leeres Kaestchen, wo im Video ein Icon steht —
+    # der Gestalter gab gruenes Licht fuer etwas, das er nie gesehen hatte.
+    _fx_css = FX_CSS.read_text(encoding="utf-8") if FX_CSS.exists() else ""
+    _fx_js = FX_JS.read_text(encoding="utf-8") if FX_JS.exists() else ""
     page_html = (
         "<!doctype html><html><head><meta charset='utf-8'><style>"
         "html,body{margin:0;padding:0;background:transparent;overflow:hidden;"
-        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}</style></head>"
-        f"<body>{markup}</body></html>"
+        f"width:{width}px;height:{height}px}}*{{box-sizing:border-box}}</style>"
+        f"<style>{_fx_css}</style></head>"
+        f"<body>{_icon_sprite(markup)}{_logo_sprite(markup)}{markup}"
+        f"<script>{KEIN_ZEIGER_JS}</script><script>{_fx_js}</script></body></html>"
     )
     job = Path(f"/tmp/htmlagent_{uuid.uuid4().hex[:8]}")
     job.mkdir(parents=True, exist_ok=True)
@@ -12064,16 +12889,18 @@ gestellt, nichts zittert.
 ZAHLEN UND SCHRIFT
   <span data-count="70" data-count-suffix=" Shops">0</span>  zaehlt hoch
   <span class="decrypt" data-text="LIMIT">LIMIT</span>       Zeichen wuerfeln sich
-  <span class="blur-text">Zeile</span>                       aus der Unschaerfe
+  <p data-blur-text>Zeile</p>                                aus der Unschaerfe
   <span class="shiny">Zeile</span>                           Licht wandert durch
   <span class="gradient-text">Zeile</span>                   Verlauf wandert
-  <span class="circular-text">…</span>  <span class="text-pressure">…</span>
+  ACHTUNG: blur-text ist ein ATTRIBUT (data-blur-text), keine Klasse. Als
+  Klasse geschrieben passiert nichts — lautlos, das Element steht dann still.
 
 RAHMEN, KARTEN, AUFTRITT
   <div class="beam">…</div>        Lichtpunkt laeuft am Rahmen entlang
   <button class="star">…</button>  Sternenrand
   <div class="bcards">…</div>      Kinder federn nacheinander herein
-  <div class="card-lift-hover">…</div>   <div class="glass-icons">…</div>
+  <div data-reveal>…</div>         schiebt sich herein
+  <div data-stagger>…</div>        Kinder nacheinander
   <button class="cta" data-pulse>…</button>
 
 FLAECHEN — nur als Hintergrund, nie ueber Text
@@ -12081,10 +12908,41 @@ FLAECHEN — nur als Hintergrund, nie ueber Text
   <div class="dot-grid"></div>   <div class="dark-veil"></div>
   <div class="silk"></div>       <div class="waves"></div>
 
+NICHTS ANDERES. Was hier nicht steht, gibt es in der Bibliothek nicht — ein
+erfundener Klassenname faellt nicht auf, er tut einfach nichts. Alles, was
+auf :hover reagiert, ist hier ebenfalls tot: es zeigt nie jemand mit der Maus
+auf ein Video.
+
 ICONS — 1100 Stueck, als Sprite in der Seite
   <svg class="ic" width="48" height="48"><use href="#ic-NAME"/></svg>
   Die Farbe kommt aus currentColor. Namen (Auszug, es gibt viel mehr):
 {ICONS}
+
+MARKEN-LOGOS — 3453 echte Logos, dasselbe Verfahren
+  <svg viewBox="0 0 24 24"><use href="#lg-SLUG"/></svg>
+  Redet er von einem Werkzeug, steht dessen LOGO da, kein generisches Zahnrad.
+  Welche Slugs es fuer diesen Auftrag gibt, steht weiter unten unter MARKEN.
+  Ein Logo, das nicht in dieser Liste steht, gibt es nicht — erfinde keinen
+  Slug, sonst bleibt ein leerer Kasten stehen.
+
+DIE APP-ICON-KACHEL — der wiederkehrende Held
+  <span class="kachel" style="--marke:#EA4B71">
+    <svg class="lg" viewBox="0 0 24 24"><use href="#lg-n8n"/></svg></span>
+  Abgerundetes Quadrat, Schatten, ein Ring der einmal nach aussen laeuft. Das
+  Logo gehoert HINEIN, nicht daneben: eine Kachel liest sich als App, ein
+  freistehendes Logo als Aufkleber. Groesse ueber --kachel, Markenfarbe ueber
+  --marke (nur fuer das Logo erlaubt, sonst gelten die Markentoken des Kanals).
+  Steht ein Werkzeug im Mittelpunkt, ist die Kachel das Erste, was man sieht.
+
+STATUSMARKEN — Zustand, nicht Dekoration
+  <span class="mark gut"><svg viewBox="0 0 24 24">
+    <path d="M5 12.5 L10 17.5 L19 6.5" style="--len:26"/></svg></span>
+  Klassen: gut (gruener Haken), grenze (rotes X), warnung. Die Marke zeichnet
+  sich selbst. An Aufzaehlungen: <div class="zeile gut">, an Chips:
+  <span class="befund grenze">…</span>, als Siegel: <span class="geprueft">.
+  BINDUNG: gruen heisst "das geht", rot heisst "das geht nicht". Nie nach
+  Gefallen faerben — eine rote Marke an etwas Gutem macht die ganze Grafik
+  unlesbar.
 
 GEGEN LEERE BILDER — das ist der haeufigste Fehler
 Ein Element mit einer Ueberschrift und einer grauen Zeile darunter ist kein
@@ -12103,8 +12961,16 @@ REGELN
 - Icons sparsam: eines, das traegt, nicht fuenf, die dekorieren."""
 
 
-FX_KLASSEN = ("decrypt", "blur-text", "shiny", "gradient-text", "beam",
-              "star", "bcards", "aurora", "dot-grid")
+# Woran man erkennt, dass sich ueberhaupt etwas bewegt. NUR Namen, auf die
+# fx.js oder fx.css wirklich hoeren — vorher stand hier "blur-text" als Klasse,
+# und die Bibliothek hoert auf das ATTRIBUT data-blur-text. Also war die
+# Verdrahtung ein Nullbefehl und die Pruefung meldete trotzdem gruen: der
+# klassische stille Ausfall. Gegengeprueft an den querySelectorAll-Aufrufen in
+# vendor/motion-anything/fx.js.
+FX_KLASSEN = ("data-blur-text", "decrypt", "shiny", "gradient-text", "beam",
+              "star", "bcards", "aurora", "dot-grid", "waves", "silk",
+              "dark-veil", "data-reveal", "data-stagger", "data-kinetic",
+              "data-fade", "data-pulse")
 
 
 def _fx_verdrahten(markup: str) -> tuple:
@@ -12135,19 +13001,16 @@ def _fx_verdrahten(markup: str) -> tuple:
                 getan.append("count-up auf %s" % roh)
             except ValueError:
                 pass
-    if not any(("class=" in markup and k in markup) for k in FX_KLASSEN):
+    # Die alte Bedingung verlangte zusaetzlich "class=" irgendwo im Markup —
+    # damit galt ein Element mit einer einzigen Klasse schon als bewegt.
+    if not any(k in markup for k in FX_KLASSEN):
         # Nichts bewegt sich. Die erste Textzeile kommt wenigstens herein.
         m = re.search(r"<(h1|h2|h3|div|span|p)([^>]*)>([^<>]{3,})<", markup)
         if m:
-            attrs = m.group(2) or ""
-            if "class=" in attrs:
-                neu_attrs = re.sub(r'class="([^"]*)"', r'class="\1 blur-text"',
-                                   attrs, count=1)
-            else:
-                neu_attrs = attrs + ' class="blur-text"'
-            markup = (markup[:m.start()] + "<" + m.group(1) + neu_attrs + ">"
+            markup = (markup[:m.start()] + "<" + m.group(1)
+                      + (m.group(2) or "") + " data-blur-text>"
                       + m.group(3) + "<" + markup[m.end():])
-            getan.append("blur-text auf die erste Zeile")
+            getan.append("data-blur-text auf die erste Zeile")
     return markup, getan
 
 
@@ -12161,7 +13024,7 @@ def _fx_fehlt(markup: str, auftrag: dict) -> str:
                 '<span data-count="70" data-count-suffix=" Shops">0</span>')
     if not any(k in markup for k in FX_KLASSEN) and "data-count" not in markup:
         return ("Nichts in diesem Element bewegt sich. Nimm mindestens einen "
-                "Effekt aus dem Katalog — blur-text, decrypt, shiny, beam, "
+                "Effekt aus dem Katalog — data-blur-text, decrypt, shiny, beam, "
                 "bcards. Ein Standbild ist eine Folie.")
     return ""
 
@@ -12210,9 +13073,15 @@ def _fremde_farben(markup: str, farben: dict) -> list:
     return sorted(set(fremd))[:8]
 
 
-def _html_agent_prompt(art: str, client_id: str) -> str:
+def _html_agent_prompt(art: str, client_id: str, marken: Optional[list] = None) -> str:
     teile = [HTML_AGENT_SYS.format(min_px=HTML_AGENT_MIN_PX), "", HTML_AGENT_GESTALTUNG,
              "", HTML_AGENT_REZEPTE]
+    if marken:
+        teile += ["", "MARKEN IN DIESEM AUFTRAG — genau diese Slugs gibt es:",
+                  "\n".join("  #lg-%-22s %s   Markenfarbe %s"
+                            % (m["slug"], m["titel"], m["farbe"]) for m in marken),
+                  "Wird eine davon genannt, gehoert ihr Logo ins Bild — in eine "
+                  "Kachel, nicht freistehend."]
     skelett = SKELETTE.get(art)
     if skelett:
         teile += ["", f"SKELETT FUER '{art}' — Struktur, keine Gestaltung:", skelett]
@@ -12266,11 +13135,25 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
     t_mitte = round(dauer_s / 2.0, 2)
 
     tools = _html_agent_tools()
-    sys_p = _html_agent_prompt(art, client_id)
+    # Welche Marken in DIESEM Auftrag vorkommen — nicht 3453 Namen in den Prompt.
+    _marken = _marken_im_text(" ".join(
+        str((auftrag or {}).get(f) or "")
+        for f in ("hauptwert", "beschriftung", "einordnung")))
+    sys_p = _html_agent_prompt(art, client_id, _marken)
     try:
         _marken_farben = _tpl_colors(_load_template(client_id, None))
     except Exception:
         _marken_farben = {}
+    # Der Farbwaechter kannte nur die Tokens aus der Datenbank. Damit haette er
+    # den gruenen Haken abgelehnt, den das Kit selbst setzt — und jedes Logo in
+    # seiner echten Markenfarbe gleich mit. Beides ist hier ausdruecklich erlaubt.
+    try:
+        _marken_farben = {**_marken_farben, **kit.status_farben(client_id)}
+    except Exception:
+        pass
+    for _m in _marken:
+        if _m.get("farbe") and len(_m["farbe"]) == 7:
+            _marken_farben["logo_" + _m["slug"]] = _m["farbe"]
     _regie = (auftrag or {}).pop("regie", None) if isinstance(auftrag, dict) else None
     _platz = (auftrag or {}).pop("platz", None) if isinstance(auftrag, dict) else None
     _geruest = (auftrag or {}).pop("geruest", "") if isinstance(auftrag, dict) else ""
@@ -13289,7 +14172,8 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False) -> tuple:
 
     w2 = transcribe_audio(current)
     if w2:
-        keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6, pad=0.12)
+        keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6,
+                                        pad=0.12, betonung=_betont(w2))
         if len(keeps2) > 1:
             p2 = job_dir / "phase2.mp4"
             if _trim_dead_air(current, keeps2, p2):

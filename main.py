@@ -6,6 +6,7 @@ import logging
 import subprocess
 import math
 import asyncio
+import kit
 import json
 import copy
 from datetime import datetime, timezone
@@ -10790,10 +10791,39 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         # genau das Halbpassende, das die Ausfuehrung nicht bauen soll.
         return {"quelle_art": "", "grund": "vorhandenes Material nicht gefunden"}
 
+    # ── DER BAUKASTEN ────────────────────────────────────────────────────
+    # Kennt das Kit die Art, wird nichts bestellt: das Layout steht, der Plan
+    # liefert die Worte. Kein Modellaufruf, keine 0,20 USD, und es kann nicht
+    # "klinisch leer" aussehen, weil das Aussehen aus dem Brand Kit kommt.
+    kasten = (KOMP_BOXEN.get(k) or (None, None))[1] or {"w": 1, "h": 1}
+    w_px = max(200, int(round(float(kasten.get("w", 1)) * W)))
+    h_px = max(160, int(round(float(kasten.get("h", 1)) * H)))
+    art = str(b.get("art_element") or "").lower()
+    if art in kit.KANN:
+        auftrag = _auftrag_aus_braucht(a)
+        zeilen = [z for z in [auftrag.get("hauptwert"), auftrag.get("beschriftung"),
+                              auftrag.get("einordnung")] if z]
+        if isinstance(b.get("text"), list):
+            zeilen = [str(z).strip() for z in b["text"] if str(z).strip()]
+        markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or "")},
+                          s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S))
+        if markup:
+            try:
+                res = await tool_render_html(RenderHtmlRequest(
+                    markup=markup, width=w_px, height=h_px,
+                    seconds=min(sek, HTML_TOOL_MAX_S)))
+                if res.get("url"):
+                    log.info("[BAU] %d Kit-Komponente '%s' (%dx%d)", i, art, w_px, h_px)
+                    return {"quelle_art": "kit", "kosten": 0.0,
+                            "ueberlauf": bool(res.get("ueberlauf")),
+                            "sekunden_material": float(res.get("seconds") or sek),
+                            "layer_source": {"kind": "video", "url": res["url"],
+                                             "transparent": True}}
+            except Exception as exc:
+                log.warning("[BAU] %d Kit '%s' gescheitert, gehe an den Gestalter: %s",
+                            i, art, str(exc)[:140])
+
     try:
-        kasten = (KOMP_BOXEN.get(k) or (None, None))[1] or {"w": 1, "h": 1}
-        w_px = max(200, int(round(float(kasten.get("w", 1)) * W)))
-        h_px = max(160, int(round(float(kasten.get("h", 1)) * H)))
         # _html_subagent ruft intern asyncio.run fuer den Pruefstand. Direkt
         # aus diesem async-Endpoint heraus wirft das "cannot be called from a
         # running event loop" — im ersten Durchstich sind daran zwei

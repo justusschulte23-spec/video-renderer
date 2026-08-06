@@ -9602,6 +9602,16 @@ ER IST DA, ABER ETWAS PASSIERT
   flaeche_kippt   Vollbild, der Hintergrund wechselt mit der Aussage
                   → wenn die Stimmung umschlaegt: Problem → Loesung
 
+WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
+- Ein Beleg gehoert an die Stelle, an der er DAVON REDET. Nicht davor, nicht
+  danach. Das Wort-Transkript sagt dir die Sekunde.
+- Verteil die gebauten Abschnitte ueber die ganze Laufzeit. Mehr als 12
+  Sekunden am Stueck ohne ein gebautes Element ist ein Loch, egal wie gut der
+  Rest ist. Anfang und Ende zaehlen mit.
+- Der HOOK ist die wichtigste Stelle. Fuenf Sekunden nacktes Gesicht sind dort
+  verschenkt: punch auf das staerkste Wort, overlay_wandert mit der Zahl,
+  flaeche_kippt auf die Aussage.
+
 DIE FRAGE JE ABSCHNITT
 Nicht "ist er da oder weg", sondern: Was passiert hier, und wo gehoert er
 dabei hin?
@@ -9903,6 +9913,97 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     return fehler
 
 
+MAX_LUECKE_S = 12.0        # so lange darf nichts Gebautes zu sehen sein
+BELEG_FENSTER_S = 2.5      # so nah muss ein Beleg an seinem Wort liegen
+HOOK_S = 6.0               # der erste Abschnitt
+
+
+def _wortzeit(worte: list, begriff: str) -> float:
+    """Wann faellt dieser Begriff? Ueber die kennzeichnendsten Bestandteile,
+    nicht ueber die ganze Zeichenkette — gesprochen wird selten, wie es in der
+    Doku steht."""
+    teile = [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9]{4,}", str(begriff or ""))]
+    if not teile or not worte:
+        return -1.0
+    folge = [str(w.get("word", "")).lower().strip(".,:;!?") for w in worte]
+    for t in teile:
+        for i, w in enumerate(folge):
+            if t in w or w in t:
+                return float(worte[i].get("start") or 0)
+    return -1.0
+
+
+def _gebaut(a: dict) -> bool:
+    """Traegt dieser Abschnitt etwas Sichtbares ausser ihm selbst?"""
+    return _komposition(a) not in ("vollbild", "punch", "drift")
+
+
+def _plan_verankern(plan: dict, s: dict) -> list:
+    """Die drei Regeln, die im letzten Video gefehlt haben.
+
+    Sie sind der Unterschied zwischen einem Plan und einer Aufzaehlung: WANN
+    etwas kommt, entscheidet mehr als WAS. Im Lauf 73d3fc3bb1d7 lag der Beleg
+    zur n8n-Doku bei Sekunde 5, gesprochen wird davon bei Sekunde 50; die
+    ersten 28 Sekunden trugen kein einziges gebautes Element; und der Hook war
+    nacktes Vollbild."""
+    ab = plan.get("abschnitte") or []
+    if not ab:
+        return []
+    fehler = []
+    worte = s.get("words") or []
+    belege = {str(b.get("begriff") or "").lower(): b for b in (s.get("belege") or [])}
+
+    # (1) Ein Beleg gehoert an die Stelle, an der sein Begriff faellt.
+    for i, a in enumerate(ab):
+        if _komposition(a) not in ("beleg", "durchforsten"):
+            continue
+        b = a.get("braucht") or {}
+        begriff = str(b.get("zeigt") or b.get("was") or "")
+        quelle = str(b.get("quelle") or "")
+        for schl, eintrag in belege.items():
+            if schl and (schl in begriff.lower() or _dateiname(eintrag.get("url", "")).lower() in quelle.lower()):
+                begriff = schl
+                break
+        t = _wortzeit(worte, begriff)
+        if t < 0:
+            continue
+        von, bis = float(a.get("von", 0)), float(a.get("bis", 0))
+        if not (von - BELEG_FENSTER_S <= t <= bis + BELEG_FENSTER_S):
+            fehler.append(
+                f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): der Beleg zu "
+                f"'{begriff[:40]}' steht dort, wo er NICHT davon redet. Gesagt "
+                f"wird es bei {t:.1f}s — dorthin gehoert der Abschnitt")
+
+    # (2) Keine Strecke ohne gebautes Element. Kopf und Schluss zaehlen mit.
+    dauer = float(s.get("duration") or 0) or float(ab[-1].get("bis", 0))
+    cursor, luecke, wo = 0.0, 0.0, 0.0
+    for a in ab:
+        if not _gebaut(a):
+            continue
+        if float(a.get("von", 0)) - cursor > luecke:
+            luecke, wo = float(a.get("von", 0)) - cursor, cursor
+        cursor = max(cursor, float(a.get("bis", 0)))
+    if dauer - cursor > luecke:
+        luecke, wo = dauer - cursor, cursor
+    if luecke > MAX_LUECKE_S:
+        fehler.append(
+            f"{luecke:.1f}s am Stueck ohne ein gebautes Element, ab {wo:.1f}s. "
+            f"Hoechstens {MAX_LUECKE_S:.0f}s — verteil sie ueber die ganze "
+            f"Laufzeit, nicht alles ans Ende")
+
+    # (3) Der Hook ist die wichtigste Stelle und darf keine nackte Facecam sein.
+    erst = ab[0]
+    if float(erst.get("bis", 0)) > HOOK_S and not _gebaut(erst) \
+            and _komposition(erst) not in ("punch",):
+        fehler.append(
+            f"Abschnitt 0 ({erst.get('von')}-{erst.get('bis')}s) ist der Hook und "
+            f"laeuft {float(erst.get('bis', 0)):.1f}s als '{_komposition(erst)}' "
+            f"ohne alles. Entweder kuerzer als {HOOK_S:.0f}s, oder gib ihm etwas: "
+            f"punch auf das staerkste Wort, overlay_wandert mit der Zahl, "
+            f"flaeche_kippt auf die Aussage")
+    return fehler
+
+
 def _plan_weich(plan: dict) -> list:
     """Maengel, die man beheben kann, ohne den Plan zurueckzugeben. Sie kosten
     keinen Lauf — die Ausfuehrung raeumt sie weg und schreibt es ins
@@ -10200,7 +10301,8 @@ def tool_plan(req: PlanRequest):
     uri = _gemini_upload(s["facecam_path"])
     kontext = _ad_kontext(s)
     plan, modell, tok = _gemini_plan_call(uri, AD_SYS + "\n\n" + kontext, modelle)
-    fehler = _plan_pruefen(plan, s["duration"], s.get("material") or [])
+    fehler = (_plan_pruefen(plan, s["duration"], s.get("material") or [])
+              + _plan_verankern(plan, s))
     runden = 1
     if fehler:
         # EINE Rueckgabe. Nicht drei — wer nach zwei Anlaeufen keinen regelfesten
@@ -10213,7 +10315,8 @@ def tool_plan(req: PlanRequest):
                 + "\n\nHier ist er:\n" + json.dumps(plan, ensure_ascii=False)[:6000]
                 + "\n\nSchreib ihn neu. Aendere nur, was noetig ist.")
         plan2, modell, tok2 = _gemini_plan_call(uri, nach, modelle)
-        fehler2 = _plan_pruefen(plan2, s["duration"], s.get("material") or [])
+        fehler2 = (_plan_pruefen(plan2, s["duration"], s.get("material") or [])
+                   + _plan_verankern(plan2, s))
         runden = 2
         tok = {k: tok.get(k, 0) + tok2.get(k, 0) for k in ("ein", "aus", "gesamt")}
         # Der zweite Plan gilt, wenn er besser ist — nicht automatisch.
@@ -10902,7 +11005,8 @@ async def _build_impl(req: BuildRequest):
     plan = req.plan or s.get("plan")
     if not plan or not (plan.get("abschnitte") or []):
         raise HTTPException(status_code=400, detail="kein Plan zu dieser Sitzung")
-    fehler = _plan_pruefen(plan, s["duration"], s.get("material") or [])
+    fehler = (_plan_pruefen(plan, s["duration"], s.get("material") or [])
+              + _plan_verankern(plan, s))
     if fehler:
         raise HTTPException(status_code=422, detail={
             "text": "Plan verletzt die harten Regeln — Stufe 1 wiederholen",
@@ -11607,6 +11711,69 @@ REGELN DAZU
   je Element gelten weiter."""
 
 
+FX_KLASSEN = ("decrypt", "blur-text", "shiny", "gradient-text", "beam",
+              "star", "bcards", "aurora", "dot-grid")
+
+
+def _fx_verdrahten(markup: str) -> tuple:
+    """Bewegung wird VERDRAHTET, nicht erbeten.
+
+    Der Katalog stand im Prompt und wurde nicht benutzt — dasselbe Muster wie
+    bei Farben, Zeilenlaenge und Anzeigetext: solange es eine Bitte ist,
+    passiert nichts. Also greift das System selbst zu:
+      - die erste Zahl bekommt count-up (eine Zahl, die dasteht, ist verschenkt)
+      - die erste Textzeile bekommt blur-text, wenn sonst gar nichts laeuft
+    Gibt (markup, was_getan) zurueck."""
+    getan = []
+    if "data-count" not in markup:
+        # Erste Zahl in einem Textknoten. Bewusst konservativ: nur ein reiner
+        # Zahlenknoten, keine Zahl mitten im Satz.
+        m = re.search(r">(\s*)(\d[\d.,]{0,9})([^<]{0,18})<", markup)
+        if m:
+            roh = m.group(2)
+            zahl = roh.replace(".", "").replace(",", ".")
+            rest = (m.group(3) or "").rstrip()
+            try:
+                float(zahl)
+                ersatz = ('><span data-count="%s"%s>0</span>%s<'
+                          % (zahl,
+                             (' data-count-suffix="%s"' % rest) if rest else "",
+                             ""))
+                markup = markup[:m.start()] + ersatz + markup[m.end():]
+                getan.append("count-up auf %s" % roh)
+            except ValueError:
+                pass
+    if not any(("class=" in markup and k in markup) for k in FX_KLASSEN):
+        # Nichts bewegt sich. Die erste Textzeile kommt wenigstens herein.
+        m = re.search(r"<(h1|h2|h3|div|span|p)([^>]*)>([^<>]{3,})<", markup)
+        if m:
+            attrs = m.group(2) or ""
+            if "class=" in attrs:
+                neu_attrs = re.sub(r'class="([^"]*)"', r'class="\1 blur-text"',
+                                   attrs, count=1)
+            else:
+                neu_attrs = attrs + ' class="blur-text"'
+            markup = (markup[:m.start()] + "<" + m.group(1) + neu_attrs + ">"
+                      + m.group(3) + "<" + markup[m.end():])
+            getan.append("blur-text auf die erste Zeile")
+    return markup, getan
+
+
+def _fx_fehlt(markup: str, auftrag: dict) -> str:
+    """Zweites Netz: was die Verdrahtung nicht greifen konnte, wird gemeldet."""
+    text = " ".join(str(auftrag.get(f) or "") for f in
+                    ("hauptwert", "beschriftung", "einordnung"))
+    if re.search(r"\d", text) and "data-count" not in markup:
+        return ("Im Auftrag steht eine Zahl, im Markup kein data-count. Eine "
+                "Zahl, die dasteht, ist verschenkt: "
+                '<span data-count="70" data-count-suffix=" Shops">0</span>')
+    if not any(k in markup for k in FX_KLASSEN) and "data-count" not in markup:
+        return ("Nichts in diesem Element bewegt sich. Nimm mindestens einen "
+                "Effekt aus dem Katalog — blur-text, decrypt, shiny, beam, "
+                "bcards. Ein Standbild ist eine Folie.")
+    return ""
+
+
 def _fremde_farben(markup: str, farben: dict) -> list:
     """Jeder Farbwert im Markup, der weder Marke noch Graustufe ist.
 
@@ -11619,7 +11786,19 @@ def _fremde_farben(markup: str, farben: dict) -> list:
         if isinstance(w, str) and w.startswith("#"):
             erlaubt.add(w.lower()[:7])
     fremd = []
-    for roh in re.findall(r"#[0-9a-fA-F]{3,8}", markup or ""):
+    # Benannte Farben rutschten durch: "Cloud Code" stand in GOLD im Bild,
+    # weil der Waechter nur Hex kannte — und der Hex-Teil war TOT: im
+    # Ausdruck stand ein echtes Backspace-Zeichen (0x08) statt \b, weil ich
+    # "\b" in einem normalen String geschrieben habe. Er hat nie etwas
+    # gefunden. Deshalb kam auch kein Cyan je zurueck.
+    for name in ("gold", "cyan", "aqua", "magenta", "fuchsia", "lime", "teal",
+                 "orange", "coral", "salmon", "crimson", "tomato", "khaki",
+                 "olive", "maroon", "navy", "turquoise", "violet", "pink",
+                 "yellow", "red", "green", "blue", "brown", "beige", "ivory"):
+        if re.search(r"(?:color|background|fill|stroke)[^;\"']{0,24}\b" + name
+                     + r"\b", markup or "", re.I):
+            fremd.append(name)
+    for roh in re.findall(r"#[0-9a-fA-F]{3,8}\b", markup or ""):
         h = roh.lower()
         if len(h) == 4:                      # #abc → #aabbcc
             h = "#" + "".join(c * 2 for c in h[1:])
@@ -11728,6 +11907,9 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
                 return {"ok": False, "abgelehnt": True,
                         "fehler": f"{HTML_AGENT_RUNDEN} Runden sind aufgebraucht. "
                                   f"Ruf fertig auf — die letzte Fassung wird genommen."}
+            mk, verdrahtet = _fx_verdrahten(mk)
+            if verdrahtet:
+                log.info("[HTMLAGENT] verdrahtet: %s", ", ".join(verdrahtet))
             fremd = _fremde_farben(mk, _marken_farben)
             if fremd:
                 zustand["runden"] += 1
@@ -11742,6 +11924,10 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             if not pr.get("ok"):
                 return {"ok": False, "fehler": pr.get("grund", "Pruefstand kaputt")}
             pr["fehlender_inhalt"] = _fehlender_inhalt(auftrag, pr.get("text_ende", ""))
+            fehlt = _fx_fehlt(mk, auftrag)
+            if fehlt:
+                zustand["runden"] += 1
+                return {"ok": False, "runde": zustand["runden"], "fehler": fehlt}
             zustand["markup"] = mk
             zustand["pruefung"] = pr
             zustand["runden"] += 1

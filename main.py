@@ -11414,6 +11414,91 @@ async def _build_impl(req: BuildRequest):
     return aus
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DER TRIGGER — eine Adresse fuer die ganze Kette
+#
+# Bisher musste jemand von aussen drei Aufrufe hintereinander machen und die
+# session_id durchreichen: erst /tool/plan, dann /tool/build, dann pollen. Das
+# geht per Hand, aber n8n soll nicht wissen muessen, wie unsere Stufen heissen.
+# Hier ist EIN Aufruf: Facecam rein, Video raus.
+# ══════════════════════════════════════════════════════════════════════════════
+class VideoRequest(BaseModel):
+    facecam:    str = ""
+    session_id: str = ""          # vorhandene Sitzung weiterbauen
+    client_id:  str = "justus"
+    briefing:   Optional[dict] = None
+    material:   Optional[list] = None
+    rendern:    bool = True
+    modell:     str = ""
+
+
+VIDEO_JOBS: dict = {}
+_video_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _video_job(job_id: str, req: "VideoRequest"):
+    """Stufe 1 und Stufe 2 hintereinander, in einem eigenen Thread mit eigener
+    Schleife. Der Zwischenstand steht im Job, damit ein Aufrufer sieht, woran
+    es haengt, statt nur auf ein Ergebnis zu warten."""
+    AKTIVER_CLIENT.set(req.client_id or "")
+    t0 = time.time()
+    try:
+        VIDEO_JOBS[job_id] = {"status": "processing", "schritt": "plan"}
+        plan_res = tool_plan(PlanRequest(
+            facecam=req.facecam, session_id=req.session_id,
+            client_id=req.client_id, briefing=req.briefing,
+            material=req.material, modell=req.modell))
+        sid = plan_res["session_id"]
+        VIDEO_JOBS[job_id] = {
+            "status": "processing", "schritt": "bau", "session_id": sid,
+            "plan": plan_res.get("plan"),
+            "regelverstoesse": plan_res.get("regelverstoesse"),
+            "hinweise": plan_res.get("hinweise"),
+            "kosten_plan_usd": plan_res.get("kosten_usd")}
+        bau = asyncio.run(_build_impl(BuildRequest(
+            session_id=sid, rendern=req.rendern)))
+        VIDEO_JOBS[job_id] = {
+            "status": "done", "schritt": "fertig", "session_id": sid,
+            "bilanz": bau.get("bilanz"),
+            "url": (bau.get("render") or {}).get("url"),
+            "abweichungen": bau.get("abweichungen"),
+            "protokoll": bau.get("protokoll"),
+            "plan": plan_res.get("plan"),
+            "kosten_gesamt_usd": bau.get("kosten_gesamt_usd"),
+            "kosten_gesamt_eur": bau.get("kosten_gesamt_eur"),
+            "deckel_eur": bau.get("deckel_eur"),
+            "sekunden": round(time.time() - t0, 1)}
+        log.info("[VIDEO] %s fertig in %.0fs — %s", job_id[:8], time.time() - t0,
+                 bau.get("bilanz"))
+    except HTTPException as exc:
+        VIDEO_JOBS[job_id] = {"status": "error", "schritt": VIDEO_JOBS.get(job_id, {}).get("schritt"),
+                              "error": str(exc.detail)[:600]}
+        log.error("[VIDEO] %s: %s", job_id[:8], str(exc.detail)[:200])
+    except Exception as exc:
+        log.exception("[VIDEO] %s", job_id)
+        VIDEO_JOBS[job_id] = {"status": "error", "error": str(exc)[:600]}
+
+
+@app.post("/tool/video")
+def tool_video(req: VideoRequest):
+    """EIN Aufruf: Facecam rein, Video raus. Antwortet sofort mit job_id."""
+    if not (req.facecam or req.session_id):
+        raise HTTPException(status_code=400, detail="facecam oder session_id noetig")
+    job_id = str(uuid.uuid4())
+    VIDEO_JOBS[job_id] = {"status": "processing", "schritt": "start"}
+    _video_executor.submit(_video_job, job_id, req)
+    return {"ok": True, "job_id": job_id, "status": "processing",
+            "status_url": f"/tool/video/status/{job_id}"}
+
+
+@app.get("/tool/video/status/{job_id}")
+def tool_video_status(job_id: str):
+    j = VIDEO_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="unbekannter Job")
+    return j
+
+
 class TurnStatsRequest(BaseModel):
     client_id: str = ""
     n:         int = 30

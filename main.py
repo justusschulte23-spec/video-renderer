@@ -11133,12 +11133,23 @@ async def _build_impl(req: BuildRequest):
     plan = req.plan or s.get("plan")
     if not plan or not (plan.get("abschnitte") or []):
         raise HTTPException(status_code=400, detail="kein Plan zu dieser Sitzung")
+    # Ein hakender Abschnitt darf nicht den ganzen Plan wegwerfen. Beim Planen
+    # bleiben die Regeln hart (dafuer gibt es die Rueckgabe an den Art
+    # Director); beim BAUEN wird der betroffene Abschnitt vollbild und steht
+    # als Abweichung im Protokoll. Zweimal hat eine einzelne Zeile hier einen
+    # ganzen Lauf gekostet — Plan bezahlt, nichts gebaut.
     fehler = (_plan_pruefen(plan, s["duration"], s.get("material") or [])
               + _plan_verankern(plan, s))
-    if fehler:
-        raise HTTPException(status_code=422, detail={
-            "text": "Plan verletzt die harten Regeln — Stufe 1 wiederholen",
-            "regelverstoesse": fehler})
+    kaputt = {}
+    for f in fehler:
+        m = re.match(r"Abschnitt (\d+)", f)
+        if m:
+            kaputt.setdefault(int(m.group(1)), f)
+        else:
+            log.warning("[BAU] Planmangel (nicht abschnittsgebunden): %s", f)
+    if kaputt:
+        log.warning("[BAU] %d Abschnitt(e) verletzen Regeln und werden vollbild",
+                    len(kaputt))
     gekuerzt = _text_kuerzen(plan)
     if gekuerzt:
         log.warning("[BAU] %d Textzeile(n) auf %d Zeichen gekuerzt",
@@ -11169,6 +11180,10 @@ async def _build_impl(req: BuildRequest):
         kopf = {"nr": i, "von": a.get("von"), "bis": a.get("bis"),
                 "komposition": _komposition(a), "block": a.get("block", "")}
         try:
+            if i in kaputt:
+                protokoll.append(_abweichung(kopf, _komposition(a), "vollbild",
+                                             "Planmangel: " + kaputt[i][:150]))
+                continue
             if i in zurueckgestuft:
                 protokoll.append(_abweichung(kopf, _komposition(a), "vollbild",
                                              zurueckgestuft[i]))

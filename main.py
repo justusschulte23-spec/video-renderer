@@ -9775,11 +9775,11 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
                           f"ohne Zahl — das ist eine Folie. Entweder Bewegung, "
                           f"Zahl oder Vergleich, oder weglassen: die Captions "
                           f"zeigen den Satz ohnehin")
-        for zeile in (txt if isinstance(txt, list) else [txt] if txt else []):
-            if len(str(zeile)) > TEXT_ZEILE_MAX:
-                fehler.append(f"Abschnitt {i} ({von:.1f}s): Textzeile hat "
-                              f"{len(str(zeile))} Zeichen, hoechstens "
-                              f"{TEXT_ZEILE_MAX} — davon bleibt nichts lesbar")
+        # Eine zu lange Zeile ist KEIN harter Verstoss mehr. Sie hat einen
+        # ganzen Lauf gekostet: 41 Zeichen statt 40, Bau abgelehnt, nichts
+        # gebaut. Eine Regel, die etwas ablehnt, das funktioniert, ist
+        # schlimmer als keine — die Laenge steht jetzt in _plan_weich und
+        # wird beim Bauen gekuerzt.
 
     if abs(ende - dauer) > 1.0:
         fehler.append(f"der Plan endet bei {ende:.1f}s, das Video bei {dauer:.1f}s")
@@ -9811,6 +9811,43 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
                           f"(in einen Abschnitt legen oder in 'material_abgelehnt' "
                           f"mit Grund)")
     return fehler
+
+
+def _plan_weich(plan: dict) -> list:
+    """Maengel, die man beheben kann, ohne den Plan zurueckzugeben. Sie kosten
+    keinen Lauf — die Ausfuehrung raeumt sie weg und schreibt es ins
+    Protokoll."""
+    aus = []
+    for i, a in enumerate(plan.get("abschnitte") or []):
+        t = (a.get("braucht") or {}).get("text")
+        zeilen = (t if isinstance(t, list) else
+                  list(t.values()) if isinstance(t, dict) else [t] if t else [])
+        for z in zeilen:
+            if len(str(z)) > TEXT_ZEILE_MAX:
+                aus.append(f"Abschnitt {i}: Textzeile {len(str(z))} Zeichen, "
+                           f"wird auf {TEXT_ZEILE_MAX} gekuerzt")
+    return aus
+
+
+def _text_kuerzen(plan: dict) -> int:
+    """Zu lange Zeilen kappen. An der Wortgrenze, damit kein halbes Wort steht."""
+    n = 0
+    for a in plan.get("abschnitte") or []:
+        b = a.get("braucht") or {}
+        t = b.get("text")
+        if not isinstance(t, list):
+            continue
+        neu_ = []
+        for z in t:
+            z = str(z)
+            if len(z) > TEXT_ZEILE_MAX:
+                kurz = z[:TEXT_ZEILE_MAX].rsplit(" ", 1)[0] or z[:TEXT_ZEILE_MAX]
+                neu_.append(kurz)
+                n += 1
+            else:
+                neu_.append(z)
+        b["text"] = neu_
+    return n
 
 
 class PlanRequest(BaseModel):
@@ -9878,7 +9915,7 @@ def tool_plan(req: PlanRequest):
              s["id"], len(plan.get("abschnitte") or []), len(fehler), modell,
              kosten, dauer_s)
     return {"ok": True, "session_id": s["id"], "modell": modell, "runden": runden,
-            "regelverstoesse": fehler, "plan": plan,
+            "regelverstoesse": fehler, "hinweise": _plan_weich(plan), "plan": plan,
             "tokens": tok, "kosten_usd": kosten, "sekunden": dauer_s,
             "duration": round(s["duration"], 2), "facecam_url": s["face_url"]}
 
@@ -10524,6 +10561,10 @@ async def _build_impl(req: BuildRequest):
         raise HTTPException(status_code=422, detail={
             "text": "Plan verletzt die harten Regeln — Stufe 1 wiederholen",
             "regelverstoesse": fehler})
+    gekuerzt = _text_kuerzen(plan)
+    if gekuerzt:
+        log.warning("[BAU] %d Textzeile(n) auf %d Zeichen gekuerzt",
+                    gekuerzt, TEXT_ZEILE_MAX)
 
     t0 = time.time()
     # Die Facecam gehoert wieder ganz ins Bild: der Plan sagt, WANN etwas

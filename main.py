@@ -71,10 +71,8 @@ BRAND_IMAGE_NEGATIVE = (
 
 # ── Brand colours (Justus defaults — used when no client template) ────────────
 AMETHYST      = (139, 92, 246)
-AMETHYST_DARK = (124, 58, 237)
 SILVER        = (192, 192, 192)
 BG            = (8, 8, 8)
-WHITE         = (255, 255, 255)
 
 # ── Multi-tenant template loader ──────────────────────────────────────────────
 SUPABASE_URL         = os.environ.get("SUPABASE_URL", "")
@@ -1191,75 +1189,6 @@ def scale_crop(src: Path, dest: Path, tw: int, th: int):
     ], "scale_crop")
 
 
-def build_broll_track(clips, target_duration, w=W, h=BROLL_H, job_dir=None):
-    prepared = []
-    total    = 0.0
-    for i, clip_path in enumerate(clips):
-        if not clip_path or not os.path.exists(str(clip_path)):
-            continue
-        if total >= target_duration:
-            break
-        clip_dur  = probe_duration(Path(clip_path))
-        remaining = target_duration - total
-        out = str(job_dir / f"broll_seg_{i}.mp4")
-        subprocess.run([
-            "ffmpeg", "-y", "-ss", "60", "-i", str(clip_path),
-            "-t", "180",
-            "-vf", (
-                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{h},"
-                "colorchannelmixer=rr=1.0:rg=0:rb=0.08:gr=0:gg=0.92:gb=0:br=0.06:bg=0:bb=1.0,"
-                "eq=contrast=1.08:brightness=-0.02:saturation=0.9"
-            ),
-            "-an", "-c:v", "libx264", "-crf", "20", "-preset", "medium", out
-        ], check=True)
-        actual = probe_duration(Path(out))
-        prepared.append(out)
-        total += actual
-        log.info("[BROLL] Clip %d: %.2fs | total: %.2fs / %.2fs", i+1, actual, total, target_duration)
-
-    if not prepared:
-        raise RuntimeError("No broll clips could be prepared")
-
-    if total < target_duration - 0.5:
-        gap    = target_duration - total
-        looped = str(job_dir / "broll_loop_fill.mp4")
-        subprocess.run([
-            "ffmpeg", "-y", "-stream_loop", "-1", "-i", prepared[-1],
-            "-t", str(gap), "-vf", "setpts=PTS-STARTPTS",
-            "-an", "-c:v", "libx264", "-crf", "20", "-preset", "medium", looped
-        ], check=True)
-        prepared.append(looped)
-
-    if len(prepared) == 1:
-        return prepared[0]
-
-    inputs    = []
-    for p in prepared:
-        inputs += ["-i", p]
-    durations = [probe_duration(Path(p)) for p in prepared]
-
-    if len(prepared) == 2:
-        offset     = durations[0] - 0.3
-        filter_str = f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={offset:.3f}[v]"
-    else:
-        d0, d1     = durations[0], durations[1]
-        filter_str = (
-            f"[0:v][1:v]xfade=transition=fade:duration=0.3:offset={d0-0.3:.3f}[v01];"
-            f"[v01][2:v]xfade=transition=fade:duration=0.3:offset={d0+d1-0.6:.3f}[v]"
-        )
-
-    concat_out = str(job_dir / "broll_final.mp4")
-    subprocess.run([
-        "ffmpeg", "-y", *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[v]",
-        "-t", str(target_duration),
-        "-c:v", "libx264", "-crf", "20", "-preset", "medium", concat_out
-    ], check=True)
-    return concat_out
-
-
 def make_gradient_png(path: Path, w: int, h: int,
                       left: tuple, right: tuple, alpha: int = 255):
     img  = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -1675,26 +1604,6 @@ def _filler_keep_segments(words: list, duration: float, pad: float = 0.02) -> li
     return [(s, e) for s, e in keeps if e - s > 0.02], len(removes)
 
 
-def _run_auto_editor(input_path: Path, output_path: Path) -> bool:
-    """Phase 2: waveform dead-air trim. Returns True on success, False to fall back."""
-    cmd = [
-        "auto-editor", str(input_path),
-        "--edit", "audio:-35dB",   # noise-floor threshold
-        "--margin", "0.12s",       # 120ms safety padding so words aren't shaved
-        "--no-open",
-        "--output", str(output_path),
-    ]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    except Exception as exc:
-        log.warning("[TRIM] auto-editor not runnable: %s", exc)
-        return False
-    if r.returncode != 0 or not output_path.exists():
-        log.warning("[TRIM] auto-editor failed (rc=%s): %s", r.returncode, (r.stderr or "")[-600:])
-        return False
-    return True
-
-
 def get_adaptive_font(word: str, max_width: int = W,
                       max_size: int = CAPTION_FONT_SIZE, min_size: int = 48):
     size = max_size
@@ -2099,19 +2008,6 @@ def build_progress_frames(total_frames: int, prog_dir: Path, colors: tuple = Non
         out = prog_dir / f"frame_{frame_n:06d}.png"
         img.save(str(out))
     log.info("Progress frames done")
-
-
-def build_watermark_png(path: Path):
-    img  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype(str(FONT_SEMIBOLD), 22)
-    text = "@justus.automates"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw   = bbox[2] - bbox[0]
-    x    = 1048 - tw
-    y    = FACECAM_Y + 2
-    draw.text((x, y), text, font=font, fill=(232, 232, 232, 77))
-    img.save(str(path))
 
 
 # ── Supabase Storage (replaces Cloudinary for all generated media) ────────────
@@ -3043,322 +2939,6 @@ def _strip_fences(text: str) -> str:
 
 
 # ── FEW-SHOT REFERENZ (visueller Anker für _broll_system_prompt_v2) ─────────
-_BROLL_REFERENCE_HTML = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body {
-  width:1080px; height:1920px; overflow:hidden;
-  background: #0a0910;
-  font-family: 'SF Mono','Fira Code','Consolas',monospace;
-  position:relative;
-  color:#e8e8e8;
-}
-.scanlines {
-  position:absolute; inset:0; pointer-events:none; z-index:100;
-  background: repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.06) 3px,rgba(0,0,0,0.06) 4px);
-}
-.glow { position:absolute; border-radius:50%; pointer-events:none; }
-.header {
-  position:absolute; top:80px; left:60px; right:60px;
-  display:flex; align-items:center; justify-content:space-between;
-}
-.header-tag {
-  font-size:11px; letter-spacing:.2em; color:#8B5CF6;
-  text-transform:uppercase; border:1px solid rgba(139,92,246,0.3);
-  padding:6px 16px; border-radius:20px;
-  background:rgba(139,92,246,0.06);
-}
-.header-live {
-  font-size:11px; color:#06B6D4; letter-spacing:.15em;
-  display:flex; align-items:center; gap:8px;
-}
-.live-dot {
-  width:7px; height:7px; border-radius:50%; background:#06B6D4;
-}
-.hero-wrap {
-  position:absolute; top:180px; left:50%; transform:translateX(-50%);
-  width:400px; height:400px; display:flex; align-items:center; justify-content:center;
-}
-.big-section {
-  position:absolute; top:620px; left:60px; right:60px;
-  text-align:center;
-}
-.big-pre { font-size:12px; color:#555; letter-spacing:.2em; text-transform:uppercase; margin-bottom:8px; }
-.big-num {
-  font-size:160px; font-weight:900; line-height:1;
-  font-family:'Arial Black','Arial',sans-serif;
-  background:linear-gradient(135deg,#fff 0%,#C0C0C0 40%,#8B5CF6 100%);
-  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-  filter:drop-shadow(0 0 50px rgba(139,92,246,0.6));
-}
-.big-post { font-size:18px; color:#06B6D4; letter-spacing:.12em; margin-top:8px; }
-.hdivider {
-  position:absolute; top:870px; left:60px; right:60px; height:1px;
-  background:linear-gradient(90deg,transparent,#8B5CF6,#06B6D4,transparent);
-  opacity:0.35;
-}
-.terminal {
-  position:absolute; top:910px; left:60px; right:60px;
-  background:rgba(139,92,246,0.04);
-  border:1px solid rgba(139,92,246,0.18);
-  border-radius:12px; overflow:hidden;
-}
-.tbar {
-  background:rgba(139,92,246,0.08); padding:12px 20px;
-  display:flex; align-items:center; gap:8px;
-  border-bottom:1px solid rgba(139,92,246,0.12);
-}
-.tdot { width:10px; height:10px; border-radius:50%; }
-.ttitle { margin-left:6px; font-size:12px; color:#555; letter-spacing:.06em; }
-.tbody { padding:18px 24px; font-size:14px; line-height:2.1; }
-.tline { display:flex; gap:10px; align-items:baseline; min-height:30px; }
-.tprompt { color:#8B5CF6; }
-.tcmd { color:#e8e8e8; }
-.tout { padding-left:22px; }
-.tok { color:#10B981; }
-.tinfo { color:#06B6D4; }
-.twarn { color:#F59E0B; }
-.tcursor { display:inline-block; width:9px; height:17px; background:#8B5CF6; margin-left:2px; vertical-align:middle; }
-.mcards {
-  position:absolute; top:1400px; left:60px; right:60px;
-  display:flex; gap:14px;
-}
-.mcard {
-  flex:1; border:1px solid rgba(139,92,246,0.2); border-radius:10px;
-  padding:18px; background:rgba(139,92,246,0.04); position:relative; overflow:hidden;
-}
-.mcard::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,#8B5CF6,#06B6D4); }
-.mval { font-size:32px; font-weight:900; color:#fff; font-family:'Arial Black',sans-serif; }
-.mkey { font-size:10px; color:#555; margin-top:4px; letter-spacing:.1em; text-transform:uppercase; }
-.mdelta { font-size:11px; color:#10B981; margin-top:6px; }
-.mbar { height:3px; background:rgba(255,255,255,0.06); border-radius:2px; margin-top:10px; overflow:hidden; }
-.mfill { height:100%; border-radius:2px; background:linear-gradient(90deg,#8B5CF6,#06B6D4); width:0; }
-.graphsec {
-  position:absolute; top:1650px; left:60px; right:60px;
-}
-.gtitle { font-size:10px; color:#444; letter-spacing:.12em; text-transform:uppercase; margin-bottom:10px; }
-.dstream {
-  position:absolute; top:180px; right:0; width:50px; height:700px;
-  overflow:hidden; opacity:0.3;
-  display:flex; flex-direction:column; gap:2px; padding:0 6px;
-}
-.dsnum { font-size:9px; color:#8B5CF6; text-align:right; }
-</style>
-</head>
-<body>
-<div class="scanlines"></div>
-<div class="glow" id="g1" style="width:900px;height:900px;top:-300px;left:-200px;background:radial-gradient(circle,rgba(139,92,246,0.13) 0%,transparent 65%);filter:blur(30px);"></div>
-<div class="glow" id="g2" style="width:700px;height:700px;top:500px;right:-200px;background:radial-gradient(circle,rgba(6,182,212,0.09) 0%,transparent 65%);filter:blur(25px);"></div>
-<div class="glow" id="g3" style="width:500px;height:500px;bottom:200px;left:-100px;background:radial-gradient(circle,rgba(139,92,246,0.07) 0%,transparent 65%);filter:blur(20px);"></div>
-<div class="header">
-  <div class="header-tag">NEURALINK · MONITOR</div>
-  <div class="header-live"><div class="live-dot" id="liveDot"></div>LIVE FEED</div>
-</div>
-<div class="hero-wrap">
-  <svg id="heroSvg" viewBox="0 0 400 400" width="400" height="400">
-    <circle id="r1" cx="200" cy="200" r="160" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.15" stroke-dasharray="8 12"/>
-    <circle id="r2" cx="200" cy="200" r="130" fill="none" stroke="#06B6D4" stroke-width="1" opacity="0.1" stroke-dasharray="4 16"/>
-    <g id="brain" transform="translate(200,200)">
-      <path d="M 0,-60 C -20,-80 -70,-80 -80,-50 C -90,-25 -85,10 -70,30 C -55,50 -40,65 -20,70 C -10,72 0,70 0,70 Z" fill="rgba(139,92,246,0.15)" stroke="#8B5CF6" stroke-width="2"/>
-      <path d="M 0,-60 C 20,-80 70,-80 80,-50 C 90,-25 85,10 70,30 C 55,50 40,65 20,70 C 10,72 0,70 0,70 Z" fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" stroke-width="2"/>
-      <line x1="0" y1="-55" x2="0" y2="68" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5" stroke-dasharray="4 4"/>
-      <path d="M -70,-30 Q -50,-40 -40,-20" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5"/>
-      <path d="M -75,5 Q -55,-5 -45,15" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
-      <path d="M -65,35 Q -45,25 -38,42" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
-      <path d="M 70,-30 Q 50,-40 40,-20" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.5"/>
-      <path d="M 75,5 Q 55,-5 45,15" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
-      <path d="M 65,35 Q 45,25 38,42" fill="none" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
-    </g>
-    <g id="chip" transform="translate(200,150)">
-      <rect x="-22" y="-22" width="44" height="44" rx="6" fill="#0a0910" stroke="#06B6D4" stroke-width="2"/>
-      <rect x="-14" y="-14" width="28" height="28" rx="3" fill="rgba(6,182,212,0.15)" stroke="#06B6D4" stroke-width="1" opacity="0.8"/>
-      <line x1="-22" y1="-10" x2="-32" y2="-10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="-22" y1="0" x2="-32" y2="0" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="-22" y1="10" x2="-32" y2="10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="22" y1="-10" x2="32" y2="-10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="22" y1="0" x2="32" y2="0" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="22" y1="10" x2="32" y2="10" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="-10" y1="-22" x2="-10" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="0" y1="-22" x2="0" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="10" y1="-22" x2="10" y2="-32" stroke="#06B6D4" stroke-width="1.5" opacity="0.7"/>
-      <line x1="-10" y1="-14" x2="-10" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-      <line x1="0" y1="-14" x2="0" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-      <line x1="10" y1="-14" x2="10" y2="14" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-      <line x1="-14" y1="-10" x2="14" y2="-10" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-      <line x1="-14" y1="0" x2="14" y2="0" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-      <line x1="-14" y1="10" x2="14" y2="10" stroke="#06B6D4" stroke-width="0.5" opacity="0.4"/>
-    </g>
-    <circle id="sp1" cx="200" cy="150" r="30" fill="none" stroke="#06B6D4" stroke-width="2" opacity="0"/>
-    <circle id="sp2" cx="200" cy="150" r="30" fill="none" stroke="#06B6D4" stroke-width="1.5" opacity="0"/>
-    <line x1="200" y1="150" x2="80" y2="80" stroke="#06B6D4" stroke-width="1" stroke-dasharray="4 6" opacity="0.3"/>
-    <line x1="200" y1="150" x2="320" y2="80" stroke="#06B6D4" stroke-width="1" stroke-dasharray="4 6" opacity="0.3"/>
-    <line x1="200" y1="150" x2="60" y2="300" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="4 6" opacity="0.2"/>
-    <line x1="200" y1="150" x2="340" y2="300" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="4 6" opacity="0.2"/>
-    <g id="dn1" transform="translate(65,75)" opacity="0">
-      <rect x="-28" y="-11" width="56" height="22" rx="11" fill="rgba(6,182,212,0.12)" stroke="#06B6D4" stroke-width="1"/>
-      <text x="0" y="4" text-anchor="middle" fill="#06B6D4" font-size="9" font-family="monospace">SIGNAL</text>
-    </g>
-    <g id="dn2" transform="translate(335,75)" opacity="0">
-      <rect x="-28" y="-11" width="56" height="22" rx="11" fill="rgba(139,92,246,0.12)" stroke="#8B5CF6" stroke-width="1"/>
-      <text x="0" y="4" text-anchor="middle" fill="#8B5CF6" font-size="9" font-family="monospace">STABLE</text>
-    </g>
-    <g id="dn3" transform="translate(55,305)" opacity="0">
-      <rect x="-24" y="-11" width="48" height="22" rx="11" fill="rgba(192,192,192,0.08)" stroke="#C0C0C0" stroke-width="1"/>
-      <text x="0" y="4" text-anchor="middle" fill="#C0C0C0" font-size="9" font-family="monospace">10h/d</text>
-    </g>
-    <g id="dn4" transform="translate(345,305)" opacity="0">
-      <rect x="-24" y="-11" width="48" height="22" rx="11" fill="rgba(16,185,129,0.1)" stroke="#10B981" stroke-width="1"/>
-      <text x="0" y="4" text-anchor="middle" fill="#10B981" font-size="9" font-family="monospace">99.8%</text>
-    </g>
-  </svg>
-</div>
-<div class="big-section">
-  <div class="big-pre">GESAMT-NUTZUNGSZEIT</div>
-  <div class="big-num" id="bigNum">0</div>
-  <div class="big-post">STUNDEN · 12 NUTZER AKTIV</div>
-</div>
-<div class="hdivider" id="hdiv"></div>
-<div class="terminal" id="term">
-  <div class="tbar">
-    <div class="tdot" style="background:#EF4444;"></div>
-    <div class="tdot" style="background:#F59E0B;"></div>
-    <div class="tdot" style="background:#10B981;"></div>
-    <span class="ttitle">justus@automates ~ neuralink-cli</span>
-  </div>
-  <div class="tbody">
-    <div class="tline"><span class="tprompt">&#x203A;</span><span class="tcmd" id="c1"></span></div>
-    <div class="tline"><span class="tout tok" id="o1" style="opacity:0">&#x2713; device_count: 12 &middot; status: ACTIVE</span></div>
-    <div class="tline"><span class="tprompt" id="p2" style="opacity:0">&#x203A;</span><span class="tcmd" id="c2" style="opacity:0"></span></div>
-    <div class="tline"><span class="tout tinfo" id="o2" style="opacity:0">&#x2192; avg_usage: 10.2h &middot; stability: 99.8%</span></div>
-    <div class="tline"><span class="tprompt" id="p3" style="opacity:0">&#x203A;</span><span class="tcmd" id="c3" style="opacity:0"></span></div>
-    <div class="tline"><span class="tout twarn" id="o3" style="opacity:0">&#x26A1; prototype &#x2192; everyday tool confirmed</span></div>
-    <div class="tline"><span class="tprompt" id="p4" style="opacity:0">&#x203A;</span><span class="tcursor" id="cur"></span></div>
-  </div>
-</div>
-<div class="dstream" id="ds"></div>
-<div class="mcards">
-  <div class="mcard">
-    <div class="mval" id="mv1">0</div>
-    <div class="mkey">Nutzer</div>
-    <div class="mdelta">&#x25B2; +2 this week</div>
-    <div class="mbar"><div class="mfill" id="mf1"></div></div>
-  </div>
-  <div class="mcard">
-    <div class="mval" id="mv2">0h</div>
-    <div class="mkey">&#xD8; t&#xe4;glich</div>
-    <div class="mdelta">&#x25B2; +2.1h MoM</div>
-    <div class="mbar"><div class="mfill" id="mf2" style="background:linear-gradient(90deg,#06B6D4,#10B981);"></div></div>
-  </div>
-  <div class="mcard">
-    <div class="mval" id="mv3">0%</div>
-    <div class="mkey">Stabilit&#xe4;t</div>
-    <div class="mdelta" style="color:#06B6D4;">&#x25CF; live</div>
-    <div class="mbar"><div class="mfill" id="mf3" style="background:linear-gradient(90deg,#10B981,#06B6D4);"></div></div>
-  </div>
-</div>
-<div class="graphsec">
-  <div class="gtitle">USAGE TREND &middot; 8 WOCHEN</div>
-  <svg viewBox="0 0 960 120" width="100%">
-    <defs>
-      <linearGradient id="gfill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.3"/>
-        <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
-      </linearGradient>
-      <linearGradient id="lgrad" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0%" stop-color="#8B5CF6"/>
-        <stop offset="100%" stop-color="#06B6D4"/>
-      </linearGradient>
-    </defs>
-    <line x1="0" y1="30" x2="960" y2="30" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
-    <line x1="0" y1="60" x2="960" y2="60" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
-    <line x1="0" y1="90" x2="960" y2="90" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="3 9" opacity="0.12"/>
-    <path id="ga" d="M 0,120" fill="url(#gfill)"/>
-    <path id="gl" d="" fill="none" stroke="url(#lgrad)" stroke-width="3" stroke-linecap="round"/>
-    <circle id="gd" cx="0" cy="120" r="5" fill="#06B6D4"/>
-  </svg>
-</div>
-<script>
-gsap.to("#g1",{x:50,y:40,scale:1.2,duration:7,repeat:-1,yoyo:true,ease:"sine.inOut"});
-gsap.to("#g2",{x:-30,y:-20,scale:1.15,duration:6,repeat:-1,yoyo:true,ease:"sine.inOut",delay:1});
-gsap.to("#g3",{scale:1.3,duration:5,repeat:-1,yoyo:true,ease:"sine.inOut",delay:0.5});
-gsap.to("#liveDot",{opacity:0.2,duration:0.7,repeat:-1,yoyo:true,ease:"steps(1)"});
-gsap.to("#hdiv",{opacity:0.8,duration:1.5,repeat:-1,yoyo:true,ease:"sine.inOut"});
-gsap.to("#brain",{scale:1.04,duration:1.8,repeat:-1,yoyo:true,ease:"sine.inOut",transformOrigin:"center"});
-gsap.to("#chip",{filter:"drop-shadow(0 0 12px #06B6D4)",duration:1.2,repeat:-1,yoyo:true,ease:"sine.inOut"});
-function chipPulse(el,delay){
-  gsap.fromTo(el,{attr:{r:30},opacity:0.7},{attr:{r:100},opacity:0,duration:1.8,repeat:-1,delay:delay,ease:"power1.out"});
-}
-chipPulse("#sp1",0); chipPulse("#sp2",0.9);
-gsap.to("#r1",{rotation:360,duration:20,repeat:-1,ease:"linear",transformOrigin:"200px 200px"});
-gsap.to("#r2",{rotation:-360,duration:30,repeat:-1,ease:"linear",transformOrigin:"200px 200px"});
-gsap.delayedCall(0.5,function(){
-  ["#dn1","#dn2","#dn3","#dn4"].forEach(function(n,i){
-    gsap.to(n,{opacity:1,duration:0.4,delay:i*0.2});
-    gsap.to(n,{y:"+=8",duration:2+i*0.4,repeat:-1,yoyo:true,ease:"sine.inOut",delay:i*0.3});
-  });
-});
-var ds=document.getElementById("ds");
-for(var i=0;i<80;i++){var d=document.createElement("div");d.className="dsnum";d.textContent=(Math.random()*999|0).toString().padStart(3,"0");ds.appendChild(d);}
-gsap.to("#ds",{y:-600,duration:10,repeat:-1,ease:"linear"});
-animateCounter(document.getElementById("bigNum"),15284,2.5);
-gsap.delayedCall(0.4,function(){animateCounter(document.getElementById("mv1"),12,1.5);});
-gsap.delayedCall(0.7,function(){animateCounter(document.getElementById("mv2"),10,1.4,"h");});
-gsap.delayedCall(1.0,function(){animateCounter(document.getElementById("mv3"),99,1.6,"%");});
-gsap.to("#mf1",{width:"80%",duration:2,ease:"power2.out",delay:0.5});
-gsap.to("#mf2",{width:"92%",duration:2.2,ease:"power2.out",delay:0.7});
-gsap.to("#mf3",{width:"99%",duration:2.4,ease:"power2.out",delay:1.0});
-function typeText(el,text,dur,cb){var i=0;var chars=text.split("");var iv=setInterval(function(){el.textContent+=chars[i++];if(i>=chars.length){clearInterval(iv);if(cb)cb();}},dur/chars.length*1000);}
-gsap.delayedCall(0.3,function(){
-  typeText(document.getElementById("c1"),"neuralink status --all",0.6,function(){
-    gsap.to("#o1",{opacity:1,duration:0.3});
-    gsap.delayedCall(0.4,function(){
-      gsap.set("#p2",{opacity:1}); gsap.set("#c2",{opacity:1});
-      typeText(document.getElementById("c2"),"fetch usage --live",0.5,function(){
-        gsap.to("#o2",{opacity:1,duration:0.3});
-        gsap.delayedCall(0.4,function(){
-          gsap.set("#p3",{opacity:1}); gsap.set("#c3",{opacity:1});
-          typeText(document.getElementById("c3"),"analyze --trend now",0.5,function(){
-            gsap.to("#o3",{opacity:1,duration:0.3});
-            gsap.delayedCall(0.3,function(){
-              gsap.set("#p4",{opacity:1});
-              gsap.to("#cur",{opacity:0,duration:0.5,repeat:-1,yoyo:true,ease:"steps(1)"});
-            });
-          });
-        });
-      });
-    });
-  });
-});
-var pts=[[0,110],[120,95],[240,82],[360,70],[480,55],[600,42],[720,30],[840,18],[960,8]];
-var p=0;
-gsap.to({},{duration:3,delay:0.5,ease:"power1.inOut",onUpdate:function(){
-  p=this.progress();
-  var idx=Math.floor(p*(pts.length-1));
-  var fr=(p*(pts.length-1))-idx;
-  var curr=idx<pts.length-1?[pts[idx][0]+fr*(pts[idx+1][0]-pts[idx][0]),pts[idx][1]+fr*(pts[idx+1][1]-pts[idx][1])]:pts[pts.length-1];
-  var ld="M "+pts[0][0]+","+pts[0][1];
-  var ad="M 0,120 L "+pts[0][0]+","+pts[0][1];
-  for(var i=1;i<=idx;i++){ld+=" L "+pts[i][0]+","+pts[i][1];ad+=" L "+pts[i][0]+","+pts[i][1];}
-  ld+=" L "+curr[0]+","+curr[1];
-  ad+=" L "+curr[0]+","+curr[1]+" L "+curr[0]+",120 Z";
-  document.getElementById("gl").setAttribute("d",ld);
-  document.getElementById("ga").setAttribute("d",ad);
-  document.getElementById("gd").setAttribute("cx",curr[0]);
-  document.getElementById("gd").setAttribute("cy",curr[1]);
-}});
-gsap.delayedCall(3.5,function(){
-  gsap.to("#gd",{attr:{r:8},opacity:0.4,duration:0.8,repeat:-1,yoyo:true,ease:"sine.inOut"});
-});
-gsap.from("#term",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.2});
-gsap.from(".mcards",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.4});
-gsap.from(".graphsec",{y:24,opacity:0,duration:0.8,ease:"power3.out",delay:0.6});
-gsap.from("#heroSvg",{scale:0.85,opacity:0,duration:1,ease:"back.out(1.4)",delay:0.1,transformOrigin:"center"});
-</script>
-</body>
-</html>"""
 
 
 def _broll_system_prompt_v2(topic: str, accent: str, scenes: list) -> str:
@@ -3823,10 +3403,6 @@ def _count_broll_scenes(html: str, n_scenes: int) -> int:
                if f'id="scene{i}"' in html or f"id='scene{i}'" in html)
 
 
-def _validate_broll_html(html: str, n_scenes: int) -> bool:
-    return _count_broll_scenes(html, n_scenes) >= n_scenes
-
-
 def _safe_wrap_scripts(scene_divs: str) -> str:
     """Wrap Sonnet's <script> blocks in try-catch so one JS error doesn't kill all animations."""
     def _wrap(m):
@@ -3885,22 +3461,6 @@ SZENEN-DIVS:
     if "<script" not in out.lower():
         out = f"<script>\n{out}\n</script>"
     return out
-
-
-async def _render_scene_html(html: str, job_dir: Path, idx: int, scene_dur: float) -> Path:
-    html_path  = job_dir / f"scene_{idx}.html"
-    video_path = job_dir / f"scene_{idx}.mp4"
-    html_path.write_text(_inject_gsap_inline(html), encoding="utf-8")
-    ok = await render_html_to_video(html_path, video_path, scene_dur)
-    if not ok:
-        run([
-            "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"color=c=black:size=1080x{BROLL_H}:rate={FPS}",
-            "-t", str(scene_dur),
-            "-c:v", "libx264", "-crf", "20", "-preset", "medium",
-            "-pix_fmt", "yuv420p", str(video_path)
-        ], f"black_scene_{idx}")
-    return video_path
 
 
 # ── POST /generate-broll-synced ───────────────────────────────────────────────
@@ -5831,6 +5391,64 @@ def _vision_pick(beschreibung: str, kandidaten: list, streng: bool = True) -> di
                  int((time.time() - t0) * 1000), status="fehler")
         log.warning("[STOCK] Vision-Check: %s", exc)
     return {}
+
+
+def _metapher_pruefen(idee: str, zusammenhang: str = "") -> dict:
+    """Die Anker-Maschine als PRUEFER, nicht als Erfinder.
+
+    Sie hing seit Juli an einem Debug-Endpoint und lief im Video nie: sie sucht
+    ihre Anker selbst im Transkript und weiss nichts vom Zusammenhang. Der Art
+    Director weiss ihn, sieht das Video und liefert die Idee — die Maschine
+    haelt den Naheliegend-Filter, die Seeds und die Verb-Bibliothek dagegen.
+
+    Gibt {idee, ersetzt, grund, verb} zurueck. Faellt irgendetwas aus, bleibt
+    die Idee des Art Directors stehen: ein Pruefer darf nichts wegnehmen, was
+    er nicht ersetzen kann."""
+    aus = {"idee": idee, "ersetzt": False, "grund": "", "verb": ""}
+    if not str(idee).strip():
+        return aus
+    user = (f"ANKER: {idee}\n"
+            f"SATZ: {zusammenhang or idee}")
+    try:
+        raw = call_openrouter(ENTFALTUNG_SYS, user, model="anthropic/claude-sonnet-4.5",
+                              max_tokens=1200, cache_system=True,
+                              cache_prefix=_few_shot_metaphern(), tool="entfaltung")
+        m = re.search(r"\{[\s\S]*\}", raw)
+        k = json.loads(m.group()) if m else {}
+    except Exception as exc:
+        log.warning("[META] Pruefung '%s': %s", str(idee)[:40], exc)
+        return aus
+    ideen = k.get("ideen") or []
+    aus["verb"] = str(k.get("verb") or "")
+    # Die Verb-Bibliothek faellt hier kostenlos mit an: ein Bild ohne Vorgang
+    # ist ein Gegenstand, und ein Gegenstand traegt keine abstrakte Aussage.
+    verb_ok = aus["verb"].strip().lower() in VERB_LISTE
+    if not ideen:
+        return aus
+    # Die Idee des Art Directors tritt gegen die Vorschlaege der Maschine an.
+    feld = [{"bild": str(idee)}] + [x for x in ideen if x.get("bild")]
+    order, alle_platt = _rang(str(idee), feld)
+    if alle_platt:
+        aus["grund"] = "alle Vorschlaege naheliegend, Idee bleibt"
+        return aus
+    # order laeuft von naheliegend nach ueberraschend. Steht die Idee des Art
+    # Directors ganz vorne, ist sie die plumpeste im Feld.
+    if order and order[0] == 0 and len(order) > 1:
+        besser = feld[order[-1]].get("bild") or idee
+        if besser != idee:
+            aus.update({"idee": besser, "ersetzt": True,
+                        "grund": "zu naheliegend" + ("" if verb_ok else
+                                                     ", und ohne Vorgang")})
+    elif not verb_ok and len(order) > 1:
+        # Kein Vorgang, nur ein Zustand. Dann die staerkste FREMDE Idee nehmen —
+        # die eigene noch einmal vorzuschlagen waere keine Pruefung.
+        andere = [x for x in order if x != 0]
+        besser = feld[andere[-1]].get("bild") if andere else idee
+        if besser != idee:
+            aus.update({"idee": besser, "ersetzt": True,
+                        "grund": f"Verb '{aus['verb']}' steht nicht in der "
+                                 f"Bibliothek — kein Vorgang, nur ein Zustand"})
+    return aus
 
 
 def _stock_fuer(bild: str) -> dict:
@@ -9724,7 +9342,6 @@ KOMPOSITIONEN = ("vollbild", "punch", "drift",
                  "haelften", "bubble", "bubble_wandert",
                  "uebernahme", "beleg", "metapher", "durchforsten",
                  "overlay_wandert", "flaeche_kippt")
-ZUSTAENDE = KOMPOSITIONEN          # alter Name, gleiche Sache
 # Bei den wichtigsten Saetzen soll nichts zwischen ihm und dem Zuschauer stehen.
 VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_kippt")
 # Ohne Bewegung waere das eine Folie.
@@ -10317,6 +9934,61 @@ def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
     return None
 
 
+async def _durchforsten(s: dict, a: dict, i: int) -> dict:
+    """Nicht ein Bild von einer Seite, sondern der sichtbare Vorgang, etwas zu
+    FINDEN. Zwei Werkzeuge, die es seit Wochen gibt und die nie jemand gerufen
+    hat: schnappschuss holt die Stelle von der echten Seite, markiere zieht den
+    Rahmen darum. Die Suche selbst ist die Kamerafahrt in der Ebene — weit,
+    dann hinein auf die Fundstelle.
+
+    Ohne URL geht das nicht: erfinden waere genau der Nachbau, den echtes
+    Material schlagen soll.
+
+    GRENZE, ehrlich: schnappschuss gibt KEINE Koordinaten des Treffers zurueck,
+    nur das zugeschnittene Bild. Markiert wird deshalb der gefundene Block als
+    Ganzes. Fuer eine Fahrt ueber die volle Seite auf die Fundstelle muesste
+    schnappschuss die Box mitliefern — das ist der naechste Schritt, nicht
+    dieser."""
+    b = a.get("braucht") or {}
+    url = str(b.get("url") or b.get("quelle_url") or "").strip()
+    ziel = str(b.get("ziel") or b.get("suche") or b.get("zeigt") or "").strip()
+    if not url:
+        return {"quelle_art": "", "grund": "durchforsten ohne url — es gibt "
+                                           "nichts zu durchsuchen"}
+    try:
+        shot = await tool_schnappschuss(SchnappschussRequest(
+            session_id=s["id"], url=url, ziel=ziel[:120], zoom=1.0,
+            wert=bool(b.get("wert"))))
+    except HTTPException as exc:
+        return {"quelle_art": "", "grund": f"schnappschuss: {str(exc.detail)[:140]}"}
+    except Exception as exc:
+        return {"quelle_art": "", "grund": f"schnappschuss: {str(exc)[:140]}"}
+
+    # Ein Treffer kommt flach zurueck, mehrere als Kandidaten. Welcher gemeint
+    # ist, steht im Plan und nicht auf der Seite — also der erste.
+    kand = shot.get("kandidaten") or []
+    treffer = kand[0] if (kand and not shot.get("url")) else shot
+    bild = str(treffer.get("url") or "")
+    px = treffer.get("quelle_px")
+    if not bild:
+        return {"quelle_art": "", "grund": "nichts auf der Seite gefunden"}
+
+    # Der Rahmen sitzt um den gefundenen Block. Ein Anteil knapp innerhalb der
+    # Kante, damit der Strich nicht selbst abgeschnitten wird.
+    bereich = b.get("bereich") or [0.03, 0.03, 0.94, 0.94]
+    try:
+        mark = tool_markiere(MarkiereRequest(
+            session_id=s["id"], bild=bild, bereich=list(bereich)[:4],
+            art=str(b.get("markierung") or "rahmen"), client_id=s["client_id"]))
+        if mark.get("url"):
+            bild, px = mark["url"], mark.get("quelle_px") or px
+    except Exception as exc:
+        # Ohne Markierung bleibt ein echter Screenshot — schwaecher, aber wahr.
+        log.warning("[BAU] %d markiere: %s", i, str(exc)[:140])
+    return {"quelle_art": "durchforsten", "kosten": 0.0, "quelle_px": px,
+            "layer_source": {"kind": "image", "url": bild}}
+
+
 async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     """Ein Auftrag, ein Ergebnis. Kein Ermessen darueber, OB etwas gebraucht
     wird — das hat der Plan entschieden."""
@@ -10326,6 +9998,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     was = str(b.get("zeigt") or b.get("was") or "").strip()
     quelle = str(b.get("quelle") or "").lower()
     sek = max(1.0, float(a["bis"]) - float(a["von"]))
+
+    if k == "durchforsten":
+        res = await _durchforsten(s, a, i)
+        if res.get("quelle_art"):
+            return res
+        # Kein Fundstueck, keine Seite: dann ist der Abschnitt kein
+        # Durchforsten. Ein gebauter Ersatz waere die schwaechere Fassung.
+        log.warning("[BAU] %d durchforsten: %s", i, res.get("grund"))
+        return res
 
     m = _material_treffer(s, b)
     if m:
@@ -10345,6 +10026,18 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
             log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
 
     if k == "metapher" and was:
+        # Der Art Director hat das Video gesehen und kennt den Zusammenhang —
+        # seine Bildidee steht. Die Maschine kennt den Naheliegend-Filter, die
+        # Seeds und die Verb-Bibliothek. Also entscheidet er, und sie prueft.
+        try:
+            gepr = await asyncio.to_thread(_metapher_pruefen, was, str(a.get("begruendung") or ""))
+            if gepr.get("ersetzt"):
+                log.warning("[BAU] plan_abweichung Abschnitt %d: Bildidee ersetzt "
+                            "— '%s' war %s, jetzt '%s'", i, was[:40],
+                            gepr.get("grund"), gepr.get("idee")[:40])
+                was = gepr["idee"]
+        except Exception as exc:
+            log.warning("[BAU] %d Metapher-Pruefung: %s", i, str(exc)[:140])
         # NUR fuer die Metapher. Im ersten Durchstich lief Stock auch fuer
         # Bubble-Hintergruende und lieferte einen Maschendrahtzaun und eine
         # schmelzende Vase — fuer eine abstrakte Aussage vertretbar, hinter
@@ -10482,6 +10175,14 @@ def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
                   "start": mitte, "end": min(bis_f, mitte + 18), "easing": "easeInOut"},
                  {"property": "y", "from": BUBBLE_Y, "to": ziel_y,
                   "start": mitte, "end": min(bis_f, mitte + 18), "easing": "easeInOut"}], [])
+    if k == "durchforsten":
+        # Erst die ganze Seite, dann hinein auf die Fundstelle. Das IST die
+        # Suche — ein Standbild mit Rahmen waere nur ein Beleg.
+        halb = von_f + int(d * 0.45)
+        return ([], [{"property": "scale", "from": 1.0, "to": 1.0,
+                      "start": von_f, "end": halb, "easing": "linear"},
+                     {"property": "scale", "from": 1.0, "to": 1.35,
+                      "start": halb, "end": bis_f, "easing": "easeInOut"}])
     if k == "overlay_wandert":
         return ([], [{"property": "x", "from": 0.72, "to": 0.06,
                       "start": von_f, "end": bis_f, "easing": "easeInOut"},
@@ -12303,49 +12004,6 @@ def tool_loop_status(job_id: str):
 def health():
     return {"status": "ok"}
 
-@app.get("/debug/storage-test")
-def debug_storage_test():
-    """Verify Supabase Storage upload end-to-end: create the bucket, upload a tiny
-    file, return the public URL + whether it is publicly fetchable. Also reports
-    the raw bucket-create response for diagnosis."""
-    global _BUCKET_READY
-    _BUCKET_READY = False
-    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-           "Content-Type": "application/json"}
-    cr = requests.post(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30,
-                       json={"id": SUPABASE_BUCKET, "name": SUPABASE_BUCKET, "public": True})
-    lst = requests.get(f"{SUPABASE_URL}/storage/v1/bucket", headers=hdr, timeout=30)
-    out = {"bucket": SUPABASE_BUCKET,
-           "key_len": len(SUPABASE_SERVICE_KEY),
-           "create_status": cr.status_code, "create_body": cr.text[:300],
-           "list_status": lst.status_code, "list_body": lst.text[:400]}
-    tmp = Path(f"/tmp/storage_test_{uuid.uuid4().hex[:8]}.txt")
-    tmp.write_text(f"ok {time.time()}", encoding="utf-8")
-    try:
-        _BUCKET_READY = True  # bucket handled above; skip re-create in helper
-        url = upload_supabase(tmp, tmp.stem, folder="debug")
-        out.update(ok=True, url=url, public_fetch_status=requests.get(url, timeout=15).status_code)
-    except Exception as exc:
-        out.update(ok=False, error=str(exc))
-    finally:
-        tmp.unlink(missing_ok=True)
-    return out
-
-@app.get("/debug/template")
-def debug_template(client_id: str = "justus"):
-    """Verify Supabase template resolution works from Railway (env + fetch + parse)."""
-    _TEMPLATE_CACHE.pop(client_id, None)
-    tpl = _load_template(client_id, None)
-    return {
-        "client_id": client_id,
-        "supabase_env_set": bool(SUPABASE_URL and SUPABASE_SERVICE_KEY),
-        "template_loaded": bool(tpl),
-        "keys": [k for k in tpl] if tpl else [],
-        "colors": _tpl_colors(tpl),
-        "hud": (tpl or {}).get("hud"),
-        "sfx": (tpl or {}).get("sfx"),
-        "images_model": ((tpl or {}).get("images") or {}).get("model"),
-    }
 
 @app.post("/enrich-image-prompt")
 async def enrich_image_prompt(req: EnrichImageRequest):
@@ -12560,49 +12218,3 @@ async def transcribe(req: TranscribeRequest):
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
-@app.get("/debug/last-broll-scripts")
-def debug_last_broll_scripts():
-    """Return only the <script> blocks from the last broll HTML — for diagnosing JS errors."""
-    p = Path("/tmp/last_broll.html")
-    if not p.exists():
-        return {"error": "No broll HTML saved yet — trigger a /generate-broll-synced run first"}
-    html = p.read_text(encoding="utf-8")
-    import re as _re
-    scripts = _re.findall(r'<script[^>]*>.*?</script>', html, flags=_re.DOTALL | _re.IGNORECASE)
-    # Extract scene0 div to see what Sonnet generated
-    scene0_match = _re.search(r'(<div[^>]*id=["\']scene0["\'][^>]*>.*?)((?=<div[^>]*id=["\']scene1)|$)', html, flags=_re.DOTALL)
-    scene0_preview = scene0_match.group(1)[:4000] if scene0_match else "scene0 NOT FOUND"
-    return {
-        "total_html_chars": len(html),
-        "script_count": len(scripts),
-        "scene0_preview": scene0_preview,
-        "scripts": [s[:3000] for s in scripts],
-    }
-
-
-@app.get("/debug/gen-anim-script")
-def debug_gen_anim_script():
-    """Isolated proof of the 2nd-call fix: run _gen_animation_script on a fixed
-    representative scene (counter + self-drawing SVG graph + hero rings) and return
-    the real Sonnet-generated <script>. Lets us verify the fix without the full pipeline."""
-    divs = (
-        '<div class="scene" id="scene0" style="background:#0a0910;">'
-        '<svg id="heroSvg" viewBox="0 0 180 180" width="180" height="180">'
-        '<circle id="ring1" cx="90" cy="90" r="60" fill="none" stroke="#8B5CF6" stroke-width="3"/>'
-        '<circle id="ring2" cx="90" cy="90" r="40" fill="none" stroke="#06B6D4" stroke-width="2"/></svg>'
-        '<div class="dp" id="counter0">0</div>'
-        '<div class="lbl">Milliarden USD Deal-Volumen</div>'
-        '<svg id="graphSvg" viewBox="0 0 400 120" width="400" height="120">'
-        '<path id="gl" d="M 0,110 L 120,82 L 240,48 L 360,18 L 400,8" fill="none" '
-        'stroke="#06B6D4" stroke-width="3"/></svg></div>'
-    )
-    scenes = [{"start": 0.0, "end": 6.0}]
-    try:
-        script = _gen_animation_script(divs, scenes, "#8B5CF6")
-    except Exception as exc:
-        return {"error": str(exc)}
-    return {
-        "complete": _has_complete_animation_script(script),
-        "script_chars": len(script),
-        "script": script[:6000],
-    }

@@ -9716,7 +9716,30 @@ GEMINI_API = "https://generativelanguage.googleapis.com"
 # noch nicht ausgerollt sind.
 AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
               "gemini-2.0-flash-001")
-ZUSTAENDE = ("vollbild", "bubble", "uebernahme", "beleg", "metapher")
+# 16 Kompositionen statt 5 Zustaende. Raffinesse entsteht aus Kombination:
+# wer aus 16 waehlt, wirkt gestaltend; wer aus 5 waehlt, schematisch. Der
+# Renderer konnte das alles schon — es fehlte der Name dafuer.
+KOMPOSITIONEN = ("vollbild", "punch", "drift",
+                 "unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
+                 "haelften", "bubble", "bubble_wandert",
+                 "uebernahme", "beleg", "metapher", "durchforsten",
+                 "overlay_wandert", "flaeche_kippt")
+ZUSTAENDE = KOMPOSITIONEN          # alter Name, gleiche Sache
+# Bei den wichtigsten Saetzen soll nichts zwischen ihm und dem Zuschauer stehen.
+VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_kippt")
+# Ohne Bewegung waere das eine Folie.
+BEWEGUNG_PFLICHT = ("unten_aufbau", "oben_unterbau", "bubble", "bubble_wandert",
+                    "overlay_wandert", "flaeche_kippt")
+ENDZUSTAND_PFLICHT = ("unten_aufbau", "oben_unterbau")
+# Diese drei duerfen kurz sein — ein Punch IST kurz.
+KURZ_ERLAUBT = ("beleg", "punch", "overlay_wandert")
+# Diese bewegen sich von sich aus, sie brauchen keine zusaetzliche Bewegung,
+# um eine lange Strecke zu tragen.
+EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_kippt")
+MAX_JE_KOMPOSITION = 3
+MAX_UEBERNAHMEN = 2
+LANG_OHNE_BEWEGUNG_S = 10.0
+TEXT_ZEILE_MAX = 40
 # Das Umbau-Papier sagt an einer Stelle "kein Abschnitt kuerzer als 3 Sekunden"
 # (C3) und an der anderen "ein Wechsel alle 6-12 Sekunden" (C2). Der Code hat
 # die 3 geprueft, also sind zwei Abschnitte mit 4,5 s und 4,9 s durchgegangen,
@@ -9724,14 +9747,13 @@ ZUSTAENDE = ("vollbild", "bubble", "uebernahme", "beleg", "metapher")
 # Es gilt der Rhythmus: 6-12 s. Die 3 s bleiben nur fuer den LETZTEN Abschnitt,
 # wenn der Rest des Videos kuerzer ist — sonst waere ein 65-s-Clip nicht
 # teilbar.
-MIN_ABSCHNITT_S = 6.0
-MAX_ABSCHNITT_S = 12.0
-MIN_LETZTER_S = 3.0
-# Richtwert und Ablehnungsgrenze sind NICHT dasselbe. Der erste Plan lag mit
-# 40,06% vier Hundertstel ueber der Schwelle — der naechste faellt aus
-# Rundungsgruenden durch, und der Art Director trifft einen Boden ohnehin auf
-# zwei Nachkommastellen, statt ihn zu ueberbieten.
-RICHT_VOLLBILD_ANTEIL = 0.40
+# Kein Takt mehr: gewechselt wird, wenn die Aussage wechselt. Geprueft wird
+# nur gegen Hektik (zu kurz) und tote Strecke (lang und nichts passiert).
+MIN_ABSCHNITT_S = 4.0
+MIN_KURZ_S = 3.0
+# 35% fuer die ganze Vollbild-Familie. Die Grenze liegt bewusst unter dem, was
+# man sehen will: ein Boden, der genau auf dem Richtwert liegt, wird vom Modell
+# auf zwei Nachkommastellen getroffen statt ueberboten (gemessen: 40,06%).
 MIN_VOLLBILD_ANTEIL = 0.35
 
 
@@ -9819,79 +9841,116 @@ AD_SYS = """Du bist Art Director fuer ein 9:16-Kurzvideo.
 Du siehst das geschnittene Rohmaterial. Du baust nichts — du schreibst den
 Plan, nach dem andere bauen.
 
-DEINE AUFGABE
-Geh das Video von vorn bis hinten durch und entscheide fuer jeden Abschnitt:
-Wie sieht der aus?
+DU HAST 16 KOMPOSITIONEN. NUTZ SIE.
+Wenn du dreimal dieselbe waehlst, hast du nicht hingesehen.
 
-FUENF ZUSTAENDE, mehr gibt es nicht
-  VOLLBILD     er redet, nichts lenkt ab
-  BUBBLE       er klein in der Ecke, dahinter etwas anderes
-  UEBERNAHME   er ist weg, das Bild gehoert etwas anderem
-  BELEG        ein echter Screenshot, markiert, mit Zoom
-  METAPHER     ein Bild fuer eine abstrakte Aussage
+ER TRAEGT ALLEIN
+  vollbild        nur er, nichts sonst — wenn der Satz allein traegt
+  punch           Vollbild, harter Zoom auf EIN Wort, springt zurueck
+                  braucht: {"wort": "..."} — das Wort auf der staerksten Betonung
+  drift           Vollbild, langsame Fahrt ueber die ganze Dauer
+                  braucht: {"richtung": "links|rechts|rein|raus"}
 
-WANN WAS
-  VOLLBILD    bei den wichtigsten Saetzen. Wenn er den Kern sagt, soll nichts
-              zwischen ihm und dem Zuschauer stehen. Das ist der
-              Standardzustand, nicht die Ausnahme.
-  BUBBLE      nur, wenn hinter ihm etwas Sehenswertes laeuft. Eine Bubble vor
-              schwarzem Grund ist ein Fehler.
-  UEBERNAHME  wenn das Gezeigte staerker ist als sein Gesicht.
-  BELEG       wenn er eine Zahl, ein Werkzeug oder eine Quelle nennt, die man
-              sehen kann.
-  METAPHER    wenn er etwas Abstraktes sagt und es ein Bild dafuer gibt.
+ER TEILT SICH DAS BILD
+  unten_aufbau    er unten auf ein Drittel beschnitten, oben baut sich etwas auf
+                  → Aufzaehlungen, Schritte, wachsende Werte
+  oben_unterbau   er oben, unten laeuft eine Zeile, Leiste oder ein Zaehler mit
+                  → Zahlen, die sich ueber die Dauer veraendern
+  seite_links     er auf zwei Drittel seitlich beschnitten, daneben ein Element
+  seite_rechts    dasselbe zur anderen Seite
+  haelften        Bild geteilt, er auf einer Seite
+                  → Vergleiche: vorher/nachher, Option A gegen B
+  bubble          er klein in der Ecke, dahinter laeuft etwas
+                  → NUR wenn dahinter wirklich etwas LAEUFT
+  bubble_wandert  wie bubble, aber er wechselt die Ecke
+                  braucht zusaetzlich: {"zielecke": "..."}
 
-RHYTHMUS
-Ein Wechsel alle 6-12 Sekunden. Nicht oefter.
-Nie zweimal denselben Zustand hintereinander.
-Der laengste Vollbild-Abschnitt gehoert zum staerksten Satz.
+ER IST WEG
+  uebernahme      vollflaechig etwas anderes, er komplett weg
+  beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
+  metapher        ein Bild fuer eine abstrakte Aussage
+  durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
 
-WAS DU NICHT TUST
-Du setzt keine Ebenen, du waehlst keine Farben, du bestimmst keine Pixel. Du
-sagst, WAS in welchem Abschnitt passiert und WARUM. Das Wie machen die anderen.
+ER IST DA, ABER ETWAS PASSIERT
+  overlay_wandert Vollbild, ein Element zieht durchs Bild und verschwindet
+                  → nebenbei genannte Zahlen, Namen, Werkzeuge
+  flaeche_kippt   Vollbild, der Hintergrund wechselt mit der Aussage
+                  → wenn die Stimmung umschlaegt: Problem → Loesung
+
+DIE FRAGE JE ABSCHNITT
+Nicht "ist er da oder weg", sondern: Was passiert hier, und wo gehoert er
+dabei hin?
+  Er zaehlt auf          → unten_aufbau, oben entsteht die Liste
+  Er vergleicht          → haelften
+  Er nennt eine Zahl     → overlay_wandert oder seite_rechts
+  Er verweist auf etwas  → beleg oder durchforsten
+  Er wird grundsaetzlich → vollbild oder punch
+  Die Stimmung kippt     → flaeche_kippt
+  Etwas baut sich auf    → bubble mit echter Bewegung
+
+KEINE FOLIEN
+Ein Kasten mit einem Satz ist keine Gestaltung. Ein zentrierter Satz auf
+leerer Flaeche, Text ohne Zahl, Vergleich oder Struktur, alles was auch als
+Untertitel funktioniert haette — weg damit. Die Captions laufen ohnehin.
+Willst du nur Text zeigen: lass es weg.
+
+KEINE LEEREN STELLEN
+Laeuft ein Abschnitt laenger als 10 Sekunden in derselben Komposition, muss
+INNERHALB etwas passieren — sonst wirkt es schlaff. Teil ihn oder gib ihm
+eine Bewegung.
+
+WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
+"Abo-Oberflaechen laufen hinter ihm (generiert)" ist keine Anweisung.
+  zeigt        immer, wenn braucht gesetzt ist: WAS zu sehen ist, konkret
+  bewegung     bei unten_aufbau, oben_unterbau, bubble, bubble_wandert,
+               overlay_wandert, flaeche_kippt — ohne Bewegung ist es eine Folie
+  text         nur wenn Text gezeigt wird, als Liste kurzer Zeilen
+  endzustand   bei allem, was sich aufbaut
+  quelle       "vorhanden" (ein Fundstueck) oder "neu" (wird gebaut)
 
 HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
-- jeder Abschnitt 6 bis 12 Sekunden; nur der letzte darf kuerzer sein (min 3),
-  wenn das Video vorher zu Ende ist
 - die Abschnitte decken das Video luecken- und ueberlappungsfrei ab, von 0 bis
   zum Ende, in Reihenfolge
-- BUBBLE, UEBERNAHME, BELEG und METAPHER haben immer ein "braucht"; VOLLBILD
-  hat "braucht": null
-- kein Zustand zweimal hintereinander
-- Vollbild ist der Standardzustand: Richtwert 40 Prozent der Laufzeit.
-  Abgelehnt wird ein Plan erst unter 35 Prozent — triff den Richtwert, statt
-  die Grenze auszureizen
+- kuerzer als 3 s nur bei beleg, punch, overlay_wandert; alles andere
+  mindestens 4 s
+- laenger als 10 s nur mit einer Bewegung darin
+- keine Komposition zweimal hintereinander, keine mehr als dreimal im Video
+- die Vollbild-Familie (vollbild, punch, drift, overlay_wandert,
+  flaeche_kippt) traegt mindestens 35 Prozent der Laufzeit
+- hoechstens ZWEI uebernahme im ganzen Video — er soll nicht dauernd
+  verschwinden
+- text ohne bewegung und ohne eine Zahl ist eine Folie und wird abgelehnt
 - jedes vorhandene Material kommt in einem Abschnitt vor ODER steht in
   "material_abgelehnt" mit Grund
-- wird etwas GEBAUT ("quelle": "neu"), gehoert der ANZEIGETEXT in den Plan:
-  braucht.text.hauptwert (hoechstens 24 Zeichen, das was gross dasteht),
-  optional beschriftung und einordnung (je hoechstens 48). Das sind die Worte,
-  die im Bild STEHEN — keine Beschreibung dessen, was zu sehen sein soll.
-  "3-4 Runs" ist ein Anzeigetext. "Visualisierung der Abo-Falle" ist keiner.
-  Deine "begruendung" sieht der Zuschauer nie
+- vollbild hat "braucht": null; alles andere hat einen Auftrag
 
 AUSGABE — nur der Plan, nur JSON
 {
   "abschnitte": [{
-    "von": 0.0, "bis": 6.3,
+    "von": 0.0, "bis": 8.0,
+    "komposition": "vollbild",
     "block": "hook",
-    "zustand": "vollbild",
     "begruendung": "erster Satz, nichts soll ablenken",
     "braucht": null
   }, {
-    "von": 6.3, "bis": 15.3,
+    "von": 8.0, "bis": 17.0,
+    "komposition": "unten_aufbau",
     "block": "stakes",
-    "zustand": "beleg",
-    "begruendung": "er nennt die 3-4 Runs, das steht in der Doku",
-    "braucht": {"art": "beleg", "was": "Kontingent-Angabe", "quelle": "vorhanden"}
+    "begruendung": "er zaehlt vier Abos auf",
+    "braucht": {
+      "art": "animation", "quelle": "neu",
+      "zeigt": "vier Karten erscheinen nacheinander, bei jeder waechst ein Preisbalken auf 20 Euro",
+      "bewegung": "gestaffelt, 0.4s Abstand, von unten",
+      "text": ["ChatGPT 20EUR", "Claude 20EUR", "Perplexity 20EUR", "Gemini 20EUR"],
+      "endzustand": "alle vier stehen, Summe 80 EUR erscheint"
+    }
   }, {
-    "von": 15.3, "bis": 23.0,
+    "von": 17.0, "bis": 24.0,
+    "komposition": "beleg",
     "block": "beweis",
-    "zustand": "uebernahme",
-    "begruendung": "die Zahl traegt den Abschnitt, sein Gesicht nicht",
-    "braucht": {"art": "uebernahme", "was": "Kosten pro Monat", "quelle": "neu",
-                "text": {"hauptwert": "3-4 Runs", "beschriftung": "Starter-Plan",
-                         "einordnung": "pro Monat"}}
+    "begruendung": "er nennt die Doku-Stelle",
+    "braucht": {"art": "beleg", "quelle": "vorhanden",
+                "zeigt": "n8n-Doku, Node parameters"}
   }],
   "material_abgelehnt": [{"datei": "shot_x.png", "grund": "..."}],
   "gesamturteil": "ein Satz, wie das Video wirken soll"
@@ -9957,83 +10016,120 @@ def _ad_kontext(s: dict) -> str:
     return "\n\n".join(teile)
 
 
+def _komposition(a: dict) -> str:
+    """Der Plan spricht seit dem Vokabular von Kompositionen. Alte Plaene mit
+    'zustand' bleiben lesbar — der Name aendert sich, die Sache nicht."""
+    return str(a.get("komposition") or a.get("zustand") or "").lower().strip()
+
+
+def _hat_zahl(werte) -> bool:
+    if isinstance(werte, (list, tuple)):
+        return any(_hat_zahl(w) for w in werte)
+    return any(c.isdigit() for c in str(werte or ""))
+
+
 def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
-    """Die harten Regeln aus C3. Sie werden GEPRUEFT, nicht erbeten — und ein
-    Verstoss geht EINMAL zurueck an den Art Director, statt in der Ausfuehrung
-    zu einem Sonderfall zu werden. Genau daran ist der alte Prompt gestorben:
-    jede Ausnahme wurde eine weitere Regel."""
+    """Die harten Regeln. Sie werden GEPRUEFT, nicht erbeten — und ein Verstoss
+    geht EINMAL zurueck an den Art Director, statt in der Ausfuehrung zu einem
+    Sonderfall zu werden. Genau daran ist der alte Prompt gestorben: jede
+    Ausnahme wurde eine weitere Regel."""
     ab = plan.get("abschnitte") if isinstance(plan, dict) else None
     if not isinstance(ab, list) or not ab:
         return ["kein Feld 'abschnitte' mit Inhalt"]
     fehler, vorher, ende = [], None, 0.0
-    vollbild_s = 0.0
+    voll_s, zaehler = 0.0, {}
     for i, a in enumerate(ab):
         try:
             von, bis = float(a.get("von")), float(a.get("bis"))
         except Exception:
             fehler.append(f"Abschnitt {i}: von/bis fehlen oder sind keine Zahlen")
             continue
-        z = str(a.get("zustand") or "").lower().strip()
-        if z not in ZUSTAENDE:
-            fehler.append(f"Abschnitt {i} ({von:.1f}s): Zustand '{z}' gibt es nicht "
-                          f"— erlaubt: {', '.join(ZUSTAENDE)}")
+        k = _komposition(a)
+        laenge = bis - von
+        if k not in KOMPOSITIONEN:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): Komposition '{k}' gibt es "
+                          f"nicht — erlaubt: {', '.join(KOMPOSITIONEN)}")
+        zaehler[k] = zaehler.get(k, 0) + 1
+        if k in VOLLBILD_FAMILIE:
+            voll_s += max(0.0, laenge)
+
+        # Rhythmus: kein Takt, aber weder Hektik noch tote Strecke.
         letzter = i == len(ab) - 1
-        unten = MIN_LETZTER_S if letzter else MIN_ABSCHNITT_S
-        if bis - von < unten - 1e-6:
-            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {bis - von:.1f}s, "
-                          f"mindestens {unten:.0f}s"
-                          + ("" if letzter else " — der Rhythmus ist 6-12s"))
-        if bis - von > MAX_ABSCHNITT_S + 1e-6:
-            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {bis - von:.1f}s, "
-                          f"hoechstens {MAX_ABSCHNITT_S:.0f}s — danach steht das Bild")
+        unten = MIN_KURZ_S if k in KURZ_ERLAUBT else MIN_ABSCHNITT_S
+        if laenge < unten - 1e-6 and not (letzter and laenge >= MIN_KURZ_S):
+            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {laenge:.1f}s — "
+                          f"'{k}' braucht mindestens {unten:.0f}s"
+                          + (f" (unter {MIN_KURZ_S:.0f}s nur "
+                             f"{', '.join(KURZ_ERLAUBT)})" if unten > MIN_KURZ_S else ""))
+        b = a.get("braucht") or {}
+        bewegt = bool(str(b.get("bewegung") or "").strip())
+        if (laenge > LANG_OHNE_BEWEGUNG_S + 1e-6 and not bewegt
+                and k not in EIGENBEWEGUNG):
+            fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {laenge:.1f}s in "
+                          f"'{k}', und darin passiert nichts — teil ihn oder gib "
+                          f"ihm eine Bewegung")
         if abs(von - ende) > 0.25:
             fehler.append(f"Abschnitt {i}: beginnt bei {von:.1f}s, der vorige endete "
                           f"bei {ende:.1f}s — luecken- und ueberlappungsfrei aneinander")
         ende = bis
-        if z == vorher:
-            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{z}' steht zweimal "
+        if k == vorher:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' steht zweimal "
                           f"hintereinander")
-        vorher = z
-        if z == "vollbild":
-            vollbild_s += max(0.0, bis - von)
-            if a.get("braucht"):
+        vorher = k
+
+        # Auftrag statt Prosa.
+        if k == "vollbild":
+            if b:
                 fehler.append(f"Abschnitt {i} ({von:.1f}s): vollbild braucht nichts")
-        elif not a.get("braucht"):
-            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{z}' ohne 'braucht' — die "
-                          f"Ausfuehrung wuesste nicht, was sie holen soll"
-                          + (". Eine Bubble ohne Hintergrund ist ein leerer Rahmen."
-                             if z == "bubble" else ""))
-        # Was gebaut wird, braucht seinen Anzeigetext IM PLAN. Sonst erfindet
-        # ihn die Ausfuehrung — und die erste Fassung hat dafuer die interne
-        # Begruendung des Art Directors ins Bild gestellt.
-        b_ = a.get("braucht") or {}
-        if z != "vollbild" and b_:
-            quelle_ = str(b_.get("quelle") or "").lower()
-            gebaut = not quelle_.startswith("vorhanden") and not any(
-                _dateiname(m.get("url", "")).lower() in quelle_
-                for m in (material or []))
-            t_ = b_.get("text") or {}
-            if gebaut and not str(t_.get("hauptwert") or "").strip():
-                fehler.append(f"Abschnitt {i} ({von:.1f}s): hier wird gebaut, aber "
-                              f"braucht.text.hauptwert fehlt — was steht im Bild?")
-            for feld, grenze in (("hauptwert", 24), ("beschriftung", 48),
-                                 ("einordnung", 48)):
-                wert = str(t_.get(feld) or "")
-                if len(wert) > grenze:
-                    fehler.append(f"Abschnitt {i} ({von:.1f}s): text.{feld} hat "
-                                  f"{len(wert)} Zeichen, hoechstens {grenze} — "
-                                  f"davon bleibt im Bild nichts lesbar")
+            continue
+        if not b:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' ohne 'braucht' — die "
+                          f"Ausfuehrung wuesste nicht, was sie bauen soll")
+            continue
+        if k == "punch" and not str(b.get("wort") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): punch ohne 'wort'")
+        elif k == "drift" and not str(b.get("richtung") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): drift ohne 'richtung'")
+        elif k not in ("punch", "drift") and not str(b.get("zeigt") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): 'braucht.zeigt' fehlt — was "
+                          f"ist konkret zu sehen?")
+        if k in BEWEGUNG_PFLICHT and not bewegt:
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' ohne 'bewegung' ist "
+                          f"eine Folie"
+                          + (" — ein Standbild hinter ihm ist immer schlechter "
+                             "als vollbild" if k.startswith("bubble") else ""))
+        if k in ENDZUSTAND_PFLICHT and not str(b.get("endzustand") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' baut etwas auf, aber "
+                          f"'endzustand' fehlt — was steht am Ende da?")
+        # D1: Text ohne Bewegung und ohne Zahl ist eine Folie.
+        txt = b.get("text")
+        if txt and not bewegt and not _hat_zahl(txt):
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): nur Text, ohne Bewegung und "
+                          f"ohne Zahl — das ist eine Folie. Entweder Bewegung, "
+                          f"Zahl oder Vergleich, oder weglassen: die Captions "
+                          f"zeigen den Satz ohnehin")
+        for zeile in (txt if isinstance(txt, list) else [txt] if txt else []):
+            if len(str(zeile)) > TEXT_ZEILE_MAX:
+                fehler.append(f"Abschnitt {i} ({von:.1f}s): Textzeile hat "
+                              f"{len(str(zeile))} Zeichen, hoechstens "
+                              f"{TEXT_ZEILE_MAX} — davon bleibt nichts lesbar")
+
     if abs(ende - dauer) > 1.0:
         fehler.append(f"der Plan endet bei {ende:.1f}s, das Video bei {dauer:.1f}s")
-    anteil = vollbild_s / max(dauer, 1e-6)
+    for k, n in zaehler.items():
+        if n > MAX_JE_KOMPOSITION:
+            fehler.append(f"'{k}' kommt {n}-mal vor, hoechstens "
+                          f"{MAX_JE_KOMPOSITION}-mal — du hast 16 zur Auswahl")
+    if zaehler.get("uebernahme", 0) > MAX_UEBERNAHMEN:
+        fehler.append(f"{zaehler['uebernahme']} Uebernahmen, hoechstens "
+                      f"{MAX_UEBERNAHMEN} — er soll nicht dauernd verschwinden")
+    anteil = voll_s / max(dauer, 1e-6)
     if anteil < MIN_VOLLBILD_ANTEIL:
-        fehler.append(f"nur {anteil * 100:.0f}% Vollbild, abgelehnt unter "
-                      f"{MIN_VOLLBILD_ANTEIL * 100:.0f}% (Richtwert "
-                      f"{RICHT_VOLLBILD_ANTEIL * 100:.0f}%)")
+        fehler.append(f"nur {anteil * 100:.0f}% Vollbild-Familie (vollbild, punch, "
+                      f"drift, overlay_wandert, flaeche_kippt), mindestens "
+                      f"{MIN_VOLLBILD_ANTEIL * 100:.0f}%")
     # Der Pruefer muss DIESELBE Zuordnung machen wie der Beschaffer, sonst lehnt
-    # er Plaene ab, die die Ausfuehrung problemlos bauen kann: der Art Director
-    # schrieb quelle "vorhanden" statt des Dateinamens, _material_treffer haette
-    # das Fundstueck gefunden, _plan_pruefen hat es als ungenutzt gemeldet.
+    # er Plaene ab, die die Ausfuehrung problemlos bauen kann.
     abgelehnt = json.dumps(plan.get("material_abgelehnt") or [], ensure_ascii=False).lower()
     quellen = [str(((a.get("braucht") or {}).get("quelle") or "")).lower() for a in ab]
     for m in material or []:

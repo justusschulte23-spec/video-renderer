@@ -11112,8 +11112,32 @@ def _material_treffer(s: dict, braucht: dict) -> Optional[dict]:
         n = _dateiname(m.get("url", "")).lower()
         if n and n in quelle:
             return m
-    if quelle.startswith("vorhanden") and len(mats) == 1:
+    if not quelle.startswith("vorhanden"):
+        return None
+    if len(mats) == 1:
         return mats[0]
+    # MEHRERE Fundstuecke, und der Plan sagt nur "vorhanden". Vorher gab es
+    # hier nichts zurueck — im Lauf vom 06.08. fiel ein Beleg-Abschnitt auf
+    # vollbild, obwohl VIER Belege in der Sitzung lagen. Ein Fundstueck ist
+    # bezahlt und angesehen; es liegen zu lassen, weil der Plan es nicht beim
+    # Namen nennt, ist die teuerste aller Antworten.
+    benutzt = s.setdefault("_material_benutzt", set())
+    worte = {w for w in re.findall(r"[a-zA-Z0-9äöüß]{4,}",
+                                   str((braucht or {}).get("zeigt") or "").lower())}
+    frei = [m for m in mats if _dateiname(m.get("url", "")) not in benutzt]
+    if worte:
+        # Das Fundstueck, dessen Titel oder Dateiname am meisten mit dem
+        # gesuchten Bild zu tun hat.
+        def naehe(m: dict) -> int:
+            hay = (str(m.get("titel") or "") + " " + str(m.get("url") or "")).lower()
+            return sum(1 for w in worte if w in hay)
+        kandidaten = sorted(frei or mats, key=naehe, reverse=True)
+        if kandidaten and naehe(kandidaten[0]) > 0:
+            benutzt.add(_dateiname(kandidaten[0].get("url", "")))
+            return kandidaten[0]
+    if frei:
+        benutzt.add(_dateiname(frei[0].get("url", "")))
+        return frei[0]
     return None
 
 
@@ -13218,6 +13242,11 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
     _regie = (auftrag or {}).pop("regie", None) if isinstance(auftrag, dict) else None
     _platz = (auftrag or {}).pop("platz", None) if isinstance(auftrag, dict) else None
     _geruest = (auftrag or {}).pop("geruest", "") if isinstance(auftrag, dict) else ""
+    # Der <style>-Block des Kits, einmal herausgezogen. Wirft der Gestalter ihn
+    # weg, legen wir ihn zurueck — ganz vorn, damit seine eigenen Regeln
+    # danach kommen und gewinnen.
+    _m_css = re.search(r"<style>.*?</style>", _geruest or "", re.S)
+    _kit_css = _m_css.group(0) if _m_css else ""
     auftrag_text = (
         "TEXT — GENAU DIESE WORTE STEHEN IM BILD, keine anderen\n"
         + json.dumps(auftrag, ensure_ascii=False, indent=1)
@@ -13278,15 +13307,23 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
             # eine 1080er Leinwand. Im Video war das ein Stapel 6-Pixel-Woerter
             # in der Ecke, und keine Pruefung hat angeschlagen, weil formal
             # alles dastand.
-            if _geruest and not ("<style" in mk and ".flaeche" in mk):
-                zustand["runden"] += 1
-                return {"ok": False, "runde": zustand["runden"],
-                        "fehler": "Der <style>-Block des Geruests fehlt. Die "
-                                  "Klassennamen allein tun nichts — ohne das "
-                                  "Stylesheet rendert der Browser rohen Text in "
-                                  "16px. Uebernimm das <style> aus dem Geruest "
-                                  "vollstaendig und haeng deine eigenen Regeln "
-                                  "hinten an."}
+            #
+            # ⚠️⚠️ ABLEHNEN WAR DIE FALSCHE ANTWORT und hat es schlimmer
+            # gemacht: der Gestalter lief in die Ablehnung, verbrauchte alle
+            # Runden und gab GAR NICHTS ab — zwei Abschnitte fielen dadurch auf
+            # vollbild, wo vorher wenigstens ein haessliches Element stand. Das
+            # Stylesheet gehoert UNS. Also wird es zurueckgelegt statt
+            # eingefordert: deterministisch, kostet keine Runde, kann nicht
+            # danebengehen. REGEL: was man selbst wiederherstellen kann, darf
+            # man nicht vom Modell verlangen.
+            # Geprueft wird ".flaeche" MIT Punkt: das ist eine CSS-Regel. Ohne
+            # Punkt waere es nur das Klassenattribut, und genau daran ist der
+            # alte Waechter vorbeigelaufen. Ein eigener <style>-Block des
+            # Gestalters ohne die Kit-Regeln zaehlt auch als "weg".
+            if _geruest and _kit_css and ".flaeche" not in mk:
+                mk = _kit_css + mk
+                log.info("[HTMLAGENT] Stylesheet des Geruests war weg — "
+                         "wieder vorangestellt")
             mk, verdrahtet = _fx_verdrahten(mk)
             if verdrahtet:
                 log.info("[HTMLAGENT] verdrahtet: %s", ", ".join(verdrahtet))

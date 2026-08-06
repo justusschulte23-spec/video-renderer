@@ -9988,10 +9988,20 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     if anteil < MIN_VOLLBILD_ANTEIL:
         fehler.append(f"nur {anteil * 100:.0f}% Vollbild, mindestens "
                       f"{MIN_VOLLBILD_ANTEIL * 100:.0f}%")
-    genannt = json.dumps(plan, ensure_ascii=False).lower()
+    # Der Pruefer muss DIESELBE Zuordnung machen wie der Beschaffer, sonst lehnt
+    # er Plaene ab, die die Ausfuehrung problemlos bauen kann: der Art Director
+    # schrieb quelle "vorhanden" statt des Dateinamens, _material_treffer haette
+    # das Fundstueck gefunden, _plan_pruefen hat es als ungenutzt gemeldet.
+    abgelehnt = json.dumps(plan.get("material_abgelehnt") or [], ensure_ascii=False).lower()
+    quellen = [str(((a.get("braucht") or {}).get("quelle") or "")).lower() for a in ab]
     for m in material or []:
         n = _dateiname(m.get("url", "")).lower()
-        if n and n not in genannt:
+        if not n:
+            continue
+        genutzt = any(n in q for q in quellen) or n in abgelehnt
+        if not genutzt and len(material) == 1:
+            genutzt = any(q.startswith("vorhanden") for q in quellen)
+        if not genutzt:
             fehler.append(f"Material {n} kommt nicht vor und wird nicht abgelehnt "
                           f"(in einen Abschnitt legen oder in 'material_abgelehnt' "
                           f"mit Grund)")

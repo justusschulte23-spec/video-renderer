@@ -295,11 +295,33 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
     </style>"""
 
 
-def _titel_px(breit: int, hoch: int) -> int:
+# Wie breit ein Zeichen im Verhaeltnis zur Schriftgroesse baut. Grob, aber es
+# muss nur die LAENGSTE Silbe retten, nicht den Satz setzen.
+_ZEICHEN_BREIT = 0.56
+
+
+def _passt_px(text: str, breit: int, wunsch: int, rand: float = .164) -> int:
+    """Groesste Schrift, in der das laengste WORT noch in die Zeile passt.
+
+    Im Lauf vom 07.08. stand "Firecraw Plan" im Bild — das 'l' von Firecrawl
+    lag ausserhalb der Leinwand. Umbrechen hilft da nicht: ein einzelnes Wort
+    bricht nicht. Also muss die Groesse dem laengsten Wort folgen, nicht
+    umgekehrt."""
+    woerter = [w for w in str(text or "").split() if w]
+    if not woerter:
+        return wunsch
+    laengstes = max(len(w) for w in woerter)
+    frei = breit * (1.0 - rand)
+    passt = int(frei / max(1, laengstes) / _ZEICHEN_BREIT)
+    return max(28, min(wunsch, passt))
+
+
+def _titel_px(breit: int, hoch: int, text: str = "") -> int:
     """Die Titelgroesse steht als Inline-Stil im Markup und schlaegt jede
     Regel im Stylesheet. Ohne diese Weiche blieb der Titel auf ganzer Leinwand
     bei der Kartengroesse — der eine Wert, den das Vollbild-CSS nicht erreicht."""
-    return int(breit * .155) if _ist_vollbild(breit, hoch) else max(40, int(breit * .13))
+    wunsch = int(breit * .155) if _ist_vollbild(breit, hoch) else max(40, int(breit * .13))
+    return _passt_px(text, breit, wunsch)
 
 
 def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
@@ -339,9 +361,11 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
       .oben, .mitte, .unten {{ display:block; min-width:0; }}
       .mitte {{ align-self:center; }}
       .unten {{ align-self:end; }}
-      /* Leere Zonen duerfen keinen Platz kosten. Ein Zitat ohne Kicker soll
-         nicht dadurch tiefer rutschen, dass oben ein leeres div steht. */
-      .oben:empty, .unten:empty {{ display:none; }}
+      /* KEIN display:none auf leere Zonen. Das nimmt sie aus dem Raster, und
+         dann rutscht die Mitte in die erste Reihe — im Lauf vom 07.08. klebte
+         das Zitat deshalb oben am Rand statt in der Bildmitte zu stehen. Eine
+         leere Zone bleibt Gitterzelle, sie ist nur null Pixel hoch. */
+      .oben:empty, .unten:empty {{ min-height:0; }}
       /* AUFTRITT: gestaffelt von unten, nicht alles auf einmal. Ein Plakat,
          das in einem Stueck erscheint, hat keine Leserichtung. */
       .inhalt > * {{ animation:auf_{ 'v' }
@@ -525,8 +549,15 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         wert = _e(zahl or haupt)
         return plakat(
             (f"<p class='kicker'>{_e(rest[0]) if rest else _e(zwei)}</p>" if (rest or zwei) else ""),
-            f"<p class='wert schlag'><em>{wert}</em>"
-            + (f"<span class='chip'>{_e(einheit)}</span>" if einheit else "") + "</p>"
+            f"<p class='wert schlag' style='font-size:"
+            f"{_passt_px(str(zahl or haupt), breit, int(breit * (.27 if _ist_vollbild(breit, hoch) else .20)))}px'>"
+            f"<em>{wert}</em>"
+            # Der Chip traegt die EINHEIT einer Zahl ("70" + "Shops"). Ohne
+            # Zahl gibt `_zahl_teilen` den ganzen Text als Einheit zurueck —
+            # dann stand "Firecrawl Plan" zweimal im Bild, einmal riesig und
+            # einmal als Chip darunter. Kein Zahl, kein Chip.
+            + (f"<span class='chip'>{_e(einheit)}</span>" if (zahl and einheit) else "")
+            + "</p>"
             + (f"<p class='stuetze'>{_e(zwei)}</p>" if zwei and rest else ""),
             "<div class='balken'><i style='--fuell:78%'></i></div>")
 
@@ -592,13 +623,15 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         return plakat(
             "",
             "<p class='marke'>&bdquo;</p>"
-            f"<p class='zitat rein v1'>{_e(haupt)}</p>",
+            f"<p class='zitat rein v1' style='font-size:"
+            f"{_passt_px(haupt, breit, int(breit * (.102 if _ist_vollbild(breit, hoch) else .085)))}px'>"
+            f"{_e(haupt)}</p>",
             (f"<p class='quelle'>{_e(zwei)}</p>" if zwei else ""))
 
     if art == "titel":
         return plakat(
             (f"<p class='kicker'>{_e(zwei)}</p>" if zwei else ""),
-            f"<p class='wert schlag' style='font-size:{_titel_px(breit, hoch)}px'>"
+            f"<p class='wert schlag' style='font-size:{_titel_px(breit, hoch, haupt)}px'>"
             f"<span class='unterstrich'>{_e(haupt)}</span></p>",
             (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
 

@@ -716,6 +716,10 @@ def call_openrouter(system_prompt: str, user_message: str,
 
 
 HTML_TOOL_MAX_S = 8.0        # ein vom Agenten gebautes Element, kein Film
+# Was das Kit bauen kann, geht OHNE Gestalter ins Video. Auf false gestellt
+# laeuft wieder alles ueber den Gestalter — dann aber mit dem alten Preis von
+# rund 0,45 USD je Element, und der Deckel schneidet den halben Plan ab.
+KIT_DIREKT = os.getenv("KIT_DIREKT", "1") not in ("0", "false", "False")
 HTML_TOOL_MAX_PX = 1080 * 1920
 
 
@@ -11404,12 +11408,24 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                           s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S),
                           wende=(k in GEWENDET))
         if markup:
-            # Das Kit ist das GERUEST, nicht das fertige Bild: Layout, Marke,
-            # Hierarchie und Zeiten stehen. Der Gestalter veredelt es — Haken,
-            # X, gruene und rote Raender, ein Icon, Betonung, Bewegung. So
-            # arbeitet ein Motion Designer mit einer Vorlage.
             _kit_geruest = markup
             log.info("[BAU] %d Geruest '%s' aus dem Kit (%dx%d)", i, art, w_px, h_px)
+            # Das Kit liefert seit dem Vollbild-Layout ein FERTIGES Bild, kein
+            # Skelett. Es fuer 0,45 USD "veredeln" zu lassen hat den Deckel
+            # gerissen, bevor der halbe Plan gebaut war. Direkt rendern.
+            if KIT_DIREKT:
+                res = await asyncio.to_thread(
+                    _kit_direkt, markup, w_px, h_px, min(sek, HTML_TOOL_MAX_S))
+                if res.get("url"):
+                    log.info("[BAU] %d '%s' direkt aus dem Kit — 0 USD", i, art)
+                    return {"quelle_art": "kit", "runden": 0, "kosten": 0.0,
+                            "ueberlauf": bool(res.get("ueberlauf")),
+                            "hinweis": str(res.get("hinweis") or "")[:200],
+                            "sekunden_material": float(res.get("seconds") or sek),
+                            "layer_source": {"kind": "video", "url": res["url"],
+                                             "transparent": True}}
+                log.warning("[BAU] %d Kit-Render misslang (%s) — Gestalter uebernimmt",
+                            i, str(res.get("hinweis"))[:120])
 
     try:
         # _html_subagent ruft intern asyncio.run fuer den Pruefstand. Direkt
@@ -13322,6 +13338,41 @@ def _html_agent_tools() -> list:
         T("fertig", "Abgeben. Kurze Begruendung, warum es steht.",
           {"begruendung": {"type": "string"}}, ["begruendung"]),
     ]
+
+
+def _kit_direkt(markup: str, w_px: int, h_px: int, dauer_s: float) -> dict:
+    """Kit-Markup ohne Umweg ins Video. Kein Modellaufruf, keine Kosten.
+
+    WARUM DAS DER WICHTIGSTE HEBEL IST: der Gestalter kostet 0,35-0,49 USD je
+    Element. Bei einem Deckel von 1,21 USD sind nach zwei bis drei Elementen
+    die Mittel weg, und der Rest des Plans faellt auf vollbild zurueck — im
+    Lauf vom 07.08. waren das sechs Vollbild-Abschnitte am Stueck und 15,6
+    Sekunden, in denen nichts passiert. Nicht weil etwas kaputt war, sondern
+    weil das Geld alle war.
+
+    Das Kit liefert aber ein FERTIGES Layout, kein Skelett: Marke, Hierarchie,
+    Zonen, Zeiten und Bewegung stehen. Es durch einen Gestalter zu schicken,
+    der es "veredelt", kostet einen halben Euro und bringt im besten Fall ein
+    Icon dazu — im schlechteren wirft er das Stylesheet weg. Also geht das,
+    was das Kit kann, direkt ins Video, und der Gestalter macht nur noch das,
+    was das Kit NICHT kann."""
+    job = Path(f"/tmp/kit_{uuid.uuid4().hex[:8]}")
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        out, ueber = asyncio.run(
+            _render_html_alpha(markup, w_px, h_px, dauer_s, job))
+        if not out:
+            return {"url": "", "hinweis": "Alpha-Render fehlgeschlagen"}
+        url = upload_supabase(out, out.stem, folder="htmltool",
+                              content_type="video/webm")
+        ELEMENT_MASSE[url] = (w_px, h_px)
+        return {"url": url, "kosten_usd": 0.0, "runden": 0,
+                "ueberlauf": bool(ueber), "seconds": dauer_s,
+                "hinweis": "; ".join(ueber or [])[:200]}
+    except Exception as exc:
+        return {"url": "", "hinweis": f"Kit-Render: {str(exc)[:160]}"}
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
 
 
 def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,

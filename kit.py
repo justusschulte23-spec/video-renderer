@@ -128,10 +128,15 @@ def _css_leben(k: dict, breit: int, hoch: int, sekunden: float) -> str:
                {dauer - raus:.2f}s both; }}
       @keyframes karte_raus {{ from {{ opacity:1 }}
                                to {{ opacity:0; transform:scale(.985) }} }}
-      .inhalt {{ animation:atmen {dauer:.2f}s linear both;
-                 transform-origin:50% 50%; }}
+      /* Der Atem sitzt auf dem GRUND, nicht auf dem Inhalt. Auf dem Inhalt
+         hat er ihn aus der Leinwand geschoben: der Pruefstand meldete
+         "Inhalt ist 1059px breit, die Leinwand nur 950px". Ein Zoom, der den
+         Text beschneidet, ist kein Zoom, sondern ein Fehler — dieselbe Falle
+         wie der Ken-Burns auf dem passgenau gelegten Beleg am 06.08. */
+      .flaeche {{ animation:atmen {dauer:.2f}s linear both;
+                  transform-origin:50% 50%; }}
       @keyframes atmen {{ from {{ transform:scale(1) }}
-                          to {{ transform:scale(1.035) }} }}
+                          to {{ transform:scale(1.06) }} }}
       .raster {{ animation:driften {max(9.0, dauer * 2.4):.1f}s linear both; }}
       @keyframes driften {{ from {{ background-position:0 0 }}
                             to {{ background-position:{int(breit * .09)}px

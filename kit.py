@@ -300,6 +300,13 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
       @keyframes ring_puls {{ 0% {{ opacity:.85; transform:scale(1) }}
                               100% {{ opacity:0; transform:scale(1.5) }} }}
       .kachel_reihe {{ display:flex; align-items:center; gap:{int(breit * .045)}px; }}
+      .kopfzeile {{ display:flex; align-items:center; gap:{int(breit * .028)}px;
+                    margin:0 0 {int(breit * .03)}px; }}
+      .kopfzeile .kicker {{ margin:0; }}
+      .kachel.klein {{ --kachel:{max(44, int(breit * .105))}px;
+                       border-radius:{max(10, int(breit * .024))}px;
+                       animation-duration:{k['rein_ms']}ms; }}
+      .kachel.klein::after {{ border-width:1.5px; }}
       .kachel_name {{ font-size:{max(24, int(breit * .085))}px; font-weight:700;
                       letter-spacing:-.01em; margin:0; }}
 
@@ -484,6 +491,18 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
       .kachel {{ width:var(--kachel,{int(breit * .26)}px);
                  height:var(--kachel,{int(breit * .26)}px);
                  border-radius:{int(breit * .058)}px; }}
+      .kachel.klein {{ --kachel:{int(breit * .085)}px;
+                       border-radius:{int(breit * .020)}px; }}
+      .kopfzeile {{ gap:{int(breit * .024)}px;
+                    margin:0 0 {int(breit * .028)}px; }}
+      .kopfzeile .kicker::after {{ display:none; }}
+      .kopfzeile {{ position:relative; padding-bottom:{int(breit * .026)}px; }}
+      .kopfzeile::after {{ content:''; position:absolute; left:0; right:0; bottom:0;
+                           height:3px; transform-origin:left;
+                           background:linear-gradient(90deg,{k['akzent']} 0%,
+                                      transparent 92%);
+                           animation:wischen {k['rein_ms'] * 2}ms
+                                     cubic-bezier(.22,1,.36,1) {k['versatz_ms']}ms both; }}
       .kachel_name {{ font-size:{max(48, int(breit * .095))}px; }}
       .cta {{ font-size:{int(breit * .20)}px; }}
     </style>"""
@@ -576,6 +595,26 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         return (f"{kopf}<div class='wrap {klasse}'><div class='flaeche'></div>"
                 f"<div class='raster'></div><div class='inhalt'>{inhalt}</div></div>")
 
+    # DIE LOGO-KACHEL GEHOERT IN JEDE KARTE, nicht nur in die Art 'marke'.
+    # 3453 Marken liegen im Sprite, und benutzt wurden sie praktisch nie: der
+    # Art Director waehlt 'marke' selten, also blieb die Bibliothek liegen und
+    # im Video stand "n8n" als Wort, wo sein Zeichen stehen koennte. Nennt der
+    # Text eine Marke, sitzt ihr Logo ab jetzt oben in der Zeile — klein,
+    # neben dem Kicker, in ihrer echten Farbe.
+    logo_marke = ""
+    if logo_slug and art != "marke":
+        logo_marke = ("<span class='kachel klein'"
+                      + (f" style='--marke:{logo_farbe}'" if logo_farbe else "")
+                      + "><svg class='lg' viewBox='0 0 24 24'>"
+                      f"<use href='#lg-{_e(logo_slug)}'/></svg></span>")
+
+    def kopfzeile(text: str) -> str:
+        """Kicker mit Logo davor. Ohne Marke bleibt es der reine Kicker."""
+        if not text and not logo_marke:
+            return ""
+        return ("<div class='kopfzeile'>" + logo_marke
+                + (f"<span class='kicker'>{text}</span>" if text else "") + "</div>")
+
     def plakat(oben: str, mitte: str, unten: str = "") -> str:
         """Drei Zonen: Marke oben, Aussage in der Mitte, Erdung unten.
 
@@ -598,7 +637,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         # ist schlimmer als eine, die nicht zaehlt.
         wert = _e(zahl or haupt)
         return plakat(
-            (f"<p class='kicker'>{_e(rest[0]) if rest else _e(zwei)}</p>" if (rest or zwei) else ""),
+            kopfzeile(_e(rest[0]) if rest else _e(zwei)),
             f"<p class='wert schlag' style='font-size:"
             f"{_passt_px(str(zahl or haupt), breit, int(breit * (.27 if _ist_vollbild(breit, hoch) else .20)))}px'>"
             f"<em>{wert}</em>"
@@ -622,7 +661,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
             return (f"<div class='sp{' stark' if stark else ''}'><h4>{_e(titel)}</h4>"
                     f"<ul>{lis}</ul></div>")
         return plakat(
-            (f"<p class='kicker'>{kicker}</p>" if kicker else ""),
+            kopfzeile(kicker),
             "<div class='spalten'>"
             + spalte(haupt, rest[:3], zustaende[2:5], False)
             + spalte(zwei, rest[3:6] or rest[:3], zustaende[5:8], True)
@@ -643,7 +682,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
                             f"<span><span class='zt'>{_e(titel)}</span>"
                             + (f"<br><span class='zn'>{_e(note)}</span>" if note else "")
                             + "</span></div>")
-        return plakat((f"<p class='kicker'>{kicker}</p>" if kicker else ""), zeilen_html)
+        return plakat(kopfzeile(kicker), zeilen_html)
 
     if art == "befund":
         # Reine Zustandsliste: was geht, was nicht. Ohne Zeichen davor waere es
@@ -652,7 +691,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
             f"<span class='befund {zustaende[i] or 'gut'}'>"
             f"{_mark(zustaende[i] or 'gut', 120 + i * 100)}{_e(z)}</span>"
             for i, z in enumerate(zeilen[:5]))
-        return plakat((f"<p class='kicker'>{kicker}</p>" if kicker else ""),
+        return plakat(kopfzeile(kicker),
                       f"<div>{chips}</div>",
                       ("<p class='quelle'><span class='geprueft'>"
                        + _mark("gut", 400) + "geprueft</span></p>"
@@ -662,7 +701,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         # Die App-Icon-Kachel als Held. Kein Kasten mit Firmennamen, sondern
         # das Zeichen selbst — daran haengt der Zuschauer sein Wiedererkennen.
         return plakat(
-            (f"<p class='kicker'>{kicker}</p>" if kicker else ""),
+            kopfzeile(kicker),
             "<div class='kachel_reihe'>"
             + (_logo(logo_slug, logo_farbe) or "")
             + f"<div><p class='kachel_name rein v1'>{_e(haupt)}</p>"
@@ -680,7 +719,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
 
     if art == "titel":
         return plakat(
-            (f"<p class='kicker'>{_e(zwei)}</p>" if zwei else ""),
+            kopfzeile(_e(zwei)),
             f"<p class='wert schlag' style='font-size:{_titel_px(breit, hoch, haupt)}px'>"
             f"<span class='unterstrich'>{_e(haupt)}</span></p>",
             (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))

@@ -10403,6 +10403,16 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     if not isinstance(ab, list) or not ab:
         return ["kein Feld 'abschnitte' mit Inhalt"]
     fehler, vorher, ende = [], None, 0.0
+    # AB SEKUNDE 0 MUSS ETWAS PASSIEREN. Der Hook ist die Stelle, an der
+    # entschieden wird, ob jemand bleibt; fuenf Sekunden nacktes Gesicht sind
+    # dort verschenkt. Stand bisher nur als Bitte im Prompt und wurde
+    # entsprechend oft ignoriert.
+    if ab and _komposition(ab[0]) in ("vollbild", "drift") and not ab[0].get("braucht"):
+        fehler.append(
+            "Abschnitt 0 ist '%s' ohne Element — im Hook passiert damit ab "
+            "Sekunde 0 nichts. Nimm punch mit dem staerksten Wort, "
+            "overlay_wandert mit der Zahl, oder gib ihm ein Element."
+            % _komposition(ab[0]))
     voll_s, zaehler = 0.0, {}
     for i, a in enumerate(ab):
         try:
@@ -11426,6 +11436,10 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         if slug and slug in _logo_meta():
             farbe = _logo_meta()[slug][1]
         elif gefunden:
+            # Gilt jetzt fuer jede Art: nennt der Anzeigetext eine Marke, kommt
+            # ihr Zeichen mit. Vorher hing das an art_element == "marke", und
+            # weil der Art Director die selten waehlt, lagen 3453 Logos
+            # ungenutzt herum, waehrend im Bild "n8n" als Wort stand.
             slug, farbe = gefunden[0]["slug"], gefunden[0]["farbe"]
         elif slug:
             log.warning("[BAU] %d Logo-Slug '%s' gibt es nicht — ohne Kachel", i, slug)

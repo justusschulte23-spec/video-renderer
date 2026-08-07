@@ -8845,6 +8845,99 @@ def _url_erlaubt(url: str) -> tuple:
     return True, ""
 
 
+# Im Video stand ein Beleg mit einem Cookie-Banner quer darueber — "This site
+# uses cookies", DECLINE ALL, und dahinter verdeckt die eigentliche Doku-Stelle,
+# wegen der der Beleg ueberhaupt da war. Ein Screenshot mit Consent-Layer ist
+# kein Beleg, er ist ein Screenshot von einem Consent-Layer.
+#
+# Zwei Durchgaenge, bewusst in dieser Reihenfolge:
+#   1. wegKLICKEN — die Seite raeumt selbst auf, das Layout stimmt danach
+#   2. wegRAEUMEN — was klebt, wird entfernt; nur grosse, feststehende Kaesten,
+#      die Consent-Woerter tragen. Alles blind zu loeschen wuerde Navigation
+#      und Kopfzeilen mitnehmen.
+COOKIE_JS = """() => {
+  const worte = new RegExp(['accept','akzeptier','zustimm','einverstanden',
+    'allow all','alle erlauben','reject','ablehn','decline','nur notwendig',
+    'only necessary','essential only','got it','verstanden','schliessen'
+  ].join('|'), 'i');
+  const consent = new RegExp(['cookie','consent','datenschutz','privacy',
+    'gdpr','dsgvo','tracking'].join('|'), 'i');
+  let geklickt = 0, entfernt = 0;
+  const knoepfe = [...document.querySelectorAll(
+    'button,a[role=button],[role=button],input[type=button],input[type=submit]')];
+  for (const b of knoepfe) {
+    const txt = (b.innerText || b.value || '').trim();
+    if (!txt || txt.length > 40 || !worte.test(txt)) continue;
+    const kasten = b.closest('[id*=cookie],[class*=cookie],[id*=consent],[class*=consent],[id*=onetrust],[class*=cc-],[aria-label*=okie],[class*=gdpr],dialog');
+    const fest = kasten || (() => { let e = b;
+      while (e && e !== document.body) {
+        const s = getComputedStyle(e);
+        if (s.position === 'fixed' || s.position === 'sticky') return e;
+        e = e.parentElement; }
+      return null; })();
+    if (!fest) continue;
+    try { b.click(); geklickt++; } catch (e) {}
+    if (geklickt >= 3) break;
+  }
+  for (const e of [...document.querySelectorAll('body *')]) {
+    const s = getComputedStyle(e);
+    if (s.position !== 'fixed' && s.position !== 'sticky') continue;
+    const r = e.getBoundingClientRect();
+    const flaeche = (r.width * r.height) / (innerWidth * innerHeight);
+    if (flaeche < 0.06) continue;
+    const kennung = (e.id + ' ' + e.className + ' ' + (e.innerText || '').slice(0, 400));
+    if (!consent.test(kennung)) continue;
+    e.remove(); entfernt++;
+  }
+  // Dritter Durchgang: Banner, die GAR NICHT feststehen. Der Waechter davor
+  // verlangte position:fixed und z-index >= 100 — der n8n-Banner erfuellte
+  // beides nicht und stand deshalb im fertigen Video quer ueber dem Beleg.
+  // Hier zaehlt die Kennung, nicht die Positionierung.
+  const verdaechtig = document.querySelectorAll(
+    '[id*=cookie],[class*=cookie],[id*=consent],[class*=consent],[id*=onetrust],' +
+    '[class*=onetrust],[class*=cc-window],[class*=cc-banner],[id*=gdpr],[class*=gdpr],' +
+    '[aria-label*=okie],[aria-label*=onsent],[data-testid*=cookie]');
+  for (const e of verdaechtig) {
+    const r = e.getBoundingClientRect();
+    const st = getComputedStyle(e);
+    const klein_und_fest = (st.position === 'fixed' || st.position === 'sticky')
+      && r.width < 140 && r.height < 140;
+    // Der runde Knopf unten links, mit dem man den Banner wieder aufmacht.
+    // Winzig, aber im Beleg ein Fremdkoerper.
+    if (!klein_und_fest
+        && r.width * r.height < innerWidth * innerHeight * 0.03) continue;
+    if (e.contains(document.querySelector('main')) || e.tagName === 'BODY') continue;
+    e.remove(); entfernt++;
+  }
+  // Viele Banner sperren das Scrollen. Bleibt das stehen, ist die Seite
+  // eingefroren und ein Ausschnitt weiter unten nicht erreichbar.
+  document.documentElement.style.overflow = '';
+  document.body.style.overflow = '';
+  return {geklickt, entfernt};
+}"""
+
+
+async def _cookies_weg(seite) -> dict:
+    """Consent-Layer entfernen. Jeder Fehlschlag ist folgenlos — dann steht der
+    Banner eben drauf, statt dass der ganze Schuss ausfaellt."""
+    try:
+        res = await seite.evaluate(COOKIE_JS)
+        if res and (res.get("geklickt") or res.get("entfernt")):
+            await seite.wait_for_timeout(450)
+            log.info("[SHOT] Consent: %d geklickt, %d entfernt",
+                     res.get("geklickt", 0), res.get("entfernt", 0))
+            # Ein zweiter Durchgang: manche Seiten schieben nach dem Klick
+            # eine zweite Ebene nach ("Einstellungen speichern").
+            try:
+                await seite.evaluate(COOKIE_JS)
+            except Exception:
+                pass
+        return res or {}
+    except Exception as exc:
+        log.warning("[SHOT] Consent-Entfernung: %s", str(exc)[:140])
+        return {}
+
+
 @app.post("/tool/screenshot-url")
 async def tool_screenshot_url(req: ScreenshotRequest):
     """Eine oeffentliche Seite abfotografieren.
@@ -8883,6 +8976,7 @@ async def tool_screenshot_url(req: ScreenshotRequest):
                 # Ein Schuss vom halb geladenen Zustand ist besser als keiner.
                 await seite.goto(req.url, timeout=30000, wait_until="domcontentloaded")
             await seite.wait_for_timeout(req.warten_ms)
+            await _cookies_weg(seite)
             if req.selektor:
                 el = await seite.query_selector(req.selektor)
                 if not el:
@@ -8976,6 +9070,11 @@ async def _banner_wegklicken(seite) -> None:
         await seite.wait_for_timeout(200)
     except Exception:
         pass
+    # Der Rueckfall oben verlangte position:fixed UND z-index >= 100. Der
+    # n8n-Banner erfuellte beides nicht — und stand deshalb im fertigen Video
+    # quer ueber dem Beleg, wegen dem der Abschnitt ueberhaupt existierte.
+    # `_cookies_weg` prueft die Kennung statt der Positionierung.
+    await _cookies_weg(seite)
 
 
 TAG_SELEKTOREN = ("main", "article", "section", "table", "pre", "code", "header")
@@ -13052,7 +13151,14 @@ REGELN
 # Verdrahtung ein Nullbefehl und die Pruefung meldete trotzdem gruen: der
 # klassische stille Ausfall. Gegengeprueft an den querySelectorAll-Aufrufen in
 # vendor/motion-anything/fx.js.
-FX_KLASSEN = ("data-blur-text", "decrypt", "shiny", "gradient-text", "beam",
+# Aufnahmefester Auftritt fuer Elemente ohne Kit-Geruest. Selbsttragend, damit
+# er auch in Markup funktioniert, das sonst kein eigenes Stylesheet hat.
+VERDRAHTUNG_CSS = (
+    "<style>[data-vr-rein]{animation:vr_rein 380ms cubic-bezier(.22,1,.36,1) both}"
+    "@keyframes vr_rein{from{opacity:0;transform:translateY(.2em);filter:blur(10px)}"
+    "to{opacity:1;transform:none;filter:none}}</style>")
+
+FX_KLASSEN = ("data-vr-rein", "data-blur-text", "decrypt", "shiny", "gradient-text", "beam",
               "star", "bcards", "aurora", "dot-grid", "waves", "silk",
               "dark-veil", "data-reveal", "data-stagger", "data-kinetic",
               "data-fade", "data-pulse")
@@ -13090,12 +13196,20 @@ def _fx_verdrahten(markup: str) -> tuple:
     # damit galt ein Element mit einer einzigen Klasse schon als bewegt.
     if not any(k in markup for k in FX_KLASSEN):
         # Nichts bewegt sich. Die erste Textzeile kommt wenigstens herein.
+        #
+        # NICHT mehr ueber data-blur-text: das laeuft als CSS-TRANSITION, die
+        # ein IntersectionObserver ausloest. Eine Transition ist erst dann ein
+        # Animations-Objekt, wenn sie laeuft — der Frame-fuer-Frame-Render
+        # bekommt sie mit getAnimations() nie zu fassen und setzt sie nicht.
+        # Im Bild stand die Zeile dann die ganze Standzeit unscharf und auf
+        # Deckkraft 0. Eigene @keyframes sind echte Animations-Objekte und
+        # lassen sich auf jeden Zeitpunkt stellen.
         m = re.search(r"<(h1|h2|h3|div|span|p)([^>]*)>([^<>]{3,})<", markup)
         if m:
-            markup = (markup[:m.start()] + "<" + m.group(1)
-                      + (m.group(2) or "") + " data-blur-text>"
+            markup = (VERDRAHTUNG_CSS + markup[:m.start()] + "<" + m.group(1)
+                      + (m.group(2) or "") + " data-vr-rein>"
                       + m.group(3) + "<" + markup[m.end():])
-            getan.append("data-blur-text auf die erste Zeile")
+            getan.append("Auftritt auf die erste Zeile")
     return markup, getan
 
 

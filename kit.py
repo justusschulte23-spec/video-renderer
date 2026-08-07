@@ -82,9 +82,26 @@ def kit_fuer(client_id: str, wende: bool = False) -> dict:
     return {**k, **WENDE.get((client_id or "justus").lower(), WENDE["justus"])}
 
 
+def _ist_vollbild(breit: int, hoch: int) -> bool:
+    """Ist die Leinwand ein BILD oder ein KASTEN?
+
+    Der Unterschied ist nicht kosmetisch. Alle Masse hier haengen an `breit` —
+    das stimmt fuer eine Karte von 950x500. Auf 1080x1920 ergibt dieselbe Regel
+    einen Textblock, der ein Viertel der Hoehe fuellt, und darunter und darueber
+    steht Schwarz. Das ist der Grund, warum die Vollbild-Abschnitte wie Folien
+    aussehen: das Kit hatte fuer sie nie ein Layout, es hat ein Karten-Layout
+    ueber einen Bildschirm gezogen."""
+    return hoch >= breit * 1.35 and breit >= 700
+
+
 def _css(k: dict, breit: int, hoch: int) -> str:
     """Grundlage jeder Komponente. Safe Area, Raster, Typo — einmal, nicht
     jedes Mal neu erfunden."""
+    return _css_basis(k, breit, hoch) + (
+        _css_vollbild(k, breit, hoch) if _ist_vollbild(breit, hoch) else "")
+
+
+def _css_basis(k: dict, breit: int, hoch: int) -> str:
     return f"""
     <style>
       .wrap {{ position:relative; width:{breit}px; height:{hoch}px;
@@ -98,6 +115,36 @@ def _css(k: dict, breit: int, hoch: int) -> str:
                  background-image:radial-gradient({k['raster']} 1px,transparent 1px);
                  background-size:14px 14px; opacity:.6; }}
       .inhalt {{ position:relative; }}
+      /* ── AUFNAHMEFESTE BEWEGUNG ──────────────────────────────────────────
+         Das Kit benutzt KEINE Effekte der Bibliothek mehr fuer seine eigene
+         Typo. Grund: `data-blur-text` und `data-count` starten ueber einen
+         IntersectionObserver und laufen als CSS-TRANSITION bzw. ueber
+         requestAnimationFrame. Eine Transition ist erst dann eine Animation,
+         wenn sie laeuft — `document.getAnimations()` bekommt sie nie zu
+         fassen, und der Frame-fuer-Frame-Render setzt sie folglich nicht.
+         Im Standbild bei t=3s stand die Ueberschrift deshalb immer noch
+         unscharf und auf Deckkraft 0, und der Zaehler zeigte 0. Das ist der
+         Grund, warum die Bewegung in den Einblendungen nicht passte.
+         @keyframes-Animationen sind echte Animations-Objekte: sie lassen sich
+         auf jeden Zeitpunkt stellen und sind damit reproduzierbar. */
+      .rein {{ animation:rein_hoch {k['rein_ms']}ms cubic-bezier(.22,1,.36,1) both; }}
+      .rein.v1 {{ animation-delay:{k['versatz_ms']}ms; }}
+      .rein.v2 {{ animation-delay:{k['versatz_ms'] * 2}ms; }}
+      .rein.v3 {{ animation-delay:{k['versatz_ms'] * 3}ms; }}
+      @keyframes rein_hoch {{ from {{ opacity:0; transform:translateY(.22em);
+                                      filter:blur(12px) }}
+                              to {{ opacity:1; transform:none; filter:none }} }}
+      /* Der Hauptwert kommt nicht herein, er LANDET: ein kurzes Ueberschwingen
+         auf der Betonung, kein Einschweben. */
+      .schlag {{ animation:schlag_rein {int(k['rein_ms'] * 1.15)}ms
+                 cubic-bezier(.34,1.56,.64,1) both; }}
+      @keyframes schlag_rein {{ from {{ opacity:0; transform:scale(.86) }}
+                                60% {{ opacity:1 }}
+                                to {{ opacity:1; transform:none }} }}
+      /* Die drei Zonen sind im Kasten NICHT da: display:contents nimmt sie aus
+         dem Layout, die Kinder rutschen an ihre alte Stelle. So aendert der
+         Umbau auf Plakat-Zonen an den Karten kein einziges Pixel. */
+      .oben, .mitte, .unten {{ display:contents; }}
       .kicker {{ font-size:{max(16, int(breit * .038))}px; letter-spacing:.14em;
                  text-transform:uppercase; color:{k['muted']};
                  margin:0 0 {int(breit * .03)}px; font-family:{k['font']}; }}
@@ -132,6 +179,7 @@ def _css(k: dict, breit: int, hoch: int) -> str:
                                        cubic-bezier(.22,1,.36,1) 120ms both; }}
       @keyframes wischen {{ from {{ transform:scaleX(0) }} to {{ transform:scaleX(1) }} }}
       .chip {{ display:inline-block; padding:.35em .9em; border-radius:999px; font-weight:600;
+               letter-spacing:normal;
                background:{k['raised']}; border:1px solid {k['akzent']};
                color:{k['akzent']}; font-size:.22em; vertical-align:middle;
                margin-left:.5em; }}
@@ -247,6 +295,126 @@ def _css(k: dict, breit: int, hoch: int) -> str:
     </style>"""
 
 
+def _titel_px(breit: int, hoch: int) -> int:
+    """Die Titelgroesse steht als Inline-Stil im Markup und schlaegt jede
+    Regel im Stylesheet. Ohne diese Weiche blieb der Titel auf ganzer Leinwand
+    bei der Kartengroesse — der eine Wert, den das Vollbild-CSS nicht erreicht."""
+    return int(breit * .155) if _ist_vollbild(breit, hoch) else max(40, int(breit * .13))
+
+
+def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
+    """Das Layout fuer eine ganze Leinwand. Wird HINTER die Basis gehaengt und
+    ueberschreibt sie — gleiche Spezifitaet, spaeter gewinnt.
+
+    Der Unterschied zur Karte ist nicht "groesser". Eine Karte zeigt EINEN
+    Gedanken in einem Rahmen; ein Vollbild ist ein Plakat und braucht eine
+    Vertikale: oben eine Marke, in der Mitte die Aussage, unten die Erdung.
+    Ohne diese drei Zonen bleibt Text in der Mitte stehen und alles andere ist
+    Schwarz — genau das sah aus wie eine Folie."""
+    seite = int(breit * 0.082)
+    oben = int(hoch * 0.058)
+    unten = int(hoch * 0.070)
+    rein = k["rein_ms"]
+    versatz = k["versatz_ms"]
+    return f"""
+    <style>
+      /* Kein Rahmen mehr: auf ganzer Leinwand ist eine Kontur ein Kasten im
+         Bild. Die Flaeche IST das Bild. */
+      .flaeche {{ border-radius:0; border:none;
+                  background:{k['grund']}; box-shadow:none; }}
+      .raster {{ border-radius:0; opacity:.9;
+                 background-size:{max(22, int(breit * .026))}px
+                                 {max(22, int(breit * .026))}px;
+                 -webkit-mask-image:radial-gradient(120% 80% at 50% 22%,
+                                    #000 0%, transparent 78%);
+                 mask-image:radial-gradient(120% 80% at 50% 22%,
+                            #000 0%, transparent 78%); }}
+      /* Die Haarlinie am linken Rand war der einzige Halt im Bild. Auf einem
+         Plakat ist sie ein Fussel. */
+      .wrap::after {{ display:none; }}
+      .wrap {{ padding:{oben}px {seite}px {unten}px; justify-content:stretch; }}
+      /* Drei Reihen: Marke oben, Aussage in der Mitte (nimmt den Rest und
+         zentriert sich darin), Erdung unten. */
+      .inhalt {{ display:grid; grid-template-rows:auto 1fr auto; height:100%; }}
+      .oben, .mitte, .unten {{ display:block; min-width:0; }}
+      .mitte {{ align-self:center; }}
+      .unten {{ align-self:end; }}
+      /* Leere Zonen duerfen keinen Platz kosten. Ein Zitat ohne Kicker soll
+         nicht dadurch tiefer rutschen, dass oben ein leeres div steht. */
+      .oben:empty, .unten:empty {{ display:none; }}
+      /* AUFTRITT: gestaffelt von unten, nicht alles auf einmal. Ein Plakat,
+         das in einem Stueck erscheint, hat keine Leserichtung. */
+      .inhalt > * {{ animation:auf_{ 'v' }
+                     {rein}ms cubic-bezier(.22,1,.36,1) both; }}
+      .inhalt > *:nth-child(1) {{ animation-delay:0ms; }}
+      .inhalt > *:nth-child(2) {{ animation-delay:{versatz}ms; }}
+      .inhalt > *:nth-child(3) {{ animation-delay:{versatz * 2}ms; }}
+      .inhalt > *:nth-child(4) {{ animation-delay:{versatz * 3}ms; }}
+      @keyframes auf_v {{ from {{ opacity:0; transform:translateY({int(breit * .035)}px);
+                                  filter:blur(10px) }}
+                          to {{ opacity:1; transform:none; filter:none }} }}
+
+      /* OBEN — die Marke des Abschnitts, mit einer Linie darunter, die sich
+         aufzieht. Das ist die Zone, die im alten Layout ganz fehlte. */
+      .kicker {{ font-size:{max(28, int(breit * .032))}px; letter-spacing:.22em;
+                 color:{k['akzent']}; margin:0; padding-bottom:{int(breit * .028)}px;
+                 position:relative; }}
+      .kicker::after {{ content:''; position:absolute; left:0; right:0; bottom:0;
+                        height:3px; background:linear-gradient(90deg,
+                        {k['akzent']} 0%, transparent 92%);
+                        transform-origin:left;
+                        animation:wischen {rein * 2}ms cubic-bezier(.22,1,.36,1)
+                                  {versatz}ms both; }}
+
+      /* MITTE — die Aussage. Sie traegt das Bild allein, also darf sie das
+         auch optisch. */
+      .wert {{ font-size:{int(breit * .27)}px; line-height:.86;
+               letter-spacing:{'.005em' if k['serif'] else '-.045em'}; }}
+      .zitat {{ font-size:{int(breit * .102)}px; line-height:1.08;
+                letter-spacing:{'0' if k['serif'] else '-.02em'}; }}
+      .marke {{ font-size:{int(breit * .30)}px; line-height:.5;
+                margin:0 0 {int(breit * .015)}px; opacity:.85; }}
+      .einheit, .stuetze {{ font-size:{max(30, int(breit * .040))}px;
+                            line-height:1.32; }}
+      /* letter-spacing wird als BERECHNETE LAENGE vererbt: die -.045em des
+         Hauptwerts sind bei 291px rund -13px, und die erben sich unveraendert
+         auf den Chip mit seinen 64px — dort schoben sich die Buchstaben
+         uebereinander ("Shops" als Knaeuel). Deshalb wird es hier
+         zurueckgesetzt, nicht nur ueberschrieben. */
+      .chip {{ font-size:.20em; padding:.32em 1.0em; letter-spacing:normal;
+               vertical-align:.28em; }}
+
+      /* UNTEN — die Erdung. Eine Linie darueber, damit der Fuss nicht im
+         Nichts haengt. */
+      .quelle {{ font-size:{max(26, int(breit * .034))}px;
+                 padding-top:{int(breit * .030)}px;
+                 border-top:1px solid {k['linie']}; margin-top:0; }}
+      .balken {{ height:{max(12, int(breit * .014))}px;
+                 margin-top:{int(breit * .04)}px; }}
+
+      /* Listen und Spalten werden auf ganzer Leinwand luftiger, sonst kleben
+         sie oben zusammen und der Rest bleibt leer. */
+      .zeile {{ padding:{int(breit * .042)}px {int(breit * .05)}px;
+                margin-bottom:{int(breit * .028)}px;
+                border-radius:{max(8, k['radius'])}px; }}
+      .nr {{ font-size:{max(38, int(breit * .062))}px; min-width:1.5em; }}
+      .zt {{ font-size:{max(34, int(breit * .050))}px; }}
+      .zn {{ font-size:{max(24, int(breit * .032))}px; }}
+      .sp h4 {{ font-size:{max(30, int(breit * .046))}px; }}
+      .sp li {{ font-size:{max(26, int(breit * .038))}px;
+                padding:{int(breit * .022)}px 0; }}
+      .befund {{ font-size:{max(28, int(breit * .036))}px;
+                 padding:.42em 1.0em .42em .62em;
+                 margin:0 {int(breit * .022)}px {int(breit * .026)}px 0; }}
+      .geprueft {{ font-size:{max(22, int(breit * .028))}px; }}
+      .kachel {{ width:var(--kachel,{int(breit * .26)}px);
+                 height:var(--kachel,{int(breit * .26)}px);
+                 border-radius:{int(breit * .058)}px; }}
+      .kachel_name {{ font-size:{max(48, int(breit * .095))}px; }}
+      .cta {{ font-size:{int(breit * .20)}px; }}
+    </style>"""
+
+
 def _e(t) -> str:
     return (str(t or "").replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;"))
@@ -334,16 +502,33 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         return (f"{kopf}<div class='wrap {klasse}'><div class='flaeche'></div>"
                 f"<div class='raster'></div><div class='inhalt'>{inhalt}</div></div>")
 
+    def plakat(oben: str, mitte: str, unten: str = "") -> str:
+        """Drei Zonen: Marke oben, Aussage in der Mitte, Erdung unten.
+
+        Im KASTEN sind die Zonen unsichtbar (display:contents) — dort bleibt
+        alles Zeile fuer Zeile wie bisher. Auf ganzer Leinwand werden sie zu
+        einem Raster. Vorher stand jedes Kind als eigene Zeile in einem
+        space-between, und dann driften ein Anfuehrungszeichen und sein Satz
+        siebenhundert Pixel auseinander — was zusammengehoert, muss auch
+        zusammen gesetzt sein."""
+        return rahmen(f"<div class='oben'>{oben}</div>"
+                      f"<div class='mitte'>{mitte}</div>"
+                      f"<div class='unten'>{unten}</div>")
+
     if art == "stat":
         zahl, einheit = _zahl_teilen(haupt)
-        wert = (f"<span data-count='{_e(zahl)}' data-count-duration='600'>0</span>"
-                if zahl else _e(haupt))
-        return rahmen(
-            (f"<p class='kicker'>{_e(rest[0]) if rest else _e(zwei)}</p>" if (rest or zwei) else "")
-            + f"<p class='wert' data-blur-text><em>{wert}</em>"
+        # KEIN data-count mehr. Der Zaehler der Bibliothek startet ueber einen
+        # IntersectionObserver und zaehlt in requestAnimationFrame hoch — im
+        # Frame-fuer-Frame-Render ist er nie gestartet, und im Bild stand die
+        # ganze Standzeit lang "0" statt "70". Eine Zahl, die falsch dasteht,
+        # ist schlimmer als eine, die nicht zaehlt.
+        wert = _e(zahl or haupt)
+        return plakat(
+            (f"<p class='kicker'>{_e(rest[0]) if rest else _e(zwei)}</p>" if (rest or zwei) else ""),
+            f"<p class='wert schlag'><em>{wert}</em>"
             + (f"<span class='chip'>{_e(einheit)}</span>" if einheit else "") + "</p>"
-            + (f"<p class='stuetze'>{_e(zwei)}</p>" if zwei and rest else "")
-            + "<div class='balken'><i style='--fuell:78%'></i></div>")
+            + (f"<p class='stuetze'>{_e(zwei)}</p>" if zwei and rest else ""),
+            "<div class='balken'><i style='--fuell:78%'></i></div>")
 
     if art == "vergleich":
         # Die linke Seite ist die schwaechere, die rechte die staerkere — steht
@@ -355,7 +540,8 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
                 for i, (p, z) in enumerate(zip(punkte, zust + [None] * len(punkte))))
             return (f"<div class='sp{' stark' if stark else ''}'><h4>{_e(titel)}</h4>"
                     f"<ul>{lis}</ul></div>")
-        return rahmen(
+        return plakat(
+            (f"<p class='kicker'>{kicker}</p>" if kicker else ""),
             "<div class='spalten'>"
             + spalte(haupt, rest[:3], zustaende[2:5], False)
             + spalte(zwei, rest[3:6] or rest[:3], zustaende[5:8], True)
@@ -376,7 +562,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
                             f"<span><span class='zt'>{_e(titel)}</span>"
                             + (f"<br><span class='zn'>{_e(note)}</span>" if note else "")
                             + "</span></div>")
-        return rahmen((f"<p class='kicker'>{kicker}</p>" if kicker else "") + zeilen_html)
+        return plakat((f"<p class='kicker'>{kicker}</p>" if kicker else ""), zeilen_html)
 
     if art == "befund":
         # Reine Zustandsliste: was geht, was nicht. Ohne Zeichen davor waere es
@@ -385,35 +571,36 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
             f"<span class='befund {zustaende[i] or 'gut'}'>"
             f"{_mark(zustaende[i] or 'gut', 120 + i * 100)}{_e(z)}</span>"
             for i, z in enumerate(zeilen[:5]))
-        return rahmen((f"<p class='kicker'>{kicker}</p>" if kicker else "")
-                      + f"<div>{chips}</div>"
-                      + ("<p class='quelle'><span class='geprueft'>"
-                         + _mark("gut", 400) + "geprueft</span></p>"
-                         if felder.get("geprueft") else ""))
+        return plakat((f"<p class='kicker'>{kicker}</p>" if kicker else ""),
+                      f"<div>{chips}</div>",
+                      ("<p class='quelle'><span class='geprueft'>"
+                       + _mark("gut", 400) + "geprueft</span></p>"
+                       if felder.get("geprueft") else ""))
 
     if art == "marke":
         # Die App-Icon-Kachel als Held. Kein Kasten mit Firmennamen, sondern
         # das Zeichen selbst — daran haengt der Zuschauer sein Wiedererkennen.
-        return rahmen(
-            (f"<p class='kicker'>{kicker}</p>" if kicker else "")
-            + "<div class='kachel_reihe'>"
+        return plakat(
+            (f"<p class='kicker'>{kicker}</p>" if kicker else ""),
+            "<div class='kachel_reihe'>"
             + (_logo(logo_slug, logo_farbe) or "")
-            + f"<div><p class='kachel_name' data-blur-text>{_e(haupt)}</p>"
-            + (f"<p class='zn'>{_e(zwei)}</p>" if zwei else "") + "</div></div>"
-            + (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
+            + f"<div><p class='kachel_name rein v1'>{_e(haupt)}</p>"
+            + (f"<p class='zn'>{_e(zwei)}</p>" if zwei else "") + "</div></div>",
+            (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
 
     if art == "zitat":
-        return rahmen(
+        return plakat(
+            "",
             "<p class='marke'>&bdquo;</p>"
-            f"<p class='zitat' data-blur-text>{_e(haupt)}</p>"
-            + (f"<p class='quelle'>{_e(zwei)}</p>" if zwei else ""))
+            f"<p class='zitat rein v1'>{_e(haupt)}</p>",
+            (f"<p class='quelle'>{_e(zwei)}</p>" if zwei else ""))
 
     if art == "titel":
-        return rahmen(
-            (f"<p class='kicker'>{_e(zwei)}</p>" if zwei else "")
-            + f"<p class='wert' data-blur-text style='font-size:{max(40, int(breit * .13))}px'>"
-            f"<span class='unterstrich'>{_e(haupt)}</span></p>"
-            + (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
+        return plakat(
+            (f"<p class='kicker'>{_e(zwei)}</p>" if zwei else ""),
+            f"<p class='wert schlag' style='font-size:{_titel_px(breit, hoch)}px'>"
+            f"<span class='unterstrich'>{_e(haupt)}</span></p>",
+            (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
 
     if art == "lower":
         return (f"{kopf}<div class='wrap' style='justify-content:flex-end;padding:0'>"
@@ -429,7 +616,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
                 f"<div class='inhalt leiste'>{felder_html}</div></div>")
 
     if art == "cta":
-        return rahmen(f"<p class='cta' data-blur-text><span class='unterstrich'>"
+        return rahmen(f"<p class='cta schlag'><span class='unterstrich'>"
                       f"{_e(haupt)}</span></p>")
 
     return None

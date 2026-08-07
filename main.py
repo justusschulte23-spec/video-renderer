@@ -10152,8 +10152,14 @@ ER TEILT SICH DAS BILD
   bubble_wandert  wie bubble, aber er wechselt die Ecke
                   braucht zusaetzlich: {"zielecke": "..."}
 
-ER IST WEG
-  uebernahme      vollflaechig etwas anderes, er komplett weg
+ER RUECKT INS ECK — er ist NIE ganz weg
+  Bei allen vieren laeuft er als kleine Bubble in einer Ecke weiter. Das legt
+  das System, nicht du. Was du entscheidest, ist WAS auf der Flaeche liegt.
+  Und dort gehoert, wann immer es sie gibt, die ECHTE Oberflaeche hin: der
+  Screenshot der Doku, der Preisseite, des Workflows. Eine gebaute Textkarte
+  ist die schwaechere Antwort auf dieselbe Frage — sie zeigt, dass du es
+  beschreiben kannst, ein Screenshot zeigt, dass es das gibt.
+  uebernahme      vollflaechig etwas anderes, er klein in der Ecke
   hell_dunkel     wie uebernahme, aber die Helligkeit KIPPT: dunkler Kanal wird
                   hell, heller wird dunkel. Derselbe Akzent, dieselbe Schrift —
                   nur der Grund dreht sich um
@@ -11027,6 +11033,28 @@ BUBBLE_H = round(BUBBLE_W * W / H, 4)   # gleiche PIXEL-Kante → Kreis, keine E
 BUBBLE_X, BUBBLE_Y = 0.64, 0.06         # oben rechts, weit weg vom Untertitelband
 Z_HINTERGRUND, Z_ELEMENT = 11, 12       # beide ueber der Facecam (z 10)
 
+# ⚠️ JUSTUS' REGEL, 07.08.: "immer wenn eine Ueberblendung kommt werde ich
+# kleiner gemacht oder integriert — NIEMALS Visuals ohne dass ich irgendwo mit
+# im Bild bin."
+#
+# Das kippt eine ganze Gruppe des Vokabulars. uebernahme, beleg, metapher,
+# durchforsten und hell_dunkel hiessen bis heute "ER IST WEG": das Element lag
+# formatfuellend ueber ihm, die Facecam lief unsichtbar darunter weiter. Genau
+# diese Abschnitte sind die, die im Video kalt wirken — auf der Flaeche
+# passiert etwas, aber es spricht niemand mehr.
+#
+# Ab jetzt rueckt er ins Eck statt zu verschwinden. Die Ecke WECHSELT nach
+# Abschnittsnummer; eine Bubble, die 60 Sekunden an derselben Stelle klebt, ist
+# auch nur wieder ein festes Layout.
+UEBERNAHME_MIT_ECK = ("uebernahme", "hell_dunkel", "beleg", "metapher",
+                      "durchforsten")
+ECKEN = (
+    {"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},        # oben rechts
+    {"x": 0.05, "y": 0.66, "w": BUBBLE_W, "h": BUBBLE_H},                # unten links
+    {"x": 0.05, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},            # oben links
+    {"x": BUBBLE_X, "y": 0.66, "w": BUBBLE_W, "h": BUBBLE_H},            # unten rechts
+)
+
 
 def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
                     bild_url: str = "") -> dict:
@@ -11673,6 +11701,11 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         return _abweichung(kopf, k, "vollbild", "bubble ohne bewegung")
 
     cam_box, el_box = KOMP_BOXEN[k]
+    # Er verschwindet nicht mehr. Wo bisher die Facecam unsichtbar hinter einem
+    # formatfuellenden Element weiterlief, sitzt er jetzt als Bubble darueber —
+    # in einer Ecke, die mit der Abschnittsnummer wandert.
+    if cam_box is None and k in UEBERNAHME_MIT_ECK:
+        cam_box = ECKEN[i % len(ECKEN)]
     if k == "overlay_wandert" and el_box:
         # Ueber dem Gesicht, wenn dort Platz ist, sonst darunter. Ein Streifen
         # quer ueber die Augen ist kein Overlay, sondern eine Augenbinde.
@@ -11780,7 +11813,8 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             # am Schnitt fuer genau einen Frame die durchlaufende Facecam
             # darunter — das war das Zucken beim Wechsel.
             "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
-            "mask": "circle" if k.startswith("bubble") else "none",
+            "mask": ("circle" if (k.startswith("bubble") or k in UEBERNAHME_MIT_ECK)
+                     else "none"),
             "transform": cam_box, "animate": cam_anim,
             "herkunft": f"plan:{k}", "konzept": str(a.get("block") or "")[:80],
         }, frames))

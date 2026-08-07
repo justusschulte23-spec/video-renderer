@@ -94,11 +94,59 @@ def _ist_vollbild(breit: int, hoch: int) -> bool:
     return hoch >= breit * 1.35 and breit >= 700
 
 
-def _css(k: dict, breit: int, hoch: int) -> str:
+def _css(k: dict, breit: int, hoch: int, sekunden: float = 3.0) -> str:
     """Grundlage jeder Komponente. Safe Area, Raster, Typo — einmal, nicht
     jedes Mal neu erfunden."""
-    return _css_basis(k, breit, hoch) + (
-        _css_vollbild(k, breit, hoch) if _ist_vollbild(breit, hoch) else "")
+    return (_css_basis(k, breit, hoch)
+            + (_css_vollbild(k, breit, hoch) if _ist_vollbild(breit, hoch) else "")
+            + _css_leben(k, breit, hoch, sekunden))
+
+
+def _css_leben(k: dict, breit: int, hoch: int, sekunden: float) -> str:
+    """Was ein Standbild von einer Einstellung unterscheidet.
+
+    Justus, 07.08.: "wirkt kalt und wie mit Microsoft Paint auf nem XP Rechner
+    geschnitten". Der Befund war richtig und die Ursache banal: die Karte
+    erschien, stand still, verschwand hart. Drei Dinge fehlten, und alle drei
+    sind Grundausstattung jedes Schnittplatzes:
+
+      ATMEN    ein langsamer Zoom ueber die ganze Standzeit. Er wirkt auf die
+               INHALTE, nicht auf die Leinwand — sonst wuerde der Rand
+               beschnitten, und genau daran ist am 06.08. ein passgenau
+               gelegter Beleg gestorben.
+      LEBEN    der Grund driftet. Ein Punktraster und ein Lichtschein, die sich
+               ueber die Standzeit bewegen. Ohne das ist eine dunkle Flaeche
+               eine dunkle Flaeche.
+      ABGANG   die Karte geht weich raus statt hart zu verschwinden. Vorher
+               endete jedes Element mit einem Schnitt auf Schwarz.
+    """
+    dauer = max(1.2, float(sekunden))
+    raus = min(0.42, dauer * 0.16)
+    return f"""
+    <style>
+      .wrap {{ animation:karte_raus {int(raus * 1000)}ms cubic-bezier(.4,0,1,1)
+               {dauer - raus:.2f}s both; }}
+      @keyframes karte_raus {{ from {{ opacity:1 }}
+                               to {{ opacity:0; transform:scale(.985) }} }}
+      .inhalt {{ animation:atmen {dauer:.2f}s linear both;
+                 transform-origin:50% 50%; }}
+      @keyframes atmen {{ from {{ transform:scale(1) }}
+                          to {{ transform:scale(1.035) }} }}
+      .raster {{ animation:driften {max(9.0, dauer * 2.4):.1f}s linear both; }}
+      @keyframes driften {{ from {{ background-position:0 0 }}
+                            to {{ background-position:{int(breit * .09)}px
+                                  {int(hoch * .05)}px }} }}
+      /* Ein Lichtschein, der ueber die Flaeche wandert. Sehr leise — er soll
+         auffallen, wenn er fehlt, nicht wenn er da ist. */
+      .flaeche::after {{ content:''; position:absolute; inset:-20%;
+                         border-radius:inherit; pointer-events:none;
+                         background:radial-gradient(38% 26% at 30% 24%,
+                                    {k['akzent']}2E 0%, transparent 70%);
+                         animation:schein {max(10.0, dauer * 2.2):.1f}s
+                                   cubic-bezier(.45,0,.55,1) both; }}
+      @keyframes schein {{ from {{ transform:translate3d(-6%,-4%,0) }}
+                           to {{ transform:translate3d(10%,7%,0) }} }}
+    </style>"""
 
 
 def _css_basis(k: dict, breit: int, hoch: int) -> str:
@@ -396,8 +444,10 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
                letter-spacing:{'.005em' if k['serif'] else '-.045em'}; }}
       .zitat {{ font-size:{int(breit * .102)}px; line-height:1.08;
                 letter-spacing:{'0' if k['serif'] else '-.02em'}; }}
-      .marke {{ font-size:{int(breit * .30)}px; line-height:.5;
-                margin:0 0 {int(breit * .015)}px; opacity:.85; }}
+      /* line-height .5 macht den Kasten halb so hoch wie das Zeichen — die
+         naechste Zeile lief dem Anfuehrungszeichen ins Bild. */
+      .marke {{ font-size:{int(breit * .26)}px; line-height:.66;
+                margin:0 0 {int(breit * .01)}px; opacity:.9; }}
       .einheit, .stuetze {{ font-size:{max(30, int(breit * .040))}px;
                             line-height:1.32; }}
       /* letter-spacing wird als BERECHNETE LAENGE vererbt: die -.045em des
@@ -519,7 +569,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
     zwei = zeilen[1] if len(zeilen) > 1 else ""
     rest = zeilen[2:]
     kicker = _e(felder.get("kicker") or zwei if art == "stat" else felder.get("kicker") or "")
-    kopf = _css(k, breit, hoch)
+    kopf = _css(k, breit, hoch, sekunden)
     rein = k["rein_ms"] / 1000.0
 
     def rahmen(inhalt: str, klasse: str = "") -> str:

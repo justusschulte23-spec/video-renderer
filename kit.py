@@ -124,10 +124,12 @@ def _css_leben(k: dict, breit: int, hoch: int, sekunden: float) -> str:
     raus = min(0.42, dauer * 0.16)
     return f"""
     <style>
-      .wrap {{ animation:karte_raus {int(raus * 1000)}ms cubic-bezier(.4,0,1,1)
-               {dauer - raus:.2f}s both; }}
-      @keyframes karte_raus {{ from {{ opacity:1 }}
-                               to {{ opacity:0; transform:scale(.985) }} }}
+      /* KEIN Abgang mehr auf der Karte. Der Verdacht fuer die zu dunklen
+         Elemente faellt genau hierauf: eine Deckkraft-Animation mit langer
+         Verzoegerung und fill:both, die der Frame-Render auf jeden Zeitpunkt
+         stellt. Der Abgang gehoert ohnehin der EBENE, die weiss, wie lang der
+         Abschnitt wirklich ist — die Karte kennt nur ihre eigene Standzeit.
+         Eine Sache an zwei Stellen zu regeln ist die Ursache, nicht der Fix. */
       /* Der Atem sitzt auf dem GRUND, nicht auf dem Inhalt. Auf dem Inhalt
          hat er ihn aus der Leinwand geschoben: der Pruefstand meldete
          "Inhalt ist 1059px breit, die Leinwand nur 950px". Ein Zoom, der den

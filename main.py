@@ -11844,35 +11844,13 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         }, frames))
 
     if cam_box:
-        # ⚠️ "das kreisfoermige Maskieren des Sprechers ohne Rand/Glow sieht aus
-        # wie aus einem Uralt-Tutorial" — stimmt. Ein Kreis mit harter Kante ist
-        # eine Ausstanzung, kein Fenster. Der Ring liegt als eigene Ebene UEBER
-        # ihm: ein Lichtbogen in der Markenfarbe, der einmal herumlaeuft.
-        _akz = ((s.get("colors") or {}).get("akzent")
-                or (s.get("colors") or {}).get("accent") or "#8B5CF6")
-        _ring_px = int(round(float(cam_box["w"]) * W))
-        neu.append(_layer_defaults({
-            "id": f"ring_{i}", "z": Z_ELEMENT + 2,
-            "source": {"kind": "html", "markup":
-                       "<div style=\"position:absolute;inset:0;border-radius:50%%;"
-                       "padding:5px;box-sizing:border-box;"
-                       "background:conic-gradient(from 0deg,%s 0deg,"
-                       "%s00 110deg,%s00 250deg,%s 360deg);"
-                       "-webkit-mask:radial-gradient(circle,transparent 0 calc(50%% - 5px),"
-                       "#000 calc(50%% - 5px));"
-                       "mask:radial-gradient(circle,transparent 0 calc(50%% - 5px),"
-                       "#000 calc(50%% - 5px));"
-                       "animation:ring_dreh 5200ms linear infinite\"></div>"
-                       "<div style=\"position:absolute;inset:-9%%;border-radius:50%%;"
-                       "background:radial-gradient(circle,%s33 38%%,transparent 70%%)\">"
-                       "</div>"
-                       "<style>@keyframes ring_dreh{from{transform:rotate(0)}"
-                       "to{transform:rotate(360deg)}}</style>"
-                       % (_akz, _akz, _akz, _akz, _akz)},
-            "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
-            "transform": dict(cam_box),
-            "herkunft": f"plan:{k}", "konzept": "Ring",
-        }, frames))
+        # ⚠️ ERSTER VERSUCH ZURUECKGENOMMEN. Der Lichtbogen sollte eine feine
+        # Kante um die Bubble sein; im Bild lag ein riesiger lila Bogen quer
+        # ueber ihm. Ursache ist die Maske: `mask-composite` traegt hier nicht,
+        # und ohne sie zeigt der Kegelverlauf seine ganze Flaeche statt nur den
+        # Ring. Eine Maske, die nicht traegt, macht aus einem Rand eine Flaeche.
+        # Bis das mit einem gemessenen Standbild steht, bleibt die Bubble ohne
+        # Ring — lieber schlicht als ein Lappen im Bild.
         # Er selbst als Ebene im Fenster — beschnitten, verschoben, maskiert.
         neu.append(_layer_defaults({
             "id": f"cam_{i}", "z": Z_ELEMENT + 1,

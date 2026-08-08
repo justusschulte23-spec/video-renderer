@@ -161,9 +161,35 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
                font-family:{k['font']}; color:{k['text']};
                display:flex; flex-direction:column; justify-content:center;
                padding:{max(28, int(breit * .07))}px; box-sizing:border-box; }}
+      /* GLAS statt Pappe. Eine deckende Flaeche mit 1px-Kontur ist ein
+         aufgeklebtes PNG — genau so sah es aus. Was den Unterschied macht,
+         sind drei Dinge: eine leicht durchscheinende Flaeche, eine Kante die
+         am Lichteinfall heller ist als unten, und ein Innenlicht.
+         backdrop-filter geht hier NICHT: das Element wird allein gerendert,
+         hinter ihm ist nichts zum Weichzeichnen. Das ist eine echte Grenze
+         des Aufbaus, kein Versaeumnis — die Tiefe muss aus der Kante und dem
+         Innenlicht kommen. */
       .flaeche {{ position:absolute; inset:0; background:{k['grund']};
-                  border-radius:{k['radius']}px;
-                  border:1px solid {k['linie']}; box-shadow:{k['glow']}; }}
+                  border-radius:{k['radius']}px; border:none;
+                  box-shadow:{k['glow']},
+                             inset 0 1px 0 rgba(255,255,255,{'.12' if not k['serif'] else '.55'}),
+                             inset 0 0 {int(breit * .10)}px
+                                   rgba(255,255,255,{'.035' if not k['serif'] else '.02'}),
+                             0 {int(breit * .03)}px {int(breit * .07)}px
+                               rgba(0,0,0,{'.5' if not k['serif'] else '.14'}); }}
+      /* Die Kante als Verlauf, nicht als Strich: oben faengt sie Licht, unten
+         verliert sie sich. */
+      .flaeche::before {{ content:''; position:absolute; inset:0;
+                          border-radius:inherit; padding:1px; pointer-events:none;
+                          background:linear-gradient(150deg,
+                                     {k['akzent']}66 0%,
+                                     {k['linie']} 42%, transparent 88%);
+                          -webkit-mask:linear-gradient(#000 0 0) content-box,
+                                       linear-gradient(#000 0 0);
+                          -webkit-mask-composite:xor;
+                          mask:linear-gradient(#000 0 0) content-box,
+                               linear-gradient(#000 0 0);
+                          mask-composite:exclude; }}
       .raster {{ position:absolute; inset:0; border-radius:{k['radius']}px;
                  background-image:radial-gradient({k['raster']} 1px,transparent 1px);
                  background-size:14px 14px; opacity:.6; }}

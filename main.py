@@ -11667,13 +11667,24 @@ def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
     if k == "flaeche_kippt":
         # Die Flaeche legt sich UEBER ihn und wieder weg — das ist der Umschlag.
         weg = max(rein, bis_f - max(3, int(0.4 * FPS)))
-        return ([], [{"property": "opacity", "from": 0.0, "to": 0.55,
+        # 0.55 war eine Farbschicht, keine Toenung. Ein Grade, den man als
+        # Schicht ERKENNT, ist keiner.
+        return ([], [{"property": "opacity", "from": 0.0, "to": 0.30,
                       "start": von_f, "end": rein, "easing": "easeOut"},
-                     {"property": "opacity", "from": 0.55, "to": 0.0,
+                     {"property": "opacity", "from": 0.30, "to": 0.0,
                       "start": weg, "end": bis_f, "easing": "easeInOut"}])
     # Alles, was sich aufbaut, kommt herein statt einfach dazustehen.
+    # Der alte Auftritt war 7 Frames Deckkraft — ein Ploppen, kein Auftritt.
+    # Jetzt eine knappe halbe Sekunde mit einem Rest Skalierung darin, und ein
+    # weicher Abgang statt eines Schnitts auf Schwarz.
+    ein = min(bis_f, von_f + max(6, int(0.42 * FPS)))
+    aus = max(ein, bis_f - max(4, int(0.30 * FPS)))
     return ([], [{"property": "opacity", "from": 0.0, "to": 1.0,
-                  "start": von_f, "end": rein, "easing": "easeOut"}])
+                  "start": von_f, "end": ein, "easing": "easeOut"},
+                 {"property": "scale", "from": 0.955, "to": 1.0,
+                  "start": von_f, "end": ein, "easing": "spring"},
+                 {"property": "opacity", "from": 1.0, "to": 0.0,
+                  "start": aus, "end": bis_f, "easing": "easeInOut"}])
 
 
 async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
@@ -11695,12 +11706,26 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         akzent = (farben.get("akzent") or farben.get("accent")
                   or farben.get("primary") or "#8B5CF6")
         _, el_anim = _komp_animate(k, b, von_f, bis_f)
+        # ⚠️ JUSTUS, 08.08.: "dieser lila layer ueber meinem gesicht, es sieht
+        # dumm aus". Er hatte recht. Hier lag eine FLACHE Markenfarbe mit 55%
+        # Deckkraft quer ueber dem Bild — auch ueber seinem Gesicht. Das ist
+        # kein Stimmungsumschwung, das ist ein kaputter Grade.
+        #
+        # Ein Umschlag wird von den RAENDERN her gefaerbt und laesst die Mitte
+        # frei, wo das Gesicht sitzt; und er FAERBT statt zu uebermalen
+        # (soft-light rechnet mit dem Bild, statt es zuzudecken).
         s["layers"].append(_layer_defaults({
             "id": f"kippt_{i}", "z": Z_ELEMENT,
             "source": {"kind": "html", "markup":
-                       "<div style=\"position:absolute;inset:0;background:"
-                       "linear-gradient(160deg,%s 0%%,transparent 70%%)\"></div>"
-                       % akzent},
+                       "<div style=\"position:absolute;inset:0;"
+                       "mix-blend-mode:soft-light;background:"
+                       "radial-gradient(78%% 58%% at 50%% 42%%,transparent 0%%,"
+                       "%s 100%%)\"></div>"
+                       "<div style=\"position:absolute;inset:0;"
+                       "mix-blend-mode:screen;background:"
+                       "radial-gradient(46%% 30%% at 78%% 14%%,%s55 0%%,"
+                       "transparent 72%%)\"></div>"
+                       % (akzent, akzent)},
             "from": von_f, "to": bis_f,
             "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
             "animate": el_anim,
@@ -11819,6 +11844,35 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         }, frames))
 
     if cam_box:
+        # ⚠️ "das kreisfoermige Maskieren des Sprechers ohne Rand/Glow sieht aus
+        # wie aus einem Uralt-Tutorial" — stimmt. Ein Kreis mit harter Kante ist
+        # eine Ausstanzung, kein Fenster. Der Ring liegt als eigene Ebene UEBER
+        # ihm: ein Lichtbogen in der Markenfarbe, der einmal herumlaeuft.
+        _akz = ((s.get("colors") or {}).get("akzent")
+                or (s.get("colors") or {}).get("accent") or "#8B5CF6")
+        _ring_px = int(round(float(cam_box["w"]) * W))
+        neu.append(_layer_defaults({
+            "id": f"ring_{i}", "z": Z_ELEMENT + 2,
+            "source": {"kind": "html", "markup":
+                       "<div style=\"position:absolute;inset:0;border-radius:50%%;"
+                       "padding:5px;box-sizing:border-box;"
+                       "background:conic-gradient(from 0deg,%s 0deg,"
+                       "%s00 110deg,%s00 250deg,%s 360deg);"
+                       "-webkit-mask:radial-gradient(circle,transparent 0 calc(50%% - 5px),"
+                       "#000 calc(50%% - 5px));"
+                       "mask:radial-gradient(circle,transparent 0 calc(50%% - 5px),"
+                       "#000 calc(50%% - 5px));"
+                       "animation:ring_dreh 5200ms linear infinite\"></div>"
+                       "<div style=\"position:absolute;inset:-9%%;border-radius:50%%;"
+                       "background:radial-gradient(circle,%s33 38%%,transparent 70%%)\">"
+                       "</div>"
+                       "<style>@keyframes ring_dreh{from{transform:rotate(0)}"
+                       "to{transform:rotate(360deg)}}</style>"
+                       % (_akz, _akz, _akz, _akz, _akz)},
+            "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
+            "transform": dict(cam_box),
+            "herkunft": f"plan:{k}", "konzept": "Ring",
+        }, frames))
         # Er selbst als Ebene im Fenster — beschnitten, verschoben, maskiert.
         neu.append(_layer_defaults({
             "id": f"cam_{i}", "z": Z_ELEMENT + 1,

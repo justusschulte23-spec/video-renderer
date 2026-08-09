@@ -9,7 +9,7 @@ Hier steht das Layout fest, der Plan liefert nur noch die Worte. Kosten pro
 Element: null Modell-Aufrufe.
 
 Zwei Kits, weil zwei Kanaele:
-  justus  dunkel, technisch, Amethyst, harte kurze Bewegungen (320ms rein)
+  justus  dunkel, technisch, Amethyst, federnd (650ms rein, Overshoot)
   tim     Papier, warm, Petrol mit Gold fuer Gutes, langsame Blenden (600ms)
 Die Zeiten stehen so in den Motion-Blaettern der Brand Kits.
 """
@@ -27,7 +27,7 @@ KITS = {
         "gut": "#34D399", "grenze": "#F43F5E", "warnung": "#FBBF24",
         "serif": False,
         "font": "'Inter','Helvetica Neue',system-ui,sans-serif",
-        "radius": 18, "rein_ms": 320, "raus_ms": 240, "versatz_ms": 80,
+        "radius": 18, "rein_ms": 650, "raus_ms": 320, "versatz_ms": 110,
         "glow": "0 0 60px rgba(139,92,246,.35)",
         "grund": "radial-gradient(120% 80% at 50% 0%, #17172A 0%, #0B0B12 60%)",
         "raster": "rgba(255,255,255,.05)",
@@ -40,7 +40,7 @@ KITS = {
         "gut": "#2F7D57", "grenze": "#A8443C", "warnung": "#B8860B",
         "serif": True,
         "font": "'Georgia','Iowan Old Style',serif",
-        "radius": 4, "rein_ms": 600, "raus_ms": 400, "versatz_ms": 220,
+        "radius": 4, "rein_ms": 800, "raus_ms": 480, "versatz_ms": 240,
         "glow": "none",
         "grund": "#FDFCF9",
         "raster": "rgba(31,36,33,.05)",
@@ -173,6 +173,10 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
          Innenlicht kommen. */
       .flaeche {{ position:absolute; inset:0; background:{k['grund']};
                   border-radius:{k['radius']}px; border:none;
+                  overflow:hidden;   /* der Lichtschein (::after, inset:-20%)
+                     ragte sonst 11,5% ueber die Karte hinaus — der Pruefstand
+                     meldete das seit gestern als Ueberlauf, und in schmalen
+                     Kaesten leuchtete es in die Videoflaeche */
                   box-shadow:{k['glow']},
                              inset 0 1px 0 rgba(255,255,255,{'.12' if not k['serif'] else '.55'}),
                              inset 0 0 {int(breit * .10)}px
@@ -208,20 +212,29 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
          Grund, warum die Bewegung in den Einblendungen nicht passte.
          @keyframes-Animationen sind echte Animations-Objekte: sie lassen sich
          auf jeden Zeitpunkt stellen und sind damit reproduzierbar. */
-      .rein {{ animation:rein_hoch {k['rein_ms']}ms cubic-bezier(.22,1,.36,1) both; }}
-      .rein.v1 {{ animation-delay:{k['versatz_ms']}ms; }}
-      .rein.v2 {{ animation-delay:{k['versatz_ms'] * 2}ms; }}
-      .rein.v3 {{ animation-delay:{k['versatz_ms'] * 3}ms; }}
-      @keyframes rein_hoch {{ from {{ opacity:0; transform:translateY(.22em);
-                                      filter:blur(12px) }}
-                              to {{ opacity:1; transform:none; filter:none }} }}
-      /* Der Hauptwert kommt nicht herein, er LANDET: ein kurzes Ueberschwingen
-         auf der Betonung, kein Einschweben. */
-      .schlag {{ animation:schlag_rein {int(k['rein_ms'] * 1.15)}ms
-                 cubic-bezier(.34,1.56,.64,1) both; }}
-      @keyframes schlag_rein {{ from {{ opacity:0; transform:scale(.86) }}
-                                60% {{ opacity:1 }}
-                                to {{ opacity:1; transform:none }} }}
+      /* ZWEI Animationen je Element, getrennt nach Eigenschaft: transform
+         bekommt den Overshoot (.34,1.56,.64,1 — schwingt ueber und federt
+         zurueck), opacity/filter eine ruhige Kurve. Overshoot auf der
+         Deckkraft wuerde ueber 1 hinauswollen und sieht aus wie Flackern —
+         deshalb niemals beide in einem @keyframes-Block. */
+      .rein {{ animation:rein_weg {k['rein_ms']}ms cubic-bezier(.34,1.56,.64,1) both,
+                         rein_blende {int(k['rein_ms'] * .72)}ms
+                         cubic-bezier(.22,1,.36,1) both; }}
+      .rein.v1 {{ animation-delay:{k['versatz_ms']}ms, {k['versatz_ms']}ms; }}
+      .rein.v2 {{ animation-delay:{k['versatz_ms'] * 2}ms, {k['versatz_ms'] * 2}ms; }}
+      .rein.v3 {{ animation-delay:{k['versatz_ms'] * 3}ms, {k['versatz_ms'] * 3}ms; }}
+      @keyframes rein_weg {{ from {{ transform:translateY(.34em) scale(.97) }}
+                             to {{ transform:none }} }}
+      @keyframes rein_blende {{ from {{ opacity:0; filter:blur(10px) }}
+                                to {{ opacity:1; filter:none }} }}
+      /* Der Hauptwert kommt nicht herein, er LANDET: schwingt sichtbar ueber
+         die Endgroesse hinaus und federt zurueck. */
+      .schlag {{ animation:schlag_weg {int(k['rein_ms'] * 1.2)}ms
+                          cubic-bezier(.34,1.56,.64,1) both,
+                          rein_blende {int(k['rein_ms'] * .55)}ms
+                          cubic-bezier(.22,1,.36,1) both; }}
+      @keyframes schlag_weg {{ from {{ transform:scale(.86) translateY(.10em) }}
+                               to {{ transform:none }} }}
       /* Die drei Zonen sind im Kasten NICHT da: display:contents nimmt sie aus
          dem Layout, die Kinder rutschen an ihre alte Stelle. So aendert der
          Umbau auf Plakat-Zonen an den Karten kein einziges Pixel. */
@@ -303,6 +316,29 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
       .cta {{ font-size:{max(46, int(breit * .17))}px; font-weight:800;
               letter-spacing:-.02em; text-align:center; margin:0; }}
 
+      /* ── HERO-BUEHNE ─────────────────────────────────────────────────────
+         Ein beschafftes BILD dominiert die Flaeche, der Text weicht in eine
+         kompakte Leiste am unteren Rand. Das ist die Antwort auf die
+         "riesigen Leerflaechen": wo eine Grafik existiert, fuellt sie den
+         Raum — nicht ein atmender Grund. */
+      .hero {{ position:relative; width:100%;
+               height:{int(hoch * .58)}px; border-radius:{max(14, k['radius'])}px;
+               overflow:hidden;
+               box-shadow:0 {int(breit * .03)}px {int(breit * .08)}px rgba(0,0,0,.5),
+                          {k['glow']}; }}
+      .hero img {{ position:absolute; inset:0; width:100%; height:100%;
+                   object-fit:cover;
+                   animation:hero_fahrt {max(6.0, 3.0):.1f}s linear both; }}
+      @keyframes hero_fahrt {{ from {{ transform:scale(1.06) }}
+                               to {{ transform:scale(1.0) }} }}
+      /* Verlaufskante wie .flaeche::before, damit das Bild eingefasst ist
+         statt aufgeklebt. */
+      .hero::after {{ content:''; position:absolute; inset:0;
+                      border-radius:inherit; pointer-events:none;
+                      background:linear-gradient(180deg, transparent 55%,
+                                 rgba(0,0,0,.55) 100%); }}
+      .hero_leiste {{ margin-top:{int(breit * .035)}px; }}
+
       /* ── DIE APP-ICON-KACHEL ────────────────────────────────────────────
          Der wiederkehrende Held aus der Referenz: abgerundetes Quadrat,
          Schatten, ein Ring der einmal nach aussen laeuft. Das Logo sitzt
@@ -328,7 +364,9 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
                         border-radius:inherit; border:2px solid {k['akzent']};
                         animation:ring_puls {int(k['rein_ms'] * 3)}ms
                                   cubic-bezier(.22,1,.36,1) {k['versatz_ms']}ms both; }}
-      @keyframes kachel_rein {{ from {{ opacity:0; transform:scale(.86) translateY(8px) }}
+      @keyframes kachel_rein {{ from {{ opacity:0; transform:scale(.82) translateY(10px) }}
+                                55% {{ opacity:1 }}
+                                78% {{ transform:scale(1.04) translateY(-2px) }}
                                 to {{ opacity:1; transform:none }} }}
       @keyframes ring_puls {{ 0% {{ opacity:.85; transform:scale(1) }}
                               100% {{ opacity:0; transform:scale(1.5) }} }}
@@ -456,15 +494,18 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
       .oben:empty, .unten:empty {{ min-height:0; }}
       /* AUFTRITT: gestaffelt von unten, nicht alles auf einmal. Ein Plakat,
          das in einem Stueck erscheint, hat keine Leserichtung. */
-      .inhalt > * {{ animation:auf_{ 'v' }
-                     {rein}ms cubic-bezier(.22,1,.36,1) both; }}
-      .inhalt > *:nth-child(1) {{ animation-delay:0ms; }}
-      .inhalt > *:nth-child(2) {{ animation-delay:{versatz}ms; }}
-      .inhalt > *:nth-child(3) {{ animation-delay:{versatz * 2}ms; }}
-      .inhalt > *:nth-child(4) {{ animation-delay:{versatz * 3}ms; }}
-      @keyframes auf_v {{ from {{ opacity:0; transform:translateY({int(breit * .035)}px);
-                                  filter:blur(10px) }}
-                          to {{ opacity:1; transform:none; filter:none }} }}
+      .inhalt > * {{ animation:auf_v_weg {rein}ms cubic-bezier(.34,1.56,.64,1) both,
+                                auf_v_blende {int(rein * .7)}ms
+                                cubic-bezier(.22,1,.36,1) both; }}
+      .inhalt > *:nth-child(1) {{ animation-delay:0ms, 0ms; }}
+      .inhalt > *:nth-child(2) {{ animation-delay:{versatz}ms, {versatz}ms; }}
+      .inhalt > *:nth-child(3) {{ animation-delay:{versatz * 2}ms, {versatz * 2}ms; }}
+      .inhalt > *:nth-child(4) {{ animation-delay:{versatz * 3}ms, {versatz * 3}ms; }}
+      @keyframes auf_v_weg {{ from {{ transform:translateY({int(breit * .045)}px)
+                                      scale(.975) }}
+                              to {{ transform:none }} }}
+      @keyframes auf_v_blende {{ from {{ opacity:0; filter:blur(10px) }}
+                                 to {{ opacity:1; filter:none }} }}
 
       /* OBEN — die Marke des Abschnitts, mit einer Linie darunter, die sich
          aufzieht. Das ist die Zone, die im alten Layout ganz fehlte. */
@@ -741,6 +782,20 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
             + (f"<p class='zn'>{_e(zwei)}</p>" if zwei else "") + "</div></div>",
             (f"<p class='stuetze'>{_e(rest[0])}</p>" if rest else ""))
 
+    if art == "hero_illustration":
+        bild = str(felder.get("bild") or "").strip()
+        if not bild:
+            return None     # ohne Bild ist es keine Hero-Buehne
+        felder_html = "".join(
+            f"<div><b>{_e(_zahl_teilen(z)[0] or z)}</b>"
+            f"<span>{_e(_zahl_teilen(z)[1])}</span></div>"
+            for z in zeilen[:3])
+        return plakat(
+            kopfzeile(kicker),
+            f"<div class='hero rein'><img src='{_e(bild)}' alt=''></div>",
+            (f"<div class='leiste hero_leiste rein v1'>{felder_html}</div>"
+             if felder_html else ""))
+
     if art == "zitat":
         return plakat(
             "",
@@ -779,7 +834,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
 
 # Welche Plan-Arten das Kit bedient. Alles andere geht weiter an den Gestalter.
 KANN = ("stat", "vergleich", "ablauf", "zitat", "titel", "lower", "leiste", "cta",
-        "befund", "marke")
+        "befund", "marke", "hero_illustration")
 
 # Die Zustandsfarben je Kunde. Der Farbwaechter im Gestalter kennt nur die
 # Markentokens aus der Datenbank — ohne diese Liste wuerde er den gruenen Haken

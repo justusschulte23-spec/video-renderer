@@ -9992,8 +9992,8 @@ AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
 KOMPOSITIONEN = ("vollbild", "punch", "drift",
                  "unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                  "haelften", "bubble", "bubble_wandert",
-                 "uebernahme", "hell_dunkel", "beleg", "metapher", "durchforsten",
-                 "overlay_wandert", "flaeche_kippt")
+                 "uebernahme", "hell_dunkel", "beleg", "metapher", "metapher_full",
+                 "durchforsten", "overlay_wandert", "flaeche_kippt")
 # Bei den wichtigsten Saetzen soll nichts zwischen ihm und dem Zuschauer stehen.
 VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_kippt")
 # Ohne Bewegung waere das eine Folie.
@@ -10015,7 +10015,8 @@ EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_k
 # Die Skelette gibt es seit Wochen — nur kam nie eines an: art_element wurde
 # nie gesetzt, also bekam JEDES Element das Titel-Layout. Deshalb sah alles
 # gleich aus, egal ob Zahl, Vergleich oder Zitat.
-ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel", "befund", "marke")
+ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel", "befund", "marke",
+                "hero_illustration")
 SCHMALE = ("seite_links", "seite_rechts", "bubble", "bubble_wandert")
 SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
@@ -10170,6 +10171,9 @@ ER RUECKT INS ECK — er ist NIE ganz weg
                   → uebernahme und hell_dunkel teilen sich EIN Budget
   beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
   metapher        ein Bild fuer eine abstrakte Aussage
+  metapher_full   das Bild nimmt das GANZE Bild ein, er ist NICHT zu sehen —
+                  die einzige Komposition ohne ihn, hoechstens EINMAL im Video
+                  und bevorzugt im HOOK. braucht: {"bild_prompt": "..."}
   durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
                   braucht: {"url": "https://…", "ziel": "das Wort auf der Seite"}
                   OHNE url geht es nicht — dann nimm eine andere Komposition
@@ -10193,6 +10197,16 @@ WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
 - Der HOOK ist die wichtigste Stelle. Fuenf Sekunden nacktes Gesicht sind dort
   verschenkt: punch auf das staerkste Wort, overlay_wandert mit der Zahl,
   flaeche_kippt auf die Aussage.
+- MACHT ER IM HOOK EINEN VERGLEICH ODER KONFLIKT AUF (Tool gegen Tool, teuer
+  gegen selbstgebaut, Abo gegen Eigentum): nimm metapher_full und bestell in
+  "bild_prompt" EINE dramatische, wuerdevolle Bild-Metapher. Beispiel:
+  "zwei gekreuzte Schwerter vor dunklem Studio-Hintergrund, das linke Heft
+  glatt und industriell, das rechte handgeschmiedet, amethystfarbenes
+  Streiflicht". Regeln fuer bild_prompt: EINE Szene, KEIN Text im Bild, keine
+  Gesichter, keine echten Markenlogos (die legt das System als Kacheln
+  darueber), witzig ist erlaubt, albern nicht — B2B, nicht Slop.
+  Er wird ab Sekunde ~2 herausgeschnitten; genau dafuer ist diese Komposition
+  da.
 
 DIE FRAGE JE ABSCHNITT
 Nicht "ist er da oder weg", sondern: Was passiert hier, und wo gehoert er
@@ -10225,6 +10239,11 @@ WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
                  ablauf    Schritte nacheinander                (1 → 2 → 3)
                  zitat     ein Satz, der wirkt                  (seine Aussage)
                  befund    was geht und was nicht               (Haken/X-Liste)
+                 hero_illustration  ein beschafftes BILD dominiert die
+                           Flaeche, der Text wird eine kompakte Leiste am
+                           unteren Rand — nimm das, wenn es ein Bild,
+                           einen Screenshot oder eine Metapher gibt, statt
+                           Text auf leerer Flaeche
                  marke     ein Werkzeug ist der Held            (Logo-Kachel)
                  titel     Ueberschrift mit Unterzeile          (nur wenn nichts
                            anderes passt — nicht der Standard)
@@ -10237,6 +10256,9 @@ WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
                art_element "befund" und "vergleich" gehoert an jede Zeile eines.
                Nutz es nur, wo er wirklich etwas bejaht oder verneint — eine
                Aufzaehlung mit fuenf Haken sagt nichts mehr.
+
+  bild_prompt  nur bei metapher/metapher_full: die Bildidee fuer den
+               Generator, konkret und szenisch, ohne Text im Bild
 
   logo         nur bei art_element "marke": der Slug des Werkzeugs, so wie es
                heisst — "n8n", "supabase", "github", "railway", "claude".
@@ -10470,6 +10492,10 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             fehler.append(f"Abschnitt {i} ({von:.1f}s): punch ohne 'wort'")
         elif k == "drift" and not str(b.get("richtung") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): drift ohne 'richtung'")
+        elif k == "metapher_full" and not str(
+                b.get("bild_prompt") or b.get("zeigt") or "").strip():
+            fehler.append(f"Abschnitt {i} ({von:.1f}s): metapher_full ohne "
+                          f"'bild_prompt' — was soll generiert werden?")
         elif k == "durchforsten" and not str(b.get("url") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): durchforsten ohne 'url' — "
                           f"es gibt nichts zu durchsuchen")
@@ -10489,7 +10515,8 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         if k in ENDZUSTAND_PFLICHT and not str(b.get("endzustand") or "").strip():
             fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' baut etwas auf, aber "
                           f"'endzustand' fehlt — was steht am Ende da?")
-        if _gebaut(a) and k not in ("beleg", "durchforsten", "metapher"):
+        if _gebaut(a) and k not in ("beleg", "durchforsten", "metapher",
+                                    "metapher_full"):
             if str(b.get("art_element") or "").lower() not in ART_ELEMENTE:
                 fehler.append(
                     f"Abschnitt {i} ({von:.1f}s): 'art_element' fehlt oder ist "
@@ -10551,7 +10578,12 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     # Helligkeit. Getrennt gezaehlt waere aus zwei Grenzen von je zwei
     # stillschweigend eine von vier geworden — vier Abschnitte ohne sein
     # Gesicht in einem 60-Sekunden-Video.
-    weg = sum(zaehler.get(x, 0) for x in ("uebernahme", "hell_dunkel"))
+    weg = sum(zaehler.get(x, 0) for x in ("uebernahme", "hell_dunkel",
+                                           "metapher_full"))
+    if zaehler.get("metapher_full", 0) > 1:
+        fehler.append("metapher_full hoechstens EINMAL im Video — sie ist die "
+                      "einzige Komposition ohne ihn im Bild, und die Ausnahme "
+                      "bleibt eine Ausnahme. Bevorzugt im Hook.")
     if weg > MAX_UEBERNAHMEN:
         fehler.append(f"{weg} Uebernahmen (uebernahme + hell_dunkel), hoechstens "
                       f"{MAX_UEBERNAHMEN} — er soll nicht dauernd verschwinden")
@@ -11365,6 +11397,34 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         log.warning("[BAU] %d durchforsten: %s", i, res.get("grund"))
         return res
 
+    # GENERIERTES METAPHER-BILD (fal.ai nano-banana-pro). Justus: "wofuer ist
+    # denn nano banana pro integriert, wenn die Hook billig aussieht". Bisher
+    # nur fuer die Endkarte benutzt; jetzt der Beschaffungsweg fuer metapher
+    # und metapher_full, wenn der Plan einen bild_prompt liefert. Stock war
+    # dafuer der falsche Weg — ein Pexels-Clip kennt die Marke nicht.
+    if k in ("metapher", "metapher_full") and str(b.get("bild_prompt") or "").strip():
+        try:
+            farben = s.get("colors") or {}
+            akzent = (farben.get("akzent") or farben.get("accent")
+                      or farben.get("primary") or "#8B5CF6")
+            idee = str(b.get("bild_prompt")).strip()[:400]
+            url = await asyncio.to_thread(
+                _call_fal_thumbnail, idee, akzent,
+                vibe=("Clean editorial 3D illustration for a B2B tech short. "
+                      "Dramatic but dignified, subtle wit allowed, premium "
+                      "studio look, sharp focus, single scene. NO text, NO "
+                      "letters, NO real brand logos, NO faces."))
+            if url:
+                return {"quelle_art": "generiert",
+                        "kosten": PREISE_EINHEIT.get("fal-nano-banana-pro", 0.14),
+                        "layer_source": {"kind": "image", "url": url}}
+        except Exception as exc:
+            log.warning("[BAU] %d Bildgenerierung: %s", i, str(exc)[:160])
+            # metapher faellt auf Stock zurueck (weiter unten), metapher_full
+            # hat keinen Rueckfall ohne ihn — dann lieber vollbild MIT ihm.
+            if k == "metapher_full":
+                return {"quelle_art": "", "grund": "Bildgenerierung fehlgeschlagen"}
+
     m = _material_treffer(s, b)
     if m:
         kind = "video" if str(m.get("url", "")).lower().endswith((".mp4", ".webm", ".mov")) else "image"
@@ -11444,8 +11504,36 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         elif slug:
             log.warning("[BAU] %d Logo-Slug '%s' gibt es nicht — ohne Kachel", i, slug)
             slug = ""
+        # hero_illustration braucht ein BILD. Wenn der Plan eine Bildidee
+        # mitgibt, wird sie generiert; ohne Bild faellt die Art auf 'titel'
+        # zurueck, statt eine leere Buehne zu bauen.
+        hero_bild = ""
+        if art == "hero_illustration":
+            bp = str(b.get("bild_prompt") or b.get("zeigt") or "").strip()
+            m_hero = _material_treffer(s, b)
+            if m_hero and not str(m_hero.get("url", "")).lower().endswith((".mp4", ".webm", ".mov")):
+                hero_bild = m_hero["url"]
+            elif bp:
+                try:
+                    farben_h = s.get("colors") or {}
+                    akz_h = (farben_h.get("akzent") or farben_h.get("accent")
+                             or "#8B5CF6")
+                    hero_bild = await asyncio.to_thread(
+                        _call_fal_thumbnail, bp[:400], akz_h,
+                        vibe=("Clean editorial 3D illustration for a B2B tech "
+                              "short. Premium studio look, single scene, NO "
+                              "text, NO letters, NO real brand logos."))
+                except Exception as exc:
+                    log.warning("[BAU] %d Hero-Bild: %s", i, str(exc)[:140])
+            if not hero_bild:
+                art = "titel"
+            elif not (m_hero and hero_bild == m_hero.get("url")):
+                # Generiert = bezahlt. Muss in die Abschnittskosten, sonst
+                # rechnet der Deckel an der Wirklichkeit vorbei.
+                b["_hero_kosten"] = PREISE_EINHEIT.get("fal-nano-banana-pro", 0.14)
         markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or ""),
                                 "logo": slug, "logo_farbe": farbe,
+                                "bild": hero_bild,
                                 "geprueft": bool(b.get("geprueft"))},
                           s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S),
                           wende=(k in GEWENDET))
@@ -11459,8 +11547,10 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                 res = await asyncio.to_thread(
                     _kit_direkt, markup, w_px, h_px, min(sek, HTML_TOOL_MAX_S))
                 if res.get("url"):
-                    log.info("[BAU] %d '%s' direkt aus dem Kit — 0 USD", i, art)
-                    return {"quelle_art": "kit", "runden": 0, "kosten": 0.0,
+                    _kx = float(b.get("_hero_kosten") or 0.0)
+                    log.info("[BAU] %d '%s' direkt aus dem Kit — %.2f USD",
+                             i, art, _kx)
+                    return {"quelle_art": "kit", "runden": 0, "kosten": _kx,
                             "ueberlauf": bool(res.get("ueberlauf")),
                             "hinweis": str(res.get("hinweis") or "")[:200],
                             "sekunden_material": float(res.get("seconds") or sek),
@@ -11577,6 +11667,10 @@ KOMP_BOXEN = {
     "hell_dunkel":     (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "beleg":           (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "metapher":        (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
+    # metapher_full: die EINZIGE Komposition ohne ihn im Bild. Justus' Regel
+    # "niemals Visuals ohne mich" gilt weiter — dies ist ihre eine, von ihm
+    # selbst bestellte Ausnahme: das Hook-Bild soll den ganzen Raum haben.
+    "metapher_full":   (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     "durchforsten":    (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     # y wird beim Bauen auf das Gesicht angepasst — 0.30 lag mitten darauf.
     "overlay_wandert": (None, {"x": 0.08, "y": 0.10, "w": 0.52, "h": 0.14}),
@@ -11674,14 +11768,21 @@ def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
                      {"property": "opacity", "from": 0.30, "to": 0.0,
                       "start": weg, "end": bis_f, "easing": "easeInOut"}])
     # Alles, was sich aufbaut, kommt herein statt einfach dazustehen.
-    # Der alte Auftritt war 7 Frames Deckkraft — ein Ploppen, kein Auftritt.
-    # Jetzt eine knappe halbe Sekunde mit einem Rest Skalierung darin, und ein
-    # weicher Abgang statt eines Schnitts auf Schwarz.
-    ein = min(bis_f, von_f + max(6, int(0.42 * FPS)))
-    aus = max(ein, bis_f - max(4, int(0.30 * FPS)))
+    # 0.42s war zu knapp, damit die Feder atmen kann: der Spring braucht Zeit
+    # fuer Ueberschwingen UND Zuruueckfedern, sonst sieht man nur das harte
+    # Ende. Deckkraft bewusst KUERZER als die Bewegung — das Element ist schon
+    # voll da, waehrend es noch einschwingt; andersherum federt ein
+    # halb-transparentes Ding, und das liest sich als Fehler.
+    ein = min(bis_f, von_f + max(10, int(0.70 * FPS)))
+    ein_blende = min(bis_f, von_f + max(7, int(0.40 * FPS)))
+    aus = max(ein, bis_f - max(6, int(0.45 * FPS)))
     return ([], [{"property": "opacity", "from": 0.0, "to": 1.0,
-                  "start": von_f, "end": ein, "easing": "easeOut"},
-                 {"property": "scale", "from": 0.955, "to": 1.0,
+                  "start": von_f, "end": ein_blende, "easing": "easeOut"},
+                 # KEIN y-Keyframe: "y" ist im Renderer ABSOLUT (Anteil der
+                 # Leinwand), ein relatives Hereinfahren gibt es im Schema
+                 # nicht — das Hereinfahren macht das Kit-CSS im Element
+                 # selbst. Hier nur die Feder auf der ganzen Ebene.
+                 {"property": "scale", "from": 0.94, "to": 1.0,
                   "start": von_f, "end": ein, "easing": "spring"},
                  {"property": "opacity", "from": 1.0, "to": 0.0,
                   "start": aus, "end": bis_f, "easing": "easeInOut"}])

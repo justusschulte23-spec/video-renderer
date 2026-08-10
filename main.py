@@ -11053,6 +11053,10 @@ def tool_plan(req: PlanRequest):
     uri = _gemini_upload(s["facecam_path"])
     kontext = _ad_kontext(s)
     plan, modell, tok = _gemini_plan_call(uri, AD_SYS + "\n\n" + kontext, modelle)
+    # Das Modell liefert den Plan gelegentlich als nacktes Array statt als
+    # {"abschnitte": [...]} — am 10.08. starb daran der ganze Job.
+    if isinstance(plan, list):
+        plan = {"abschnitte": plan}
     fehler = (_plan_pruefen(plan, s["duration"], s.get("material") or [])
               + _plan_verankern(plan, s))
     runden = 1
@@ -11067,6 +11071,8 @@ def tool_plan(req: PlanRequest):
                 + "\n\nHier ist er:\n" + json.dumps(plan, ensure_ascii=False)[:6000]
                 + "\n\nSchreib ihn neu. Aendere nur, was noetig ist.")
         plan2, modell, tok2 = _gemini_plan_call(uri, nach, modelle)
+        if isinstance(plan2, list):
+            plan2 = {"abschnitte": plan2}
         fehler2 = (_plan_pruefen(plan2, s["duration"], s.get("material") or [])
                    + _plan_verankern(plan2, s))
         runden = 2

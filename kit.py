@@ -91,7 +91,11 @@ def _ist_vollbild(breit: int, hoch: int) -> bool:
     steht Schwarz. Das ist der Grund, warum die Vollbild-Abschnitte wie Folien
     aussehen: das Kit hatte fuer sie nie ein Layout, es hat ein Karten-Layout
     ueber einen Bildschirm gezogen."""
-    return hoch >= breit * 1.35 and breit >= 700
+    # Schmale hohe SPALTEN (seite_links/rechts: ~346x1190) bekamen das
+    # Karten-Layout und klebten oben — eine Spalte ist ebenfalls ein Plakat,
+    # nur ein schmales: zentrierter Stapel statt Kasten.
+    return (hoch >= breit * 1.35 and breit >= 700) \
+        or (hoch >= breit * 2.2 and breit >= 300)
 
 
 def _css(k: dict, breit: int, hoch: int, sekunden: float = 3.0) -> str:
@@ -446,7 +450,7 @@ def _titel_px(breit: int, hoch: int, text: str = "") -> int:
     """Die Titelgroesse steht als Inline-Stil im Markup und schlaegt jede
     Regel im Stylesheet. Ohne diese Weiche blieb der Titel auf ganzer Leinwand
     bei der Kartengroesse — der eine Wert, den das Vollbild-CSS nicht erreicht."""
-    wunsch = int(breit * .155) if _ist_vollbild(breit, hoch) else max(40, int(breit * .13))
+    wunsch = int(breit * .19) if _ist_vollbild(breit, hoch) else max(40, int(breit * .13))
     return _passt_px(text, breit, wunsch)
 
 
@@ -558,9 +562,13 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
       .sp h4 {{ font-size:{max(30, int(breit * .046))}px; }}
       .sp li {{ font-size:{max(26, int(breit * .038))}px;
                 padding:{int(breit * .022)}px 0; }}
-      .befund {{ font-size:{max(28, int(breit * .036))}px;
+      /* Befund-Chips auf ganzer Leinwand: gestapelt und gross. Als 39px-
+         Inline-Kruemel sassen zwei Chips in 1920px Hoehe — der Rest war
+         leerer Grund. */
+      .befund {{ font-size:{max(28, int(breit * .058))}px;
+                 display:flex; width:fit-content;
                  padding:.42em 1.0em .42em .62em;
-                 margin:0 {int(breit * .022)}px {int(breit * .026)}px 0; }}
+                 margin:0 auto {int(breit * .030)}px; }}
       .geprueft {{ font-size:{max(22, int(breit * .028))}px; }}
       .kachel {{ width:var(--kachel,{int(breit * .26)}px);
                  height:var(--kachel,{int(breit * .26)}px);
@@ -713,7 +721,9 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         return plakat(
             kopfzeile(_e(rest[0]) if rest else _e(zwei)),
             f"<p class='wert schlag' style='font-size:"
-            f"{_passt_px(str(zahl or haupt), breit, int(breit * (.27 if _ist_vollbild(breit, hoch) else .20)))}px'>"
+            # Referenz-Typo: auf ganzer Leinwand traegt die ZAHL das Bild.
+            # .27 ergab 292px auf 1920 Hoehe — 80% toter Grund.
+            f"{_passt_px(str(zahl or haupt), breit, int(breit * (.44 if _ist_vollbild(breit, hoch) else .20)))}px'>"
             f"<em>{wert}</em>"
             # Der Chip traegt die EINHEIT einer Zahl ("70" + "Shops"). Ohne
             # Zahl gibt `_zahl_teilen` den ganzen Text als Einheit zurueck —
@@ -801,7 +811,7 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
             "",
             "<p class='marke'>&bdquo;</p>"
             f"<p class='zitat rein v1' style='font-size:"
-            f"{_passt_px(haupt, breit, int(breit * (.102 if _ist_vollbild(breit, hoch) else .085)))}px'>"
+            f"{_passt_px(haupt, breit, int(breit * (.15 if _ist_vollbild(breit, hoch) else .085)))}px'>"
             f"{_e(haupt)}</p>",
             (f"<p class='quelle'>{_e(zwei)}</p>" if zwei else ""))
 

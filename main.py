@@ -6715,11 +6715,13 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
 _REMBG_SESSION = None
 
 
-def _matte_video(facecam_path: Path, job_dir: Path) -> str:
+def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
+                 W: int = 480) -> str:
     """Self-hosted background removal (rembg, CPU — no API cost): matte the speaker
     onto transparency and return a Cloudinary alpha-webm URL. Rendered at reduced
     width for speed; Remotion upscales it over the generated canvas. '' on failure
-    → caller keeps the original background."""
+    → caller keeps the original background. max_frames > 0 mattet nur den
+    Anfang — der Hook braucht keine 1500 Frames."""
     global _REMBG_SESSION
     try:
         from rembg import remove, new_session
@@ -6729,7 +6731,6 @@ def _matte_video(facecam_path: Path, job_dir: Path) -> str:
         cap = cv2.VideoCapture(str(facecam_path))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-        W = 480
         frames = job_dir / "matte_frames"
         frames.mkdir(exist_ok=True)
         idx = 0
@@ -6737,6 +6738,8 @@ def _matte_video(facecam_path: Path, job_dir: Path) -> str:
         while True:
             ok, frame = cap.read()
             if not ok:
+                break
+            if max_frames and idx >= max_frames:
                 break
             h, w = frame.shape[:2]
             frame = cv2.resize(frame, (W, int(h * W / w)))
@@ -6761,6 +6764,15 @@ def _matte_video(facecam_path: Path, job_dir: Path) -> str:
     except Exception as exc:
         log.warning("[MATTE] failed: %s", exc)
         return ""
+
+
+def _hook_freisteller(s: dict, bis_f: int) -> str:
+    """Er, freigestellt vor der Hook-Illustration: die ersten bis_f Frames
+    der Facecam ohne Hintergrund, als Alpha-WebM. Die Illustration ist der
+    GRUND, er steht davor — Motive liegen oben/links/rechts, die untere
+    Bildmitte gehoert ihm. '' wenn rembg fehlt oder scheitert."""
+    return _matte_video(Path(s["facecam_path"]), Path(s["dir"]),
+                        max_frames=int(bis_f) + 2, W=540)
 
 
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
@@ -10196,9 +10208,13 @@ ER RUECKT INS ECK — er ist NIE ganz weg
                   → uebernahme und hell_dunkel teilen sich EIN Budget
   beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
   metapher        ein Bild fuer eine abstrakte Aussage
-  metapher_full   das Bild nimmt das GANZE Bild ein, er ist NICHT zu sehen —
-                  die einzige Komposition ohne ihn, hoechstens EINMAL im Video
-                  und bevorzugt im HOOK. braucht: {"bild_prompt": "..."}
+  metapher_full   die HOOK-BUEHNE: eine 2D-Illustration des Tagesthemas wird
+                  der HINTERGRUND, ER wird freigestellt und steht davor. Die
+                  Motive der Illustration liegen OBEN und LINKS/RECHTS neben
+                  ihm — die untere Bildmitte gehoert ihm, dort verdeckt er
+                  nichts. Hoechstens EINMAL im Video, im HOOK (Abschnitt 0,
+                  Pflicht). braucht: {"bild_prompt": "..."} — beschreibe EINE
+                  Szene, die das heutige Thema sichtbar macht und verdeutlicht
   durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
                   braucht: {"url": "https://…", "ziel": "das Wort auf der Seite"}
                   OHNE url geht es nicht — dann nimm eine andere Komposition
@@ -10222,16 +10238,17 @@ WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
 - Der HOOK ist die wichtigste Stelle. Fuenf Sekunden nacktes Gesicht sind dort
   verschenkt: punch auf das staerkste Wort, overlay_wandert mit der Zahl,
   flaeche_kippt auf die Aussage.
-- MACHT ER IM HOOK EINEN VERGLEICH ODER KONFLIKT AUF (Tool gegen Tool, teuer
-  gegen selbstgebaut, Abo gegen Eigentum): nimm metapher_full und bestell in
-  "bild_prompt" EINE dramatische, wuerdevolle Bild-Metapher. Beispiel:
-  "zwei gekreuzte Schwerter vor dunklem Studio-Hintergrund, das linke Heft
+- DER HOOK OEFFNET IMMER MIT metapher_full: Abschnitt 0 ist Pflicht diese
+  Komposition, mit "bild_prompt". Beschreibe EINE 2D-Illustrations-Szene, die
+  das heutige Thema sofort sichtbar macht — bei einem Vergleich/Konflikt die
+  Bild-Metapher dazu (Beispiel: "zwei gekreuzte Schwerter, das linke Heft
   glatt und industriell, das rechte handgeschmiedet, amethystfarbenes
-  Streiflicht". Regeln fuer bild_prompt: EINE Szene, KEIN Text im Bild, keine
-  Gesichter, keine echten Markenlogos (die legt das System als Kacheln
-  darueber), witzig ist erlaubt, albern nicht — B2B, nicht Slop.
-  Er wird ab Sekunde ~2 herausgeschnitten; genau dafuer ist diese Komposition
-  da.
+  Streiflicht"), sonst das Kernobjekt des Themas in Aktion (ein Workflow, der
+  sich selbst repariert; ein Agent, der Fehler aufsammelt). Regeln fuer
+  bild_prompt: EINE Szene, KEIN Text im Bild, keine Gesichter, keine echten
+  Markenlogos, witzig erlaubt, albern nicht — B2B, nicht Slop. Denk daran:
+  die Motive liegen oben und an den Seiten, ER steht freigestellt in der
+  unteren Bildmitte davor.
 
 DIE FRAGE JE ABSCHNITT
 Nicht "ist er da oder weg", sondern: Was passiert hier, und wo gehoert er
@@ -10474,6 +10491,25 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             "Sekunde 0 nichts. Nimm punch mit dem staerksten Wort, "
             "overlay_wandert mit der Zahl, oder gib ihm ein Element."
             % _komposition(ab[0]))
+    # Der Hook oeffnet IMMER mit der Themen-Illustration als Buehne (Justus,
+    # 10.08.): Bild als Grund, er freigestellt davor.
+    if ab and _komposition(ab[0]) != "metapher_full":
+        fehler.append(
+            "Abschnitt 0 MUSS metapher_full sein — der Hook oeffnet immer mit "
+            "der vollflaechigen 2D-Themen-Illustration als Hintergrund, er "
+            "steht freigestellt davor. Bestell die Szene in braucht.bild_prompt.")
+    # Klump-Sperre: eine Karte, die 7 Sekunden unveraendert steht, ist ein
+    # Loch im Rhythmus, egal wie gut sie aussieht.
+    for _i, _a in enumerate(ab):
+        try:
+            _d = float(_a.get("bis", 0)) - float(_a.get("von", 0))
+        except (TypeError, ValueError):
+            continue
+        if _d > 8.0:
+            fehler.append(
+                "Abschnitt %d laeuft %.1fs am Stueck — laenger als 8s in "
+                "einer Komposition wirkt schlaff. Teil ihn in zwei "
+                "Abschnitte mit je einem eigenen Moment." % (_i, _d))
     voll_s, zaehler = 0.0, {}
     for i, a in enumerate(ab):
         try:
@@ -11453,12 +11489,24 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
             akzent = (farben.get("akzent") or farben.get("accent")
                       or farben.get("primary") or "#8B5CF6")
             idee = str(b.get("bild_prompt")).strip()[:400]
+            vibe = ("Clean editorial 3D illustration for a B2B tech short. "
+                    "Dramatic but dignified, subtle wit allowed, premium "
+                    "studio look, sharp focus, single scene. NO text, NO "
+                    "letters, NO real brand logos, NO faces.")
+            if k == "metapher_full":
+                # Hook-Buehne: die Illustration wird der HINTERGRUND, er wird
+                # freigestellt davor gesetzt. Motive muessen oben und an den
+                # Seiten liegen — die untere Bildmitte gehoert ihm.
+                vibe = ("Bold flat 2D editorial illustration for a vertical "
+                        "9:16 B2B tech short, premium vector style, rich but "
+                        "clean detail, one scene that explains the topic at a "
+                        "glance. COMPOSITION RULE: place all key motifs across "
+                        "the TOP third and along the LEFT and RIGHT edges; "
+                        "keep the lower center third calm, dark and empty — a "
+                        "presenter will be cut out and standing there. NO "
+                        "text, NO letters, NO real brand logos, NO faces.")
             url = await asyncio.to_thread(
-                _call_fal_thumbnail, idee, akzent,
-                vibe=("Clean editorial 3D illustration for a B2B tech short. "
-                      "Dramatic but dignified, subtle wit allowed, premium "
-                      "studio look, sharp focus, single scene. NO text, NO "
-                      "letters, NO real brand logos, NO faces."))
+                _call_fal_thumbnail, idee, akzent, vibe=vibe)
             if url:
                 return {"quelle_art": "generiert",
                         "kosten": PREISE_EINHEIT.get("fal-nano-banana-pro", 0.14),
@@ -11988,6 +12036,25 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             "herkunft": f"plan:{res.get('quelle_art')}",
             "konzept": str(b.get("zeigt") or "")[:80],
         }, frames))
+        if k == "metapher_full":
+            # Die Illustration ist der HINTERGRUND, er bleibt freigestellt
+            # davor (Justus, 10.08.). Nur fuer kurze Abschnitte — rembg auf
+            # CPU mattet ~2-4 Frames/s, ein spaeter 40s-Abschnitt wuerde den
+            # Render minutenlang anhalten. Ohne Matte bleibt das alte
+            # Verhalten: Bild vollflaechig, er ist kurz raus.
+            matte = ""
+            if bis_f <= int(12 * FPS):
+                matte = await asyncio.to_thread(_hook_freisteller, s, bis_f)
+            if matte:
+                neu.append(_layer_defaults({
+                    "id": f"cam_frei_{i}", "z": Z_ELEMENT + 1,
+                    "source": {"kind": "video", "url": matte,
+                               "transparent": True},
+                    "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
+                    "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+                    "herkunft": "plan:metapher_full",
+                    "konzept": "er freigestellt vor der Illustration",
+                }, frames))
 
     if cam_box:
         # ⚠️ ERSTER VERSUCH ZURUECKGENOMMEN. Der Lichtbogen sollte eine feine

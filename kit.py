@@ -94,7 +94,11 @@ def _ist_vollbild(breit: int, hoch: int) -> bool:
     # Schmale hohe SPALTEN (seite_links/rechts: ~346x1190) bekamen das
     # Karten-Layout und klebten oben — eine Spalte ist ebenfalls ein Plakat,
     # nur ein schmales: zentrierter Stapel statt Kasten.
-    return (hoch >= breit * 1.35 and breit >= 700) \
+    # 0.85 statt 1.35: auch die halbhohen Flaechen (unten_aufbau-Oberteil
+    # 950x960, haelften 1080x960) sind Plakate, keine Karten — mit dem
+    # Kasten-Layout sass der Inhalt oben und darunter war leerer Grund.
+    # Der Karten-Streifen (950x500, oben_unterbau 950x460) bleibt Kasten.
+    return (breit >= 700 and hoch >= breit * 0.85) \
         or (hoch >= breit * 2.2 and breit >= 300)
 
 

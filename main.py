@@ -8064,12 +8064,22 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
         raise HTTPException(status_code=422, detail={
             "abgelehnt": raw.get("id"), "fehler": [{"regel": "animate", "text": t}
                                                    for t in anim_fehler]})
+    # Unter der Facecam (z=10, Vollbild, deckend) ist jede Ebene unsichtbar.
+    # Der Lauf vom 10.08. hat 9 von 9 Grafiken auf z 5-8 gelegt — das Video
+    # kam nackt raus, und weder QA noch QC haben es gesehen (nichts verdeckte
+    # das Gesicht, alle Ebenen standen ja "im Bild"). Anheben statt ablehnen:
+    # die relative Reihenfolge bleibt, Captions (29) bleiben obenauf.
+    z = int(raw.get("z", 20))
+    if (raw.get("source") or {}).get("kind") not in PFLICHT_KINDS:
+        if z <= 10:
+            z += 10
+        z = min(z, 28)
     return {
         "id": str(raw.get("id") or f"L{uuid.uuid4().hex[:6]}"),
         "source": raw.get("source") or {"kind": "text", "content": ""},
         "from": max(0, int(raw.get("from", 0))),
         "to": min(frames, int(raw.get("to", frames))),
-        "z": int(raw.get("z", 20)),
+        "z": z,
         "transform": tr, "animate": anim,
         "modifiers": mods,
         "mask": raw.get("mask") if raw.get("mask") in ("none", "circle", "rounded", "speaker") else "none",
@@ -12583,6 +12593,14 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     p("Es steht etwas im Bild", len(eigene) >= 1, True,
       "%d Ebenen ausser Facecam und Untertiteln" % len(eigene))
 
+    # Eine Ebene unter der Facecam steht "im Bild" und ist trotzdem nie zu
+    # sehen — genau so kam am 10.08. ein nacktes Video durch alle Pruefungen.
+    cam_z = next((int(l.get("z", 10)) for l in s["layers"]
+                  if (l.get("source") or {}).get("kind") == "facecam"), 10)
+    verdeckt = [l["id"] for l in eigene if int(l.get("z", 20)) <= cam_z]
+    p("Ebenen ueber der Facecam", not verdeckt, True,
+      ", ".join(verdeckt[:5]) if verdeckt else "")
+
     # Tote Strecke. Der erste Lauf hatte 21,3s am Stueck ohne ein einziges
     # Element — die Kennzahlen sagten trotzdem "sieben von zehn gebaut". Wo
     # nichts passiert, sieht man nicht, wie viel woanders passiert ist.
@@ -14163,7 +14181,7 @@ def _tool_specs() -> list:
                    "render_html-Ergebnisse), bei text content."},
         "from": {"type": "integer", "description": "Startframe"},
         "to": {"type": "integer", "description": "Endframe"},
-        "z": {"type": "integer", "description": "Reihenfolge, Facecam liegt auf 10"},
+        "z": {"type": "integer", "description": "Reihenfolge. Facecam liegt auf 10 und ist VOLLBILD-DECKEND — Grafik unter 11 waere unsichtbar und wird automatisch auf 11-28 angehoben. Captions liegen auf 29."},
         "transform": {"type": "object", "description":
                       "x,y,w,h als Anteile — x/w von 1080, y/h von 1920. "
                       "Ausserdem scale, rotate, opacity, origin[2].",

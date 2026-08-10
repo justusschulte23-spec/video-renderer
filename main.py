@@ -7719,7 +7719,10 @@ def _min_ebenen(duration: float) -> int:
     return max(MIN_LAYERS_ABSOLUT, int(duration // SEKUNDEN_PRO_EBENE))
 
 
-SEKUNDEN_PRO_UEBERNAHME = 12.0
+# Referenz (Schnitt-Referenz.md, 10.08.): Uebernahme-Beats etwa alle 5 s.
+# Boden bei 8 — das laesst dem Agenten Luft und liegt trotzdem klar ueber
+# dem alten 12er-Takt, mit dem 50 s nur 4 Beats brauchten.
+SEKUNDEN_PRO_UEBERNAHME = 8.0
 MIN_UEBERNAHMEN = 2
 
 
@@ -8109,6 +8112,18 @@ def _schnitte_vorgeben(layers: list, words: list, frames: int) -> int:
     for p in _pausen(words, frames / FPS):
         f = int(round(p * FPS))
         if 0 <= f < frames:
+            vorhanden.add(f)
+    # Pausen allein reichen nicht: wer durchspricht, bekam einen einzigen
+    # Schnitt auf 50 Sekunden (Lauf vom 10.08.). Die Referenz schneidet auf
+    # Phrasengrenzen — genau die stehen in den Caption-Chunks. Pausen haben
+    # Vorrang, Chunk-Grenzen fuellen auf, Mindestabstand 1,6 s haelt es
+    # ruhig genug (Referenz: 2,4 s im Schnitt).
+    MIN_ABSTAND_F = int(1.6 * FPS)
+    for c in _remotion_chunks(words):
+        f = int(round(float(c["start"]) * FPS))
+        if not (MIN_ABSTAND_F <= f < frames - MIN_ABSTAND_F):
+            continue
+        if all(abs(f - v) >= MIN_ABSTAND_F for v in vorhanden):
             vorhanden.add(f)
     punch["frames"] = sorted(vorhanden)
     return len(punch["frames"])
@@ -10229,6 +10244,20 @@ dabei hin?
   Er wird grundsaetzlich → vollbild oder punch
   Die Stimmung kippt     → flaeche_kippt
   Etwas baut sich auf    → bubble mit echter Bewegung
+
+DER RHYTHMUS IST DAS PRODUKT
+Das Vorbild schneidet alle 2 bis 3 Sekunden und wechselt dabei zwischen ZWEI
+WELTEN: seiner Kamera und vollflaechigen Grafik-Beats (Uebernahme-Familie).
+Das heisst fuer deinen Plan:
+- NIE zwei Abschnitte derselben Kompositions-Familie direkt hintereinander.
+  Nach einem Kamera-Abschnitt (vollbild, punch, drift) kommt ein geteilter
+  oder ein Uebernahme-Abschnitt — der Wechsel selbst ist der Schnitt.
+- Die Uebernahme-Familie (uebernahme, hell_dunkel, beleg, metapher,
+  metapher_full) traegt den Takt: laenger als 8 Sekunden ohne einen
+  vollflaechigen Beat ist ein Loch im Rhythmus.
+- Abschnitte KURZ schneiden: 2 bis 5 Sekunden je Abschnitt ist der Normalfall,
+  laenger nur, wenn innerhalb sichtbar etwas passiert. Lieber zwoelf kurze
+  Abschnitte als sechs lange.
 
 KEINE FOLIEN
 Ein Kasten mit einem Satz ist keine Gestaltung. Ein zentrierter Satz auf
@@ -12609,6 +12638,23 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     p("Keine tote Strecke", luecke_f / FPS <= grenze, True,
       "%.1fs ohne Element ab %.1fs (erlaubt %.1fs)"
       % (luecke_f / FPS, luecke_ab / FPS, grenze))
+
+    # Schnittrhythmus, gemessen statt gefuehlt. Die Referenz
+    # (Schnitt-Referenz.md) liegt bei einem visuellen Ereignis alle 2,4 s.
+    # Ereignis = Punch-Schnitt der Facecam oder Auftritt einer Ebene.
+    # Ueber 6 s je Ereignis ist es kein Kurzvideo mehr, sondern ein Vortrag.
+    cam = next((l for l in s["layers"]
+                if (l.get("source") or {}).get("kind") == "facecam"), None)
+    punch_f = ((cam or {}).get("modifiers") or {}).get("punch") or {}
+    ereignisse = set(int(f) for f in (punch_f.get("frames") or []))
+    ereignisse |= {int(l.get("from", 0)) for l in s["layers"]
+                   if not _ist_pflicht(l)}
+    dichte = (s["frames"] / FPS) / max(1, len(ereignisse))
+    p("Schnittrhythmus", dichte <= 6.0, True,
+      "%.1fs je Ereignis bei %d Ereignissen (Referenz 2,4s, Grenze 6,0s)"
+      % (dichte, len(ereignisse)))
+    p("Schnittrhythmus nah an der Referenz", dichte <= 3.5, False,
+      "%.1fs je Ereignis" % dichte)
 
     draussen = []
     for l in eigene:

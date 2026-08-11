@@ -12137,7 +12137,10 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         verkuerzt = round((bis_f - el_bis) / FPS, 2)
 
     src = res.get("layer_source") or {}
-    if k in BRAUCHT_FLAECHE or (src.get("transparent") and k != "flaeche_kippt"):
+    # motiv: ER bleibt sichtbar - ein Backdrop wuerde ihn zudecken. Genau
+    # das hat im Volltest vom 11.08. die milchigen Vollbild-Fenster erzeugt.
+    if (k in BRAUCHT_FLAECHE
+            or (src.get("transparent") and k not in ("flaeche_kippt", "motiv"))):
         neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
 
     if k == "durchforsten" and res.get("uebersicht", {}).get("url"):

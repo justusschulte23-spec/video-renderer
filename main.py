@@ -1511,7 +1511,11 @@ PAUSE_HALTEN_S = 0.34
 
 
 def _compute_keep_segments(words: list, duration: float,
-                           max_gap: float = 0.30, pad: float = 0.05,
+                           # 0.30/0.05 hat 10,7s aus 68s geschnitten und
+                           # jede Atempause gefressen — "gefuehlt 20 Prozent
+                           # weg", hektischer Fluss (Justus, 11.08.).
+                           # Jetzt faellt nur echtes Totholz.
+                           max_gap: float = 0.55, pad: float = 0.12,
                            tail_pad: float = 0.35,
                            betonung: Optional[list] = None) -> list:
     """Max-Gap rule on Whisper word timestamps. Gaps <= max_gap stay (natural cadence);
@@ -10225,206 +10229,89 @@ def _gemini_plan_call(uri: str, prompt: str, modelle: tuple) -> tuple:
     raise HTTPException(status_code=502, detail=f"Art Director ohne Antwort — {letzter}")
 
 
-AD_SYS = """Du bist Art Director fuer ein 9:16-Kurzvideo.
-Du siehst das geschnittene Rohmaterial. Du baust nichts — du schreibst den
-Plan, nach dem andere bauen.
+AD_SYS = """Du bist EDITOR fuer ein 9:16-Kurzvideo — kein Layouter.
+Du siehst das Rohmaterial. Du schreibst den EDIT: eine Folge von MOMENTEN
+mit Begruendung, wie ein Cutter denkt. Es gibt keinen Slot-Katalog.
 
-ZWEI ZUSTAENDE, NICHTS DAZWISCHEN (Minimal-Regel, 11.08.):
-ER ist Vollbild, zentriert, ruhig — ODER ER IST WEG und EIN Element traegt
-allein auf sauberem Grund. Keine Bubbles, keine geteilten Layouts, kein
-Beschneiden, kein Verschieben. Ein Frame zeigt immer genau EINE Sache.
+DIE HALTUNG
+- Jede Entscheidung hat einen Grund IM MATERIAL: eine Zahl faellt, die
+  Energie dreht, eine Aufzaehlung beginnt, ein Gestaendnis braucht Naehe.
+  Kein Grund -> kein Element. Ruhe ist eine Entscheidung, keine Luecke.
+- Ein Bild VERKOERPERT die Aussage, es dekoriert sie nicht. "Staendig
+  korrupte JSONs" ist ein Foerderband, auf dem jede dritte Glas-Klammer
+  zerbricht — nicht eine Karte mit dem Wort "korrupt".
+- Weniger, groesser, motivierter: EIN Punch im ganzen Video, wenige
+  Szenen, die sitzen. Zwanzig Zooms sind ein Tick, einer ist ein Ereignis.
+- Die Marke ist der STIL (heller Studio-Grund, Glas, Amethyst, eine
+  Schriftstimme) — NIE die Abfolge. Zwei Videos duerfen sich nie gleich
+  anfuehlen. Wiederhole keine Abfolge, die du schon einmal gebaut hast.
 
-ER TRAEGT ALLEIN
-  vollbild        nur er, nichts sonst — wenn der Satz allein traegt
-  punch           Vollbild, harter Zoom auf EIN Wort, springt zurueck
-                  braucht: {"wort": "..."} — das Wort auf der staerksten Betonung
+DIE FUENF ZUSTAENDE EINES MOMENTS ("zustand")
+  er        nur er. "einstellung": "normal" oder "nah" (nah = Gestaendnis,
+            Pointe, Umschwung — der Wechsel ist ein SCHNITT, kein Zoom).
+            "stille": true heisst: keine Elemente, keine Marker — der Satz
+            traegt allein. Setz das bewusst mindestens einmal.
+  szene     eine GENERIERTE Szene traegt allein, er ist raus. "szene" ist
+            die Bildidee: konkret, szenisch, sie VERKOERPERT den Satz, der
+            gerade faellt. Kein Text im Bild, keine Logos, keine Gesichter.
+  er_szene  die generierte Szene ist der HINTERGRUND, er steht freigestellt
+            davor (Motive oben/links/rechts, untere Mitte gehoert ihm).
+            Fuer den Hook die erste Wahl. Nur wenn der Moment vor Sekunde
+            12 beginnt.
+  motiv     er bleibt voll im Bild, EIN kleines lebendes Element steht
+            seitlich oben und entwickelt sich mit dem Inhalt (Zaehler,
+            Schritte, Haken). braucht: art_element, text, zeigt, bewegung.
+  beleg     eine ECHTE Oberflaeche traegt allein — nur aus BELEGE unten,
+            an der Sekunde, in der er davon redet.
 
-ER IST WEG — DAS ELEMENT TRAEGT ALLEIN
-  Vollflaechig, EIN zentriertes Element, viel Leerraum, ruhiger heller Grund.
-  Wann immer es sie gibt, gehoert die ECHTE Oberflaeche hierher: der
-  Screenshot der Doku, der Preisseite, des Workflows. Eine gebaute Textkarte
-  ist die schwaechere Antwort auf dieselbe Frage — sie zeigt, dass du es
-  beschreiben kannst, ein Screenshot zeigt, dass es das gibt.
-  uebernahme      vollflaechig EIN Element, er ist aus dem Bild
-  hell_dunkel     wie uebernahme, aber die Helligkeit KIPPT: dunkler Kanal wird
-                  hell, heller wird dunkel. Derselbe Akzent, dieselbe Schrift —
-                  nur der Grund dreht sich um
-                  → das ist der Rhythmus des Videos, nicht Dekoration. Nach
-                    zwanzig Sekunden im selben Licht ist der Umschlag ein
-                    Ereignis. Setz ihn dorthin, wo das Thema wechselt: vom
-                    Problem zur Loesung, von der Klage zur Anleitung
-                  → uebernahme und hell_dunkel teilen sich EIN Budget
-  beleg           echter Screenshot, zugeschnitten, gezoomt, markiert
-  metapher        ein Bild fuer eine abstrakte Aussage
-  metapher_full   die HOOK-BUEHNE: eine 2D-Illustration des Tagesthemas wird
-                  der HINTERGRUND, ER wird freigestellt und steht davor. Die
-                  Motive der Illustration liegen OBEN und LINKS/RECHTS neben
-                  ihm — die untere Bildmitte gehoert ihm, dort verdeckt er
-                  nichts. Hoechstens EINMAL im Video, im HOOK (Abschnitt 0,
-                  Pflicht). braucht: {"bild_prompt": "..."} — beschreibe EINE
-                  Szene, die das heutige Thema sichtbar macht und verdeutlicht
-  durchforsten    ein Clip, in dem sichtbar gesucht und markiert wird
-                  braucht: {"url": "https://…", "ziel": "das Wort auf der Seite"}
-                  OHNE url geht es nicht — dann nimm eine andere Komposition
+MARKER auf einem er-Moment:
+  punch_wort  GENAU EINMAL IM GANZEN VIDEO: das eine Wort, auf dem der
+              einzige Zoom sitzt (die Zahl, die alles auszahlt).
 
-VERBOTEN (Minimal-Regel): unten_aufbau, oben_unterbau, seite_links,
-seite_rechts, haelften, bubble, bubble_wandert, drift, overlay_wandert,
-flaeche_kippt. Bestellst du sie trotzdem, macht die Ausfuehrung eine
-uebernahme daraus.
+WAS DU AUS DEM MATERIAL LIEST (steht unten als Daten)
+- BETONUNGEN: wo seine Stimme schlaegt — dort sitzen Marker und Wechsel.
+- PAUSEN: wo er atmet — dort enden Momente, nie mitten im Wort.
+- ENERGIE: wo er schneller wird, werden die Momente kuerzer; wo er ruhig
+  wird, darfst du stehen lassen.
 
-WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
-- Ein Beleg gehoert an die Stelle, an der er DAVON REDET. Nicht davor, nicht
-  danach. Das Wort-Transkript sagt dir die Sekunde.
-- Verteil die gebauten Abschnitte ueber die ganze Laufzeit. Mehr als 12
-  Sekunden am Stueck ohne ein gebautes Element ist ein Loch, egal wie gut der
-  Rest ist. Anfang und Ende zaehlen mit.
-- Der HOOK ist die wichtigste Stelle. Fuenf Sekunden nacktes Gesicht sind dort
-  verschenkt.
-- DER HOOK OEFFNET IMMER MIT metapher_full: Abschnitt 0 ist Pflicht diese
-  Komposition, mit "bild_prompt". Beschreibe EINE 2D-Illustrations-Szene, die
-  das heutige Thema sofort sichtbar macht — bei einem Vergleich/Konflikt die
-  Bild-Metapher dazu (Beispiel: "zwei gekreuzte Schwerter, das linke Heft
-  glatt und industriell, das rechte handgeschmiedet, amethystfarbenes
-  Streiflicht"), sonst das Kernobjekt des Themas in Aktion (ein Workflow, der
-  sich selbst repariert; ein Agent, der Fehler aufsammelt). Regeln fuer
-  bild_prompt: EINE Szene, KEIN Text im Bild, keine Gesichter, keine echten
-  Markenlogos, witzig erlaubt, albern nicht — B2B, nicht Slop. Denk daran:
-  die Motive liegen oben und an den Seiten, ER steht freigestellt in der
-  unteren Bildmitte davor.
+"braucht" fuer motiv und beleg — ein Auftrag, keine Prosa:
+  art_element  stat (EINE Zahl gross) | ablauf (Schritte) | befund
+               (Haken/X-Liste) | vergleich | zitat | marke (Logo-Kachel)
+  text         kurze Zeilen; Zustandszeichen davor: "+ geht" / "- geht
+               nicht" / "! Vorsicht" (das Zeichen steht nie im Bild)
+  zeigt        was zu sehen ist, konkret
+  bewegung     wie es sich mit dem Inhalt entwickelt (bei motiv Pflicht —
+               ohne Bewegung ist es eine Folie)
+  url, ziel    nur bei beleg mit echter Seite
 
-DIE FRAGE JE ABSCHNITT
-Traegt dieser Moment ER — oder EIN Element?
-  Er zaehlt auf          → uebernahme mit art_element ablauf
-  Er vergleicht          → uebernahme mit art_element vergleich
-  Er nennt eine Zahl     → uebernahme mit art_element stat
-  Er verweist auf etwas  → beleg (Fundstueck) oder durchforsten (echte Seite,
-                           dann gehoert die url in braucht)
-  Er wird grundsaetzlich → vollbild oder punch
-  Die Stimmung kippt     → hell_dunkel
+HARTE PHYSIK — daran wird dein Edit im Code geprueft:
+- Momente decken 0 bis zum Ende lueckenlos ab, in Reihenfolge
+- hoechstens EIN punch_wort im ganzen Video
+- szene und er_szene brauchen "szene"; motiv braucht art_element und
+  bewegung; beleg nur mit echter Quelle
+- er_szene nur, wenn der Moment vor Sekunde 12 beginnt
+- kein Moment laenger als 10 Sekunden
 
-DER RHYTHMUS IST DAS PRODUKT
-Das Vorbild schneidet alle 2 bis 3 Sekunden und wechselt dabei zwischen ZWEI
-WELTEN: seiner Kamera und vollflaechigen Grafik-Beats (Uebernahme-Familie).
-Das heisst fuer deinen Plan:
-- NIE zwei Abschnitte derselben Kompositions-Familie direkt hintereinander.
-  Nach einem Kamera-Abschnitt (vollbild, punch, drift) kommt ein geteilter
-  oder ein Uebernahme-Abschnitt — der Wechsel selbst ist der Schnitt.
-- Die Uebernahme-Familie (uebernahme, hell_dunkel, beleg, metapher,
-  metapher_full) traegt den Takt: laenger als 8 Sekunden ohne einen
-  vollflaechigen Beat ist ein Loch im Rhythmus.
-- Abschnitte KURZ schneiden: 2 bis 5 Sekunden je Abschnitt ist der Normalfall,
-  laenger nur, wenn innerhalb sichtbar etwas passiert. Lieber zwoelf kurze
-  Abschnitte als sechs lange.
-
-KEINE FOLIEN
-Ein Kasten mit einem Satz ist keine Gestaltung. Ein zentrierter Satz auf
-leerer Flaeche, Text ohne Zahl, Vergleich oder Struktur, alles was auch als
-Untertitel funktioniert haette — weg damit. Die Captions laufen ohnehin.
-Willst du nur Text zeigen: lass es weg.
-
-KEINE LEEREN STELLEN
-Laeuft ein Abschnitt laenger als 10 Sekunden in derselben Komposition, muss
-INNERHALB etwas passieren — sonst wirkt es schlaff. Teil ihn oder gib ihm
-eine Bewegung.
-
-WAS "braucht" LIEFERN MUSS — ein Auftrag, keine Prosa
-"Abo-Oberflaechen laufen hinter ihm (generiert)" ist keine Anweisung.
-  art_element  WELCHE ART Element gebaut wird — davon haengt das Layout ab:
-                 stat      EINE Zahl gross, Beschriftung klein  (70 Shops, 3-4 Runs)
-                 vergleich zwei Seiten gegeneinander            (vorher/nachher)
-                 ablauf    Schritte nacheinander                (1 → 2 → 3)
-                 zitat     ein Satz, der wirkt                  (seine Aussage)
-                 befund    was geht und was nicht               (Haken/X-Liste)
-                 hero_illustration  ein beschafftes BILD dominiert die
-                           Flaeche, der Text wird eine kompakte Leiste am
-                           unteren Rand — nimm das, wenn es ein Bild,
-                           einen Screenshot oder eine Metapher gibt, statt
-                           Text auf leerer Flaeche
-                 marke     ein Werkzeug ist der Held            (Logo-Kachel)
-                 titel     Ueberschrift mit Unterzeile          (nur wenn nichts
-                           anderes passt — nicht der Standard)
-
-  ZUSTAND AN EINER TEXTZEILE — ein Zeichen davor, mehr nicht:
-                 "+ laeuft lokal"     gruener Haken, es geht
-                 "- braucht GPU"      rotes X, es geht nicht
-                 "! nur mit Key"      Warnung
-               Das Zeichen steht NIE im Bild, es waehlt die Marke. Bei
-               art_element "befund" und "vergleich" gehoert an jede Zeile eines.
-               Nutz es nur, wo er wirklich etwas bejaht oder verneint — eine
-               Aufzaehlung mit fuenf Haken sagt nichts mehr.
-
-  bild_prompt  nur bei metapher/metapher_full: die Bildidee fuer den
-               Generator, konkret und szenisch, ohne Text im Bild
-
-  logo         nur bei art_element "marke": der Slug des Werkzeugs, so wie es
-               heisst — "n8n", "supabase", "github", "railway", "claude".
-               Kein Slug bekannt: dann nimm eine andere art_element
-  zeigt        immer, wenn braucht gesetzt ist: WAS zu sehen ist, konkret
-  bewegung     bei unten_aufbau, oben_unterbau, bubble, bubble_wandert,
-               overlay_wandert, flaeche_kippt — ohne Bewegung ist es eine Folie
-  text         nur wenn Text gezeigt wird, als Liste kurzer Zeilen
-  endzustand   bei allem, was sich aufbaut
-  quelle       "vorhanden" (ein Fundstueck) oder "neu" (wird gebaut)
-
-HARTE REGELN — daran wird dein Plan im Code geprueft und sonst zurueckgegeben
-- die Abschnitte decken das Video luecken- und ueberlappungsfrei ab, von 0 bis
-  zum Ende, in Reihenfolge
-- kuerzer als 3 s nur bei beleg, punch, overlay_wandert; alles andere
-  mindestens 4 s
-- laenger als 10 s nur mit einer Bewegung darin
-- keine Komposition zweimal hintereinander, keine mehr als dreimal im Video
-- die Vollbild-Familie (vollbild, punch, drift, overlay_wandert,
-  flaeche_kippt) traegt mindestens 35 Prozent der Laufzeit
-- hoechstens ZWEI beleg im ganzen Video — drei Vollbild-Dokumente sind eine
-  Diashow. Ein weiterer Fund gehoert neben ihn oder hinter ihn
-- hoechstens ZWEI uebernahme im ganzen Video — er soll nicht dauernd
-  verschwinden
-- text ohne bewegung und ohne eine Zahl ist eine Folie und wird abgelehnt
-- jedes gebaute Element braucht "art_element". Ohne das bekommt der Gestalter
-  fuer eine Zahl dasselbe Layout wie fuer ein Zitat — und genau so sieht es
-  dann auch aus
-- unten_aufbau und oben_unterbau brauchen ZWINGEND "endzustand": was steht am
-  Ende da, wenn der Aufbau fertig ist. Ohne das faellt der Abschnitt auf
-  vollbild zurueck — er hat schon einmal einen bezahlten Abschnitt gekostet
-- durchforsten braucht "url" und "ziel", KEIN "zeigt". Ohne url gibt es
-  nichts zu durchsuchen; dann nimm beleg oder eine andere Komposition
-- in seite_links, seite_rechts, bubble und bubble_wandert hoechstens DREI
-  Woerter je Textzeile. Aufzaehlungen, Vergleiche und ganze Saetze gehoeren in
-  unten_aufbau, haelften oder uebernahme — dort ist Platz dafuer
-- jedes vorhandene Material kommt in einem Abschnitt vor ODER steht in
-  "material_abgelehnt" mit Grund
-- vollbild hat "braucht": null; alles andere hat einen Auftrag
-
-AUSGABE — nur der Plan, nur JSON
+AUSGABE — nur JSON:
 {
-  "abschnitte": [{
-    "von": 0.0, "bis": 8.0,
-    "komposition": "vollbild",
-    "block": "hook",
-    "begruendung": "erster Satz, nichts soll ablenken",
-    "braucht": null
-  }, {
-    "von": 8.0, "bis": 17.0,
-    "komposition": "unten_aufbau",
-    "block": "stakes",
-    "begruendung": "er zaehlt vier Abos auf",
-    "braucht": {
-      "art": "animation", "quelle": "neu",
-      "zeigt": "vier Karten erscheinen nacheinander, bei jeder waechst ein Preisbalken auf 20 Euro",
-      "bewegung": "gestaffelt, 0.4s Abstand, von unten",
-      "text": ["ChatGPT 20EUR", "Claude 20EUR", "Perplexity 20EUR", "Gemini 20EUR"],
-      "endzustand": "alle vier stehen, Summe 80 EUR erscheint"
-    }
-  }, {
-    "von": 17.0, "bis": 24.0,
-    "komposition": "beleg",
-    "block": "beweis",
-    "begruendung": "er nennt die Doku-Stelle",
-    "braucht": {"art": "beleg", "quelle": "vorhanden",
-                "zeigt": "n8n-Doku, Node parameters"}
-  }],
-  "material_abgelehnt": [{"datei": "shot_x.png", "grund": "..."}],
-  "gesamturteil": "ein Satz, wie das Video wirken soll"
+  "momente": [
+    {"von": 0.0, "bis": 4.1, "zustand": "er", "einstellung": "nah",
+     "stille": false, "punch_wort": null,
+     "grund": "Einstieg mitten im Schmerz, nichts soll ablenken"},
+    {"von": 4.1, "bis": 9.0, "zustand": "szene",
+     "szene": "Foerderband aus Glas-Klammern, jede dritte zerbricht beim Aufsetzen, Scherben haeufen sich",
+     "grund": "der Satz beschreibt einen Prozess, der ohne ihn laeuft"},
+    {"von": 9.0, "bis": 13.0, "zustand": "er", "einstellung": "nah",
+     "stille": true,
+     "grund": "Gestaendnis — der Satz traegt allein"},
+    {"von": 30.0, "bis": 39.0, "zustand": "motiv",
+     "braucht": {"art_element": "ablauf",
+                 "text": ["1 Trigger", "2 Pruefen", "3 Fixen"],
+                 "zeigt": "sein Agenten-Loop als lebende Schleife",
+                 "bewegung": "ein Schritt leuchtet je Umlauf, Tempo folgt seiner Aufzaehlung"},
+     "grund": "die Schleife laeuft sichtbar mit, waehrend er sie erklaert"}
+  ],
+  "gesamturteil": "ein Satz, wie der Edit sich anfuehlen soll"
 }"""
 
 
@@ -10437,9 +10324,29 @@ def _ad_kontext(s: dict) -> str:
                 if (l.get("source") or {}).get("kind") == "facecam"), None)
     schnitte = (((cam or {}).get("modifiers") or {}).get("punch") or {}).get("frames") or []
     teile = [f"LAUFZEIT {dauer:.1f}s bei {FPS} fps ({s['frames']} Frames)."]
-    teile.append(
-        "SCHNITTE (stehen schon, an jeder Sprechpause, nicht verhandelbar): "
-        + (", ".join(f"{f / FPS:.1f}s" for f in schnitte) or "keine"))
+    # Das Raw-Dossier: die messbaren Signale, aus denen ein Editor schneidet.
+    words = s.get("words") or []
+    pausen = _pausen(words, dauer)
+    teile.append("PAUSEN (er atmet — hier enden Momente): "
+                 + (", ".join(f"{p:.1f}s" for p in pausen[:40]) or "keine"))
+    onsets = [float(t) for t in (s.get("onsets") or [])]
+    def _wort_bei(t: float) -> str:
+        for w in words:
+            if float(w.get("start", 0)) <= t <= float(w.get("end", 0)) + 0.15:
+                return str(w.get("word", "")).strip()
+        return "?"
+    if onsets:
+        teile.append("BETONUNGEN (seine Stimme schlaegt): "
+                     + ", ".join(f"{t:.1f}s '{_wort_bei(t)}'"
+                                 for t in onsets[:24]))
+    if words and dauer > 10:
+        fenster = []
+        for a in range(0, int(dauer), 5):
+            n = sum(1 for w in words
+                    if a <= float(w.get("start", 0)) < a + 5)
+            fenster.append(f"{a}-{a+5}s:{n}")
+        teile.append("ENERGIE (Woerter je 5s — wo er beschleunigt): "
+                     + " ".join(fenster))
     if face:
         teile.append(
             "GESICHT im Bild (Anteile, Median ueber den Clip): "
@@ -10512,11 +10419,136 @@ def _hat_zahl(werte) -> bool:
     return any(c.isdigit() for c in str(werte or ""))
 
 
+def _momente_zu_abschnitten(momente: list) -> list:
+    """Der Edit des Editors, uebersetzt in die Bau-Primitive der Ausfuehrung.
+    Die Momente-Sprache ist die PLANUNG, die Abschnitte sind nur noch ihr
+    Maschinenformat — kein Katalog-Denken mehr."""
+    ab = []
+    for m in momente or []:
+        z = str(m.get("zustand") or "er")
+        eintrag = {"von": float(m.get("von", 0) or 0),
+                   "bis": float(m.get("bis", 0) or 0),
+                   "block": str(m.get("block") or z),
+                   "begruendung": str(m.get("grund") or ""),
+                   "einstellung": m.get("einstellung"),
+                   "stille": bool(m.get("stille"))}
+        if z == "szene":
+            eintrag.update({"komposition": "metapher", "braucht": {
+                "bild_prompt": str(m.get("szene") or ""),
+                "zeigt": str(m.get("szene") or "")[:120], "quelle": "neu"}})
+        elif z == "er_szene":
+            eintrag.update({"komposition": "metapher_full", "braucht": {
+                "bild_prompt": str(m.get("szene") or "")}})
+        elif z == "motiv":
+            b = dict(m.get("braucht") or {})
+            b.setdefault("quelle", "neu")
+            eintrag.update({"komposition": "motiv", "braucht": b})
+        elif z == "beleg":
+            b = dict(m.get("braucht") or {})
+            b.setdefault("art", "beleg")
+            b.setdefault("quelle", "vorhanden")
+            eintrag.update({"komposition": "beleg", "braucht": b})
+        else:
+            pw = str(m.get("punch_wort") or "").strip()
+            if pw:
+                eintrag.update({"komposition": "punch",
+                                "braucht": {"wort": pw}})
+            else:
+                eintrag.update({"komposition": "vollbild", "braucht": None})
+        ab.append(eintrag)
+    return ab
+
+
+def _treatment_pruefen(plan: dict, dauer: float) -> list:
+    """Die Physik des Edits — nicht sein Geschmack. Alles, was hier NICHT
+    steht (Rotation, Familien, Quoten), gehoert dem Editor."""
+    mom = plan.get("momente") or []
+    if not mom:
+        return ["kein Feld 'momente' mit Inhalt"]
+    fehler, ende = [], 0.0
+    punches = 0
+    for i, m in enumerate(mom):
+        try:
+            von, bis = float(m.get("von", 0)), float(m.get("bis", 0))
+        except (TypeError, ValueError):
+            fehler.append(f"Moment {i}: von/bis keine Zahlen")
+            continue
+        if abs(von - ende) > 0.35:
+            fehler.append(f"Moment {i} beginnt bei {von:.1f}s, "
+                          f"der vorige endet bei {ende:.1f}s — lueckenlos.")
+        if bis - von > 10.0:
+            fehler.append(f"Moment {i} laeuft {bis - von:.1f}s — laenger als "
+                          "10s traegt kein Moment. Teil ihn.")
+        z = str(m.get("zustand") or "er")
+        if z in ("szene", "er_szene") and not str(m.get("szene") or "").strip():
+            fehler.append(f"Moment {i} ({z}) ohne 'szene' — die Bildidee fehlt.")
+        if z == "er_szene" and von >= 12.0:
+            fehler.append(f"Moment {i}: er_szene beginnt bei {von:.1f}s — "
+                          "nur vor Sekunde 12 (Freisteller-Grenze).")
+        if z == "motiv":
+            b = m.get("braucht") or {}
+            if not b.get("art_element") or not b.get("bewegung"):
+                fehler.append(f"Moment {i}: motiv braucht art_element UND "
+                              "bewegung.")
+        if str(m.get("punch_wort") or "").strip():
+            punches += 1
+        ende = bis
+    if punches > 1:
+        fehler.append(f"{punches} punch_wort im Edit — erlaubt ist GENAU "
+                      "einer im ganzen Video.")
+    if abs(ende - dauer) > 0.6:
+        fehler.append(f"der letzte Moment endet bei {ende:.1f}s, das Video "
+                      f"bei {dauer:.1f}s.")
+    return fehler
+
+
+def _schnitte_aus_treatment(s: dict) -> int:
+    """Schnitte kommen aus dem EDIT, nicht aus einem Raster: Einstellungs-
+    Wechsel zwischen er-Momenten und der eine Punch. Ersetzt das
+    Pausen-/Chunk-Raster, das als 'Shake alle 2 Sekunden' empfunden wurde."""
+    mom = (s.get("plan") or {}).get("momente") or []
+    cam = next((l for l in s["layers"]
+                if (l.get("source") or {}).get("kind") == "facecam"), None)
+    if not cam or not mom:
+        return -1
+    punch = ((cam.get("modifiers") or {}).get("punch")
+             or {"frames": [], "hookEndFrame": 0, "outroStartFrame": 0,
+                 "base": 1.04})
+    fr = set()
+    for a, b in zip(mom, mom[1:]):
+        if (str(a.get("zustand") or "er") == "er"
+                and str(b.get("zustand") or "er") == "er"
+                and (a.get("einstellung") or "normal")
+                != (b.get("einstellung") or "normal")):
+            f = int(round(float(b.get("von", 0)) * FPS))
+            if 0 < f < s["frames"]:
+                fr.add(f)
+    for m in mom:
+        pw = str(m.get("punch_wort") or "").strip().lower()
+        if not pw:
+            continue
+        for w in s.get("words") or []:
+            if pw in str(w.get("word", "")).lower():
+                t = float(w.get("start") or 0)
+                if (float(m.get("von", 0)) - 0.5 <= t
+                        <= float(m.get("bis", 1e9)) + 0.5):
+                    fr.add(int(round(t * FPS)))
+                    break
+    punch["frames"] = sorted(fr)
+    cam.setdefault("modifiers", {})["punch"] = punch
+    log.info("[EDIT] %d Schnitte aus dem Treatment (statt Raster)", len(fr))
+    return len(fr)
+
+
 def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     """Die harten Regeln. Sie werden GEPRUEFT, nicht erbeten — und ein Verstoss
     geht EINMAL zurueck an den Art Director, statt in der Ausfuehrung zu einem
     Sonderfall zu werden. Genau daran ist der alte Prompt gestorben: jede
     Ausnahme wurde eine weitere Regel."""
+    # Treatment-Paradigma (11.08.): liefert der Editor Momente, gilt nur
+    # noch die Physik — der Katalog-Regelstapel darunter ist Geschichte.
+    if isinstance(plan, dict) and plan.get("momente"):
+        return _treatment_pruefen(plan, dauer)
     ab = plan.get("abschnitte") if isinstance(plan, dict) else None
     if not isinstance(ab, list) or not ab:
         return ["kein Feld 'abschnitte' mit Inhalt"]
@@ -11142,6 +11174,8 @@ def tool_plan(req: PlanRequest):
     # {"abschnitte": [...]} — am 10.08. starb daran der ganze Job.
     if isinstance(plan, list):
         plan = {"abschnitte": plan}
+    if isinstance(plan, dict) and plan.get("momente"):
+        plan["abschnitte"] = _momente_zu_abschnitten(plan["momente"])
     fehler = (_plan_pruefen(plan, s["duration"], s.get("material") or [])
               + _plan_verankern(plan, s))
     runden = 1
@@ -11158,6 +11192,8 @@ def tool_plan(req: PlanRequest):
         plan2, modell, tok2 = _gemini_plan_call(uri, nach, modelle)
         if isinstance(plan2, list):
             plan2 = {"abschnitte": plan2}
+        if isinstance(plan2, dict) and plan2.get("momente"):
+            plan2["abschnitte"] = _momente_zu_abschnitten(plan2["momente"])
         fehler2 = (_plan_pruefen(plan2, s["duration"], s.get("material") or [])
                    + _plan_verankern(plan2, s))
         runden = 2
@@ -11183,6 +11219,10 @@ def tool_plan(req: PlanRequest):
             pass
 
     s["plan"] = plan
+    # Schnitte kommen jetzt aus dem Edit: Einstellungs-Wechsel + der eine
+    # Punch ersetzen das Pausen-/Chunk-Raster.
+    if plan.get("momente"):
+        _schnitte_aus_treatment(s)
     s["kosten_plan"] = 0.0      # wird gleich gesetzt, sobald der Preis steht
     dauer_s = round(time.time() - t0, 1)
     # Preis nach der oeffentlichen Gemini-Liste, damit der Deckel aus F
@@ -11847,6 +11887,10 @@ KOMP_BOXEN = {
                         {"x": 0, "y": 0, "w": 1, "h": 1}),
     "bubble_wandert":  ({"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},
                         {"x": 0, "y": 0, "w": 1, "h": 1}),
+    # Treatment-Zustand 'motiv': er bleibt VOLL im Bild, ein kleines
+    # lebendes Element (Kit-Karte) steht seitlich oben und entwickelt sich
+    # mit dem Inhalt. Die Facecam-Ebene laeuft darunter einfach weiter.
+    "motiv":           (None, {"x": 0.62, "y": 0.09, "w": 0.34, "h": 0.24}),
     "uebernahme":      (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     # Dieselbe Vollflaeche wie uebernahme — der Unterschied ist die Helligkeit.
     "hell_dunkel":     (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
@@ -11877,7 +11921,7 @@ OHNE_MATERIAL = ("vollbild", "punch", "drift", "flaeche_kippt")
 # die Untertitel — bei einem Stockclip ohne Schrift waere es unnoetig.
 TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                "haelften", "uebernahme", "hell_dunkel", "overlay_wandert",
-               "flaeche_kippt", "beleg", "durchforsten",
+               "flaeche_kippt", "beleg", "durchforsten", "motiv",
                # Bubble fehlte: bei Sekunde 52 lag "PREISEN UND KATEGORIEN"
                # mitten im Doku-Text, weil hinter der Bubble ein voller
                # Screenshot laeuft. Der traegt Text wie jedes Element.
@@ -12817,8 +12861,11 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     ereignisse |= {int(l.get("from", 0)) for l in s["layers"]
                    if not _ist_pflicht(l)}
     dichte = (s["frames"] / FPS) / max(1, len(ereignisse))
-    p("Schnittrhythmus", dichte <= 6.0, True,
-      "%.1fs je Ereignis bei %d Ereignissen (Referenz 2,4s, Grenze 6,0s)"
+    # Seit dem Treatment-Paradigma (11.08.) bestimmt der EDIT den Rhythmus —
+    # der Punkt misst weiter, aber er blockt nicht mehr: bewusste Ruhe ist
+    # eine Editor-Entscheidung, kein Defekt.
+    p("Schnittrhythmus", dichte <= 6.0, False,
+      "%.1fs je Ereignis bei %d Ereignissen (Referenz 2,4s)"
       % (dichte, len(ereignisse)))
     p("Schnittrhythmus nah an der Referenz", dichte <= 3.5, False,
       "%.1fs je Ereignis" % dichte)

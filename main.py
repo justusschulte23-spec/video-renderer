@@ -6766,6 +6766,69 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         return ""
 
 
+OMNI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+
+def _omni_clip(idee: str, k: str, job_dir: Path) -> str:
+    """Gemini Omni Flash (Interactions API): 4s-Szenen-Clip im hellen
+    Studio-Look, als Palindrom auf ~8s geloopt, hochgeladen. '' bei
+    Fehler — dann greift der nano-banana-Rueckfall. ~0,40 USD je Clip."""
+    key = os.environ.get("GOOGLE_AI_KEY") or ""
+    if not key:
+        return ""
+    stil = ("premium minimal tech promo in the style of a Google Gemini ad, "
+            "clean light-gray studio background (#F1F0F4), soft purple "
+            "(#8B5CF6) rim light, soft contact shadow, generous empty space, "
+            "smooth spring-like motion, static camera, no shake. NO text, "
+            "NO letters, NO logos, NO faces.")
+    lage = (" COMPOSITION: key motifs across the top and along the left and "
+            "right edges; the lower center third stays calm and empty - a "
+            "presenter will be cut out and standing there."
+            if k == "metapher_full" else " ONE single centered object.")
+    body = {"model": "gemini-omni-flash-preview",
+            "input": f"A 4 second vertical shot. {idee.strip()}. {stil}{lage}",
+            "response_format": {"type": "video", "aspect_ratio": "9:16",
+                                "delivery": "uri"},
+            "generation_config": {"video_config": {"task": "text_to_video"}}}
+    t0 = time.time()
+    r = requests.post(f"{OMNI_INTERACTIONS_URL}?key={key}", json=body,
+                      timeout=420)
+    r.raise_for_status()
+    d = r.json()
+    uri = ""
+    for st in d.get("steps", []):
+        if st.get("type") == "model_output":
+            for c in st.get("content", []):
+                if c.get("type") == "video" and c.get("uri"):
+                    uri = c["uri"]
+    if not uri:
+        log.warning("[OMNI] kein Video in Antwort (status=%s)", d.get("status"))
+        return ""
+    roh = Path(job_dir) / f"omni_{uuid.uuid4().hex[:8]}.mp4"
+    sep = "&" if "?" in uri else "?"
+    if not download_file(f"{uri}{sep}key={key}", roh):
+        return ""
+    # Palindrom-Loop: 4 bezahlte Sekunden tragen 8 — die Rueckwaertshaelfte
+    # ist bei ruhigen Studio-Shots unsichtbar als Loop.
+    lang = Path(job_dir) / (roh.stem + "_loop.mp4")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", str(roh), "-filter_complex",
+                        "[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[v]",
+                        "-map", "[v]", "-an", "-c:v", "libx264", "-crf", "19",
+                        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                        str(lang)], check=True, capture_output=True)
+    except Exception as exc:
+        log.warning("[OMNI] Loop fehlgeschlagen (%s) — nehme 4s roh",
+                    str(exc)[:80])
+        lang = roh
+    url = upload_supabase(lang, lang.stem, folder="omni")
+    _log_run(AKTIVER_CLIENT.get() or "justus", "omni-clip", "ok",
+             {"sekunden": 4, "dauer_ms": int((time.time() - t0) * 1000),
+              "kosten_usd": 0.45})
+    log.info("[OMNI] Clip in %.0fs → %s", time.time() - t0, url)
+    return url
+
+
 def _hook_freisteller(s: dict, bis_f: int) -> str:
     """Er, freigestellt vor der Hook-Illustration: die ersten bis_f Frames
     der Facecam ohne Hintergrund, als Alpha-WebM. Die Illustration ist der
@@ -8133,9 +8196,9 @@ def _schnitte_vorgeben(layers: list, words: list, frames: int) -> int:
     # Pausen allein reichen nicht: wer durchspricht, bekam einen einzigen
     # Schnitt auf 50 Sekunden (Lauf vom 10.08.). Die Referenz schneidet auf
     # Phrasengrenzen — genau die stehen in den Caption-Chunks. Pausen haben
-    # Vorrang, Chunk-Grenzen fuellen auf, Mindestabstand 1,6 s haelt es
-    # ruhig genug (Referenz: 2,4 s im Schnitt).
-    MIN_ABSTAND_F = int(1.6 * FPS)
+    # Vorrang, Chunk-Grenzen fuellen auf. 2,8 s Mindestabstand statt 1,6:
+    # bei 1,6 empfand Justus die Zoom-Wechsel als "Shakes" (11.08.).
+    MIN_ABSTAND_F = int(2.8 * FPS)
     for c in _remotion_chunks(words):
         f = int(round(float(c["start"]) * FPS))
         if not (MIN_ABSTAND_F <= f < frames - MIN_ABSTAND_F):
@@ -11494,6 +11557,20 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     # und metapher_full, wenn der Plan einen bild_prompt liefert. Stock war
     # dafuer der falsche Weg — ein Pexels-Clip kennt die Marke nicht.
     if k in ("metapher", "metapher_full") and str(b.get("bild_prompt") or "").strip():
+        # Stufe 4 (Probe, 11.08.): Gemini Omni Flash generiert die Szene als
+        # BEWEGTES Video — maximal 2 Clips je Video (~0,90 USD), danach und
+        # bei Fehlern faellt es auf das nano-banana-Still zurueck.
+        if int(s.get("omni_clips", 0)) < 2:
+            try:
+                omni_url = await asyncio.to_thread(
+                    _omni_clip, str(b.get("bild_prompt"))[:400], k, s["dir"])
+                if omni_url:
+                    s["omni_clips"] = int(s.get("omni_clips", 0)) + 1
+                    return {"quelle_art": "omni", "kosten": 0.45,
+                            "sekunden_material": 8.0,
+                            "layer_source": {"kind": "video", "url": omni_url}}
+            except Exception as exc:
+                log.warning("[BAU] %d omni: %s", i, str(exc)[:160])
         try:
             farben = s.get("colors") or {}
             akzent = (farben.get("akzent") or farben.get("accent")

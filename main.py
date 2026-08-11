@@ -10474,7 +10474,8 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         fehler.append(
             "Abschnitt 0 MUSS metapher_full sein — der Hook oeffnet immer mit "
             "der vollflaechigen 2D-Themen-Illustration als Hintergrund, er "
-            "steht freigestellt davor. Bestell die Szene in braucht.bild_prompt.")
+            "steht freigestellt davor. Bestell die Szene in braucht.bild_prompt "
+            "und gib dem Abschnitt MINDESTENS 4 Sekunden.")
     # Minimal-Regel: geteilte Layouts und Bewegungs-Kompositionen sind
     # gebannt — der AD soll es wissen, nicht erst die Ausfuehrung.
     for _i, _a in enumerate(ab):
@@ -11101,6 +11102,22 @@ def tool_plan(req: PlanRequest):
         # Der zweite Plan gilt, wenn er besser ist — nicht automatisch.
         if len(fehler2) <= len(fehler):
             plan, fehler = plan2, fehler2
+
+    # Hook-Buehne mechanisch sichern: metapher_full braucht mindestens 4s.
+    # Am 11.08. plante der AD den Hook mit 3,6s, die Mindestdauer-Regel
+    # degradierte ihn auf vollbild — und die bestellte Illustration fehlte.
+    # Zwei Regeln, die gegeneinander arbeiten, entscheidet der Code.
+    _ab = plan.get("abschnitte") or []
+    if _ab and _komposition(_ab[0]) == "metapher_full":
+        try:
+            _von0 = float(_ab[0].get("von", 0.0))
+            if float(_ab[0].get("bis", 0.0)) - _von0 < 4.0:
+                _ab[0]["bis"] = round(_von0 + 4.0, 2)
+                if len(_ab) > 1 and float(_ab[1].get("von", 0.0)) < _ab[0]["bis"]:
+                    _ab[1]["von"] = _ab[0]["bis"]
+                log.info("[AD] Hook auf 4.0s gestreckt (metapher_full-Minimum)")
+        except (TypeError, ValueError):
+            pass
 
     s["plan"] = plan
     s["kosten_plan"] = 0.0      # wird gleich gesetzt, sobald der Preis steht

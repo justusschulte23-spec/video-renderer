@@ -10286,6 +10286,10 @@ DIE FUENF ZUSTAENDE EINES MOMENTS ("zustand")
   szene     eine GENERIERTE Szene traegt allein, er ist raus. "szene" ist
             die Bildidee: konkret, szenisch, sie VERKOERPERT den Satz, der
             gerade faellt. Kein Text im Bild, keine Logos, keine Gesichter.
+            EISERNE REGEL: ER wird NIEMALS generiert - generiert wird nur
+            die Welt UM ihn. Er selbst ist immer echtes Rohmaterial
+            (Vollbild oder freigestellt). Eine generierte Version von ihm
+            gibt es nur als bewussten Gag, wenn das Skript ihn bestellt.
   er_szene  die generierte Szene ist der HINTERGRUND, er steht freigestellt
             davor (Motive oben/links/rechts, untere Mitte gehoert ihm).
             Fuer den Hook die erste Wahl. Nur wenn der Moment vor Sekunde

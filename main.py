@@ -6717,6 +6717,7 @@ def _face_track(video_path: Path, duration: float, samples: int = 24) -> dict:
 
 
 _REMBG_SESSION = None
+_RVM_MODEL = None
 
 
 def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
@@ -6726,19 +6727,36 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
     width for speed; Remotion upscales it over the generated canvas. '' on failure
     → caller keeps the original background. max_frames > 0 mattet nur den
     Anfang — der Hook braucht keine 1500 Frames."""
-    global _REMBG_SESSION
+    global _REMBG_SESSION, _RVM_MODEL
     try:
-        from rembg import remove, new_session
         import cv2
-        if _REMBG_SESSION is None:
-            _REMBG_SESSION = new_session("u2netp")  # light + fast
+        # RVM zuerst (11.08.): temporal stabile Kante — die rembg-Fransen
+        # ("Geister" neben dem Kopf, matschige Schulter) waren der sichtbare
+        # 'janky ausgeschnitten'-Befund. rembg bleibt als Rueckfall, falls
+        # torch im Image fehlt.
+        rvm = None
+        try:
+            import torch
+            if _RVM_MODEL is None:
+                _RVM_MODEL = torch.hub.load(
+                    "PeterL1n/RobustVideoMatting", "mobilenetv3",
+                    trust_repo=True).eval()
+            rvm = _RVM_MODEL
+        except Exception as exc:
+            log.warning("[MATTE] RVM nicht verfuegbar (%s) → rembg",
+                        str(exc)[:100])
+            from rembg import remove, new_session
+            if _REMBG_SESSION is None:
+                _REMBG_SESSION = new_session("u2netp")  # light + fast
         cap = cv2.VideoCapture(str(facecam_path))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         frames = job_dir / "matte_frames"
         frames.mkdir(exist_ok=True)
         idx = 0
-        log.info("[MATTE] start: %d frames @ %dfps, W=%d", total, int(round(fps)), W)
+        rec = [None] * 4
+        log.info("[MATTE] start: %d frames @ %dfps, W=%d, kante=%s",
+                 total, int(round(fps)), W, "rvm" if rvm else "rembg")
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -6747,8 +6765,22 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                 break
             h, w = frame.shape[:2]
             frame = cv2.resize(frame, (W, int(h * W / w)))
-            cut = remove(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), session=_REMBG_SESSION)  # RGBA
-            cv2.imwrite(str(frames / f"{idx:05d}.png"), cv2.cvtColor(cut, cv2.COLOR_RGBA2BGRA))
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if rvm is not None:
+                import torch
+                import numpy as np
+                with torch.no_grad():
+                    src_t = (torch.from_numpy(rgb).permute(2, 0, 1)
+                             .unsqueeze(0).float() / 255)
+                    _fgr, pha, *rec = rvm(src_t, *rec, downsample_ratio=0.6)
+                a = (pha[0, 0].numpy() * 255).astype("uint8")
+                cut = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+                cut[:, :, 3] = a
+                cv2.imwrite(str(frames / f"{idx:05d}.png"), cut)
+            else:
+                cut = remove(rgb, session=_REMBG_SESSION)  # RGBA
+                cv2.imwrite(str(frames / f"{idx:05d}.png"),
+                            cv2.cvtColor(cut, cv2.COLOR_RGBA2BGRA))
             idx += 1
             del frame, cut
             if idx % 100 == 0:

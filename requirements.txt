@@ -19,3 +19,7 @@ numpy<2
 mediapipe==0.10.14
 rembg
 onnxruntime
+# RVM-Freisteller (11.08.): temporale Matting-Kante statt rembg-Fransen
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision

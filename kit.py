@@ -17,20 +17,24 @@ from typing import Optional
 
 # ── Die Kits ────────────────────────────────────────────────────────────────
 KITS = {
+    # Minimal-Reset (11.08., Google-Omni-Referenz): die BASIS ist jetzt die
+    # HELLE Studio-Welt — Off-White, statischer, kaum sichtbarer Verlauf,
+    # dunkle Tinte, Amethyst bleibt der Akzent. Die dunkle Welt lebt in
+    # WENDE weiter: hell_dunkel kippt ab jetzt ins Dunkle.
     "justus": {
-        "canvas": "#0B0B12", "surface": "#12121C", "raised": "#1B1B29",
-        "akzent": "#8B5CF6", "akzent_soft": "#A78BFA", "text": "#F4F4F8",
-        "muted": "#8A8AA3", "linie": "rgba(255,255,255,.10)", "signal": "#F43F5E",
+        "canvas": "#F1F0F4", "surface": "#FFFFFF", "raised": "#E7E5EE",
+        "akzent": "#8B5CF6", "akzent_soft": "#7C4DE8", "text": "#101014",
+        "muted": "#63636F", "linie": "rgba(16,16,20,.12)", "signal": "#E11D48",
         # Zustandsfarben. Bewusst NICHT die Akzentfarbe: der Akzent sagt
         # "hierher sehen", gruen und rot sagen "das geht" und "das geht nicht".
-        # Wer beides in eine Farbe legt, hat weder Betonung noch Befund.
-        "gut": "#34D399", "grenze": "#F43F5E", "warnung": "#FBBF24",
+        # Auf hellem Grund die dunkleren Toene, sonst leuchtet es wie Neon.
+        "gut": "#0E9F6E", "grenze": "#E11D48", "warnung": "#B45309",
         "serif": False,
         "font": "'Inter','Helvetica Neue',system-ui,sans-serif",
         "radius": 18, "rein_ms": 650, "raus_ms": 320, "versatz_ms": 110,
-        "glow": "0 0 60px rgba(139,92,246,.35)",
-        "grund": "radial-gradient(120% 80% at 50% 0%, #17172A 0%, #0B0B12 60%)",
-        "raster": "rgba(255,255,255,.05)",
+        "glow": "0 24px 80px rgba(16,16,20,.10)",
+        "grund": "radial-gradient(120% 80% at 50% 0%, #FFFFFF 0%, #ECEAF1 70%)",
+        "raster": "rgba(16,16,20,.04)",
     },
     "tim": {
         "canvas": "#FDFCF9", "surface": "#FDFCF9", "raised": "#ECE9E2",
@@ -54,14 +58,16 @@ KITS = {
 # der Referenz den Rhythmus — nach zwanzig Sekunden Dunkel ist ein heller
 # Abschnitt ein Ereignis, ohne dass irgendetwas Neues erklaert werden muesste.
 WENDE = {
+    # Die Basis ist seit dem Minimal-Reset hell — die Wende ist jetzt der
+    # dunkle Kanal (die alte Basis-Welt). hell_dunkel bleibt damit das
+    # Rhythmus-Ereignis, nur in die andere Richtung.
     "justus": {
-        "canvas": "#F4F3F8", "surface": "#FFFFFF", "raised": "#EAE8F2",
-        "text": "#0B0B12", "muted": "#5B5B70", "linie": "rgba(11,11,18,.14)",
-        "glow": "0 24px 60px rgba(88,60,180,.18)",
-        "grund": "radial-gradient(120% 80% at 50% 0%, #FFFFFF 0%, #EDEBF5 65%)",
-        "raster": "rgba(11,11,18,.07)",
-        # Auf Weiss braucht Gruen mehr Tiefe, sonst leuchtet es und sagt nichts.
-        "gut": "#0E9F6E", "grenze": "#D92D4B",
+        "canvas": "#0B0B12", "surface": "#12121C", "raised": "#1B1B29",
+        "text": "#F4F4F8", "muted": "#8A8AA3", "linie": "rgba(255,255,255,.10)",
+        "glow": "0 0 60px rgba(139,92,246,.30)",
+        "grund": "radial-gradient(120% 80% at 50% 0%, #17172A 0%, #0B0B12 60%)",
+        "raster": "rgba(255,255,255,.05)",
+        "gut": "#34D399", "grenze": "#F43F5E",
     },
     "tim": {
         "canvas": "#14201C", "surface": "#1B2A25", "raised": "#24352E",
@@ -143,24 +149,13 @@ def _css_leben(k: dict, breit: int, hoch: int, sekunden: float) -> str:
          "Inhalt ist 1059px breit, die Leinwand nur 950px". Ein Zoom, der den
          Text beschneidet, ist kein Zoom, sondern ein Fehler — dieselbe Falle
          wie der Ken-Burns auf dem passgenau gelegten Beleg am 06.08. */
-      .flaeche {{ animation:atmen {dauer:.2f}s linear both;
-                  transform-origin:50% 50%; }}
-      @keyframes atmen {{ from {{ transform:scale(1) }}
-                          to {{ transform:scale(1.06) }} }}
-      .raster {{ animation:driften {max(9.0, dauer * 2.4):.1f}s linear both; }}
-      @keyframes driften {{ from {{ background-position:0 0 }}
-                            to {{ background-position:{int(breit * .09)}px
-                                  {int(hoch * .05)}px }} }}
-      /* Ein Lichtschein, der ueber die Flaeche wandert. Sehr leise — er soll
-         auffallen, wenn er fehlt, nicht wenn er da ist. */
-      .flaeche::after {{ content:''; position:absolute; inset:-20%;
-                         border-radius:inherit; pointer-events:none;
-                         background:radial-gradient(38% 26% at 30% 24%,
-                                    {k['akzent']}2E 0%, transparent 70%);
-                         animation:schein {max(10.0, dauer * 2.2):.1f}s
-                                   cubic-bezier(.45,0,.55,1) both; }}
-      @keyframes schein {{ from {{ transform:translate3d(-6%,-4%,0) }}
-                           to {{ transform:translate3d(10%,7%,0) }} }}
+      /* Hintergrund-Purge (Minimal-Regel, 11.08.): der Grund STEHT. Kein
+         Atmen, kein driftendes Raster, kein wandernder Lichtschein — die
+         Referenz (Google-Omni-Look) lebt von einem ruhigen Studio-Grund,
+         auf dem sich NUR das Element bewegt. */
+      .flaeche {{ animation:none; transform-origin:50% 50%; }}
+      .raster {{ animation:none; }}
+      .flaeche::after {{ content:none; }}
     </style>"""
 
 
@@ -231,7 +226,7 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
       .rein.v1 {{ animation-delay:{k['versatz_ms']}ms, {k['versatz_ms']}ms; }}
       .rein.v2 {{ animation-delay:{k['versatz_ms'] * 2}ms, {k['versatz_ms'] * 2}ms; }}
       .rein.v3 {{ animation-delay:{k['versatz_ms'] * 3}ms, {k['versatz_ms'] * 3}ms; }}
-      @keyframes rein_weg {{ from {{ transform:translateY(.34em) scale(.97) }}
+      @keyframes rein_weg {{ from {{ transform:translateY(.2em) scale(.9) }}
                              to {{ transform:none }} }}
       @keyframes rein_blende {{ from {{ opacity:0; filter:blur(10px) }}
                                 to {{ opacity:1; filter:none }} }}
@@ -334,11 +329,10 @@ def _css_basis(k: dict, breit: int, hoch: int) -> str:
                overflow:hidden;
                box-shadow:0 {int(breit * .03)}px {int(breit * .08)}px rgba(0,0,0,.5),
                           {k['glow']}; }}
+      /* Minimal-Regel: keine Dauer-Fahrt auf Bildern. Das Bild LANDET mit
+         dem Spring des Elements und steht dann ruhig. */
       .hero img {{ position:absolute; inset:0; width:100%; height:100%;
-                   object-fit:cover;
-                   animation:hero_fahrt {max(6.0, 3.0):.1f}s linear both; }}
-      @keyframes hero_fahrt {{ from {{ transform:scale(1.06) }}
-                               to {{ transform:scale(1.0) }} }}
+                   object-fit:cover; }}
       /* Verlaufskante wie .flaeche::before, damit das Bild eingefasst ist
          statt aufgeklebt. */
       .hero::after {{ content:''; position:absolute; inset:0;
@@ -491,10 +485,16 @@ def _css_vollbild(k: dict, breit: int, hoch: int) -> str:
       .wrap {{ padding:{oben}px {seite}px {unten}px; justify-content:stretch; }}
       /* Drei Reihen: Marke oben, Aussage in der Mitte (nimmt den Rest und
          zentriert sich darin), Erdung unten. */
-      .inhalt {{ display:grid; grid-template-rows:auto 1fr auto; height:100%; }}
+      .inhalt {{ display:grid; grid-template-rows:auto 1fr auto; height:100%;
+                 /* One-Element-Regel: das Element steht in der ABSOLUTEN
+                    Mitte, Text zentriert, Leerraum ringsum. */
+                 text-align:center; justify-items:center; }}
       .oben, .mitte, .unten {{ display:block; min-width:0; }}
-      .mitte {{ align-self:center; }}
+      .mitte {{ align-self:center; max-width:{int(breit * .84)}px; }}
       .unten {{ align-self:end; }}
+      /* One-Element: das riesige Anfuehrungszeichen lag im zentrierten
+         Layout AUF dem Zitat. Das Zitat spricht fuer sich. */
+      .marke {{ display:none; }}
       /* KEIN display:none auf leere Zonen. Das nimmt sie aus dem Raster, und
          dann rutscht die Mitte in die erste Reihe — im Lauf vom 07.08. klebte
          das Zitat deshalb oben am Rand statt in der Bildmitte zu stehen. Eine
@@ -710,6 +710,13 @@ def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
         space-between, und dann driften ein Anfuehrungszeichen und sein Satz
         siebenhundert Pixel auseinander — was zusammengehoert, muss auch
         zusammen gesetzt sein."""
+        if _ist_vollbild(breit, hoch):
+            # One-Element-Regel (11.08.): auf ganzer Leinwand traegt die
+            # MITTE allein. Kein Marken-Kicker oben, keine Erdung unten —
+            # das Element und sein Leerraum SIND das Bild. Die leeren Zonen
+            # bleiben als Gitterzellen stehen (min-height 0), sonst rutscht
+            # die Mitte in die erste Reihe (Lauf vom 07.08.).
+            oben, unten = "", ""
         return rahmen(f"<div class='oben'>{oben}</div>"
                       f"<div class='mitte'>{mitte}</div>"
                       f"<div class='unten'>{unten}</div>")

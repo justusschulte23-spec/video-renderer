@@ -7957,8 +7957,10 @@ def _hard_check(layers: list, face: dict) -> list:
 # Justus-Brand als Default — wer nichts schickt, bekommt Amethyst. Fuer Tim ist
 # das kein Detail, sondern das falsche Video.
 BRAND_PRESETS = {
-    "justus": {"bg": "#09090B", "bgGlow": "#140F22", "accent": "#8B5CF6",
-               "accent2": "#06B6D4", "text": "#FFFFFF", "muted": "#A1A1AA"},
+    # Minimal-Reset (11.08.): helle Studio-Welt auch in Remotion — Backdrop-
+    # Szenen und Karten stehen auf Off-White, Tinte dunkel, Amethyst bleibt.
+    "justus": {"bg": "#F1F0F4", "bgGlow": "#FFFFFF", "accent": "#8B5CF6",
+               "accent2": "#7C4DE8", "text": "#101014", "muted": "#63636F"},
     "tim":    {"bg": "#0A1F19", "bgGlow": "#0F2A22", "accent": "#C9A24B",
                "accent2": "#3FB89B", "text": "#F5F2EC", "muted": "#9DB3AC"},
 }
@@ -8071,7 +8073,10 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
           "opacity": float(t.get("opacity", 1)),
           "origin": list(t.get("origin", [0.5, 0.5]))[:2] or [0.5, 0.5]}
     m = dict(raw.get("modifiers") or {})
-    mods = {"handheld": bool(m.get("handheld", False)),
+    # Minimal-Regel (11.08.): kein Handheld-Wackeln mehr — der Sprecher
+    # steht ruhig oder ist weg. Der Modifier wird hart abgeschaltet statt
+    # nur nicht empfohlen.
+    mods = {"handheld": False,
             "grade": bool(m.get("grade", False)),
             "punch": m.get("punch")}
     anim, anim_fehler = _clean_animate(raw.get("animate"), frames)
@@ -10161,43 +10166,23 @@ AD_SYS = """Du bist Art Director fuer ein 9:16-Kurzvideo.
 Du siehst das geschnittene Rohmaterial. Du baust nichts — du schreibst den
 Plan, nach dem andere bauen.
 
-DU HAST 16 KOMPOSITIONEN. NUTZ SIE.
-Wenn du dreimal dieselbe waehlst, hast du nicht hingesehen.
+ZWEI ZUSTAENDE, NICHTS DAZWISCHEN (Minimal-Regel, 11.08.):
+ER ist Vollbild, zentriert, ruhig — ODER ER IST WEG und EIN Element traegt
+allein auf sauberem Grund. Keine Bubbles, keine geteilten Layouts, kein
+Beschneiden, kein Verschieben. Ein Frame zeigt immer genau EINE Sache.
 
 ER TRAEGT ALLEIN
   vollbild        nur er, nichts sonst — wenn der Satz allein traegt
   punch           Vollbild, harter Zoom auf EIN Wort, springt zurueck
                   braucht: {"wort": "..."} — das Wort auf der staerksten Betonung
-  drift           Vollbild, langsame Fahrt ueber die ganze Dauer
-                  braucht: {"richtung": "links|rechts|rein|raus"}
 
-ER TEILT SICH DAS BILD
-  unten_aufbau    er unten auf ein Drittel beschnitten, oben baut sich etwas auf
-                  → Aufzaehlungen, Schritte, wachsende Werte
-  oben_unterbau   er oben, unten laeuft eine Zeile, Leiste oder ein Zaehler mit
-                  → Zahlen, die sich ueber die Dauer veraendern
-  seite_links     er auf zwei Drittel seitlich beschnitten, daneben ein Element
-  seite_rechts    dasselbe zur anderen Seite
-                  SCHMAL: daneben ist eine Spalte, keine Buehne. Dort passt nur,
-                  was ohne Fliesstext wirkt — eine Zahl mit Beschriftung, ein
-                  Balken, ein Zaehler, ein Symbol, ein Vorher/Nachher-Wert.
-                  Hoechstens DREI Woerter je Zeile
-  haelften        Bild geteilt, er auf einer Seite
-                  → Vergleiche: vorher/nachher, Option A gegen B
-  bubble          er klein in der Ecke, dahinter laeuft etwas
-                  → NUR wenn dahinter wirklich etwas LAEUFT
-                  auch schmal gedacht: hoechstens drei Woerter je Zeile
-  bubble_wandert  wie bubble, aber er wechselt die Ecke
-                  braucht zusaetzlich: {"zielecke": "..."}
-
-ER RUECKT INS ECK — er ist NIE ganz weg
-  Bei allen vieren laeuft er als kleine Bubble in einer Ecke weiter. Das legt
-  das System, nicht du. Was du entscheidest, ist WAS auf der Flaeche liegt.
-  Und dort gehoert, wann immer es sie gibt, die ECHTE Oberflaeche hin: der
+ER IST WEG — DAS ELEMENT TRAEGT ALLEIN
+  Vollflaechig, EIN zentriertes Element, viel Leerraum, ruhiger heller Grund.
+  Wann immer es sie gibt, gehoert die ECHTE Oberflaeche hierher: der
   Screenshot der Doku, der Preisseite, des Workflows. Eine gebaute Textkarte
   ist die schwaechere Antwort auf dieselbe Frage — sie zeigt, dass du es
   beschreiben kannst, ein Screenshot zeigt, dass es das gibt.
-  uebernahme      vollflaechig etwas anderes, er klein in der Ecke
+  uebernahme      vollflaechig EIN Element, er ist aus dem Bild
   hell_dunkel     wie uebernahme, aber die Helligkeit KIPPT: dunkler Kanal wird
                   hell, heller wird dunkel. Derselbe Akzent, dieselbe Schrift —
                   nur der Grund dreht sich um
@@ -10219,15 +10204,10 @@ ER RUECKT INS ECK — er ist NIE ganz weg
                   braucht: {"url": "https://…", "ziel": "das Wort auf der Seite"}
                   OHNE url geht es nicht — dann nimm eine andere Komposition
 
-ER IST DA, ABER ETWAS PASSIERT
-  overlay_wandert Vollbild, ein Element zieht durchs Bild und verschwindet
-                  → nebenbei genannte Zahlen, Namen, Werkzeuge
-  flaeche_kippt   Vollbild, die FARBE des Bildes kippt mit der Aussage.
-                  "braucht": null — das legt das System selbst.
-                  KEIN Text, KEIN Muster, KEINE Kacheln — es liegt ueber seinem
-                  Gesicht. Nur Farbe. Willst du Worte zeigen, nimm eine andere
-                  Komposition
-                  → wenn die Stimmung umschlaegt: Problem → Loesung
+VERBOTEN (Minimal-Regel): unten_aufbau, oben_unterbau, seite_links,
+seite_rechts, haelften, bubble, bubble_wandert, drift, overlay_wandert,
+flaeche_kippt. Bestellst du sie trotzdem, macht die Ausfuehrung eine
+uebernahme daraus.
 
 WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
 - Ein Beleg gehoert an die Stelle, an der er DAVON REDET. Nicht davor, nicht
@@ -10236,8 +10216,7 @@ WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
   Sekunden am Stueck ohne ein gebautes Element ist ein Loch, egal wie gut der
   Rest ist. Anfang und Ende zaehlen mit.
 - Der HOOK ist die wichtigste Stelle. Fuenf Sekunden nacktes Gesicht sind dort
-  verschenkt: punch auf das staerkste Wort, overlay_wandert mit der Zahl,
-  flaeche_kippt auf die Aussage.
+  verschenkt.
 - DER HOOK OEFFNET IMMER MIT metapher_full: Abschnitt 0 ist Pflicht diese
   Komposition, mit "bild_prompt". Beschreibe EINE 2D-Illustrations-Szene, die
   das heutige Thema sofort sichtbar macht — bei einem Vergleich/Konflikt die
@@ -10251,16 +10230,14 @@ WANN ETWAS KOMMT, ENTSCHEIDET MEHR ALS WAS
   unteren Bildmitte davor.
 
 DIE FRAGE JE ABSCHNITT
-Nicht "ist er da oder weg", sondern: Was passiert hier, und wo gehoert er
-dabei hin?
-  Er zaehlt auf          → unten_aufbau, oben entsteht die Liste
-  Er vergleicht          → haelften
-  Er nennt eine Zahl     → overlay_wandert oder seite_rechts
+Traegt dieser Moment ER — oder EIN Element?
+  Er zaehlt auf          → uebernahme mit art_element ablauf
+  Er vergleicht          → uebernahme mit art_element vergleich
+  Er nennt eine Zahl     → uebernahme mit art_element stat
   Er verweist auf etwas  → beleg (Fundstueck) oder durchforsten (echte Seite,
                            dann gehoert die url in braucht)
   Er wird grundsaetzlich → vollbild oder punch
-  Die Stimmung kippt     → flaeche_kippt
-  Etwas baut sich auf    → bubble mit echter Bewegung
+  Die Stimmung kippt     → hell_dunkel
 
 DER RHYTHMUS IST DAS PRODUKT
 Das Vorbild schneidet alle 2 bis 3 Sekunden und wechselt dabei zwischen ZWEI
@@ -10498,6 +10475,14 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             "Abschnitt 0 MUSS metapher_full sein — der Hook oeffnet immer mit "
             "der vollflaechigen 2D-Themen-Illustration als Hintergrund, er "
             "steht freigestellt davor. Bestell die Szene in braucht.bild_prompt.")
+    # Minimal-Regel: geteilte Layouts und Bewegungs-Kompositionen sind
+    # gebannt — der AD soll es wissen, nicht erst die Ausfuehrung.
+    for _i, _a in enumerate(ab):
+        if _komposition(_a) in MINIMAL_VERBOTEN:
+            fehler.append(
+                "Abschnitt %d bestellt '%s' — gebannt. ER ist Vollbild ODER "
+                "weg: nimm vollbild/punch fuer ihn, uebernahme/beleg/metapher "
+                "fuer ein Element." % (_i, _komposition(_a)))
     # Klump-Sperre: eine Karte, die 7 Sekunden unveraendert steht, ist ein
     # Loch im Rhythmus, egal wie gut sie aussieht.
     for _i, _a in enumerate(ab):
@@ -11169,8 +11154,16 @@ Z_HINTERGRUND, Z_ELEMENT = 11, 12       # beide ueber der Facecam (z 10)
 # Ab jetzt rueckt er ins Eck statt zu verschwinden. Die Ecke WECHSELT nach
 # Abschnittsnummer; eine Bubble, die 60 Sekunden an derselben Stelle klebt, ist
 # auch nur wieder ein festes Layout.
-UEBERNAHME_MIT_ECK = ("uebernahme", "hell_dunkel", "beleg", "metapher",
-                      "durchforsten")
+# Minimal-Regel (11.08.): ER ist Vollbild ODER weg — die Eck-Bubble ist
+# gestrichen. Leeres Tuple statt geloeschtem Code: die Mechanik bleibt
+# auffindbar, falls die Entscheidung je zurueckkommt.
+UEBERNAHME_MIT_ECK = ()
+# Geteilte Layouts, Bubbles und Bewegungs-Kompositionen sind gebannt.
+# Bestellt der AD sie trotzdem, wird daraus eine uebernahme — EIN Element,
+# vollflaechig, er ist raus.
+MINIMAL_VERBOTEN = ("unten_aufbau", "oben_unterbau", "seite_links",
+                    "seite_rechts", "haelften", "bubble", "bubble_wandert",
+                    "drift", "overlay_wandert", "flaeche_kippt")
 ECKEN = (
     {"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},        # oben rechts
     {"x": 0.05, "y": 0.66, "w": BUBBLE_W, "h": BUBBLE_H},                # unten links
@@ -11489,10 +11482,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
             akzent = (farben.get("akzent") or farben.get("accent")
                       or farben.get("primary") or "#8B5CF6")
             idee = str(b.get("bild_prompt")).strip()[:400]
-            vibe = ("Clean editorial 3D illustration for a B2B tech short. "
-                    "Dramatic but dignified, subtle wit allowed, premium "
-                    "studio look, sharp focus, single scene. NO text, NO "
-                    "letters, NO real brand logos, NO faces.")
+            # Omni-Referenz (11.08.): EIN zentriertes 3D-Objekt auf hellem
+            # Studio-Grund, viel Leerraum — nicht Szene, sondern Objekt.
+            vibe = ("ONE single centered 3D object on a clean light-gray "
+                    "studio background (#F1F0F4), soft contact shadow, "
+                    "generous empty space around it, premium minimal "
+                    "product-render look like a Google Gemini promo. "
+                    "Dramatic but dignified, subtle wit allowed, sharp "
+                    "focus. NO text, NO letters, NO real brand logos, "
+                    "NO faces, NO clutter.")
             if k == "metapher_full":
                 # Hook-Buehne: die Illustration wird der HINTERGRUND, er wird
                 # freigestellt davor gesetzt. Motive muessen oben und an den
@@ -11929,14 +11927,16 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
                 "ebenen": [f"kippt_{i}"], "kosten": 0.0}
     if k not in KOMP_BOXEN:
         return _abweichung(kopf, k, "vollbild", "unbekannte Komposition")
-    # D2: eine Bubble ohne echte Bewegung dahinter ist schlechter als Vollbild.
-    if k.startswith("bubble") and not str(b.get("bewegung") or "").strip():
-        return _abweichung(kopf, k, "vollbild", "bubble ohne bewegung")
+    # Minimal-Regel: gebannte Kompositionen werden zur uebernahme — EIN
+    # Element traegt vollflaechig, er ist raus. Kein Sonderfall, kein Rest.
+    if k in MINIMAL_VERBOTEN:
+        log.info("[BAU] %d '%s' → uebernahme (Minimal-Regel)", i, k)
+        k = "uebernahme"
 
     cam_box, el_box = KOMP_BOXEN[k]
-    # Er verschwindet nicht mehr. Wo bisher die Facecam unsichtbar hinter einem
-    # formatfuellenden Element weiterlief, sitzt er jetzt als Bubble darueber —
-    # in einer Ecke, die mit der Abschnittsnummer wandert.
+    # Minimal-Regel: KEINE Eck-Bubble mehr. Bei Element-Kompositionen liegt
+    # das Element vollflaechig ueber der Facecam (z 12 > z 10) — er ist
+    # damit komplett aus dem Bild, exakt der bestellte Zustand.
     if cam_box is None and k in UEBERNAHME_MIT_ECK:
         cam_box = ECKEN[i % len(ECKEN)]
     if k == "overlay_wandert" and el_box:
@@ -12027,9 +12027,9 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
                 neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
         randlos = tf["w"] >= 0.99 and tf["h"] >= 0.99
         anim = list(el_anim)
-        if src.get("kind") == "image" and randlos and k in ("metapher", "uebernahme"):
-            anim.append({"property": "scale", "from": 1.02, "to": 1.12,
-                         "start": von_f, "end": bis_f, "easing": "easeInOut"})
+        # Minimal-Regel (11.08.): kein Ken-Burns-Dauerzoom mehr auf Bildern.
+        # Das Element landet mit dem Spring und STEHT — Bewegung ist der
+        # Auftritt, nicht der Zustand.
         neu.append(_layer_defaults({
             "id": f"{k}_{i}", "z": Z_ELEMENT, "source": src,
             "from": von_f, "to": el_bis, "transform": tf, "animate": anim,

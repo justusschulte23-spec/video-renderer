@@ -569,6 +569,24 @@ PREISE_EINHEIT = {                  # USD je Einheit
 # nicht durchgereicht — ohne sie faellt jede Zeile auf "unknown" und die
 # Auswertung pro Kunde ist wertlos. ContextVar statt Parameter durch 20 Ebenen.
 AKTIVER_CLIENT = contextvars.ContextVar("aktiver_client", default="")
+
+# ── Job-Abbruch (02.09.): Ein Lauf, der 2,5 h CPU frisst und nur per
+# Service-Neustart zu stoppen war, ist das groesste Risiko im System.
+# Kooperativer Abbruch: der Endpoint setzt die Marke, Matte-Schleife und
+# Bau-Schleife pruefen sie an ihren teuersten Stellen.
+AKTIVER_JOB = contextvars.ContextVar("aktiver_job", default="")
+ABBRUCH_JOBS: set = set()
+
+
+class JobAbbruch(RuntimeError):
+    pass
+
+
+def _abbruch_pruefen():
+    j = AKTIVER_JOB.get("")
+    if j and j in ABBRUCH_JOBS:
+        raise JobAbbruch("Job %s abgebrochen" % j[:8])
+
 _kosten_pool = ThreadPoolExecutor(max_workers=2)
 
 
@@ -5684,20 +5702,27 @@ def _rang(wort: str, ideen: list) -> list:
         return list(range(len(ideen))), False
 
 
-def _few_shot_metaphern() -> str:
+def _few_shot_metaphern(client_id: str = "") -> str:
     """8 Positive + 3 Anti, rotierend. Die Seeds bleiben immer im Topf — fuettert
     man nur Akzeptiertes zurueck, lernt das System den eigenen Durchschnitt und
-    hoert auf zu ueberraschen."""
+    hoert auf zu ueberraschen.
+    Mandantentrennung (02.09.): metaphern.client_id NULL = globaler
+    Handwerks-Pool, gesetzt = Kundensprache. Ohne client_id liest der Pass nur
+    den globalen Pool — nie die Bilder eines anderen Kunden."""
     if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
         return ""
     hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    mandant = (f"(client_id.is.null,client_id.eq.{client_id})" if client_id
+               else "(client_id.is.null)")
     try:
         pos = requests.get(f"{SUPABASE_URL}/rest/v1/metaphern", timeout=20, headers=hdr,
                            params={"select": "anker,bild,score,begruendung", "score": "gte.4",
-                                   "quelle": "in.(seed,akzeptiert)", "limit": "40"}).json()
+                                   "quelle": "in.(seed,akzeptiert)", "or": mandant,
+                                   "limit": "40"}).json()
         neg = requests.get(f"{SUPABASE_URL}/rest/v1/metaphern", timeout=20, headers=hdr,
                            params={"select": "anker,bild,score,begruendung",
-                                   "quelle": "in.(anti,verworfen)", "limit": "20"}).json()
+                                   "quelle": "in.(anti,verworfen)", "or": mandant,
+                                   "limit": "20"}).json()
     except Exception as exc:
         log.warning("[META] Few-Shot nicht lesbar: %s", exc)
         return ""
@@ -6757,7 +6782,28 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         rec = [None] * 4
         log.info("[MATTE] start: %d frames @ %dfps, W=%d, kante=%s",
                  total, int(round(fps)), W, "rvm" if rvm else "rembg")
+        # Deckel (02.09.): 996 Frames auf Railway-CPU waren hochgerechnet
+        # 2,5 Stunden — ohne Bremse, ohne Abbruchweg. Nach 25 Frames wird
+        # die Rate gemessen und projiziert; liegt das Ganze ueber dem
+        # Deckel, faellt die Matte aus und der Aufrufer nimmt den
+        # ''-Rueckweg (Original-Hintergrund bleibt). Ehrlich geloggt.
+        deckel_s = float(os.environ.get("MATTE_DECKEL_S", "420"))
+        t_start = time.time()
         while True:
+            # Erste Projektion schon nach 5 Frames: auf Railway-CPU kostet ein
+            # Frame ~8 s, die 25-Frame-Probe allein 200 s je Render — und die
+            # Matte fiel ohnehin jedes Mal aus (08.09.: 10316 s > 420 s).
+            if idx and (idx == 5 or idx % 25 == 0):
+                _abbruch_pruefen()
+                projektion = (time.time() - t_start) / idx * max(
+                    total, max_frames or total)
+                if projektion > deckel_s:
+                    log.warning("[MATTE] Deckel: %d/%d Frames, Projektion "
+                                "%.0fs > %.0fs — Matte faellt aus, Original-"
+                                "Hintergrund bleibt", idx, total,
+                                projektion, deckel_s)
+                    cap.release()
+                    return ""
             ok, frame = cap.read()
             if not ok:
                 break
@@ -6797,6 +6843,8 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         url = upload_cloudinary(webm, f"matte_{uuid.uuid4().hex[:8]}")
         log.info("[MATTE] %d frames → %s", idx, url)
         return url
+    except JobAbbruch:
+        raise
     except Exception as exc:
         log.warning("[MATTE] failed: %s", exc)
         return ""
@@ -7363,7 +7411,11 @@ def _render_remotion_impl(req: RemotionRenderRequest) -> dict:
             # low floor so a LONG clip's graphic still fits <50MB (the 4000 floor made
             # a 125s graphic ~62MB → Supabase 413). Short clips still get a high bitrate.
             vkbit = max(800, min(vkbit, 12000))
-            gfx_scale = 0.75 if duration > 55 else 1.0   # 0.75 → exact 810x1440 (both even; H264 needs even dims)
+            # 21.08.: immer volle 1080x1920. Der 0.75-Downscale (810x1440) kam vom
+            # alten 50-MB-Storage-Limit — das steht jetzt auf 500 MB. Die Bitrate
+            # zielt weiter auf ~42 MB, damit die Telegram-Zustellung (50-MB-
+            # Bot-Grenze) das Video als Datei mitnehmen kann.
+            gfx_scale = 1.0
             # R3 Teil 1: dieselben Props, andere Composition. LayerStage baut die
             # Ebenenliste aus `legacy` und fuehrt sie aus — identische Bausteine,
             # identische Geometrie, nur ist die Reihenfolge jetzt Daten.
@@ -11636,13 +11688,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         # Stufe 4 (Probe, 11.08.): Gemini Omni Flash generiert die Szene als
         # BEWEGTES Video — maximal 2 Clips je Video (~0,90 USD), danach und
         # bei Fehlern faellt es auf das nano-banana-Still zurueck.
-        if int(s.get("omni_clips", 0)) < 2:
+        # Der Deckel kann einen Abschnitt auf das Standbild setzen, BEVOR
+        # gebaut wird (_deckel_plan): dann kein Omni-Clip, nur nano-banana.
+        if int(s.get("omni_clips", 0)) < OMNI_MAX and not a.get("_kein_omni"):
             try:
                 omni_url = await asyncio.to_thread(
                     _omni_clip, str(b.get("bild_prompt"))[:400], k, s["dir"])
                 if omni_url:
                     s["omni_clips"] = int(s.get("omni_clips", 0)) + 1
-                    return {"quelle_art": "omni", "kosten": 0.45,
+                    return {"quelle_art": "omni", "kosten": OMNI_USD,
                             "sekunden_material": 8.0,
                             "layer_source": {"kind": "video", "url": omni_url}}
             except Exception as exc:
@@ -12293,8 +12347,11 @@ GESTALTER_SCHAETZUNG_USD = 0.14
 # Beleg ist der staerkste Baustein im Video (echt, nicht gebaut) und kostet
 # ausserdem nichts; ein wanderndes Overlay ist Beiwerk.
 TRAGKRAFT = {"beleg": 6, "durchforsten": 5, "uebernahme": 5,
+             # Die Hook-Buehne traegt das Video — sie verliert ihren Clip
+             # zuletzt (Trockentest 09.09.: ohne Eintrag fiel sie zuerst).
+             "metapher_full": 5,
              "unten_aufbau": 4, "oben_unterbau": 4, "haelften": 4,
-             "metapher": 3, "seite_links": 3, "seite_rechts": 3,
+             "metapher": 3, "seite_links": 3, "seite_rechts": 3, "motiv": 2,
              "bubble": 2, "bubble_wandert": 2,
              "flaeche_kippt": 1, "overlay_wandert": 1}
 
@@ -12311,24 +12368,94 @@ def _kostet_modell(s: dict, a: dict) -> bool:
     return True
 
 
+# Ein Omni-Clip (bewegte Metapher, Gemini) kostet das Dreifache eines
+# nano-banana-Bilds. Bis 08.09. wurde JEDES Element mit 0,14 geschaetzt: der
+# Deckel hielt im Vorlauf, riss dann nach zwei Clips (0,90) und strich vier von
+# sieben Abschnitten auf Vollbild — 25 s tote Strecke, QC blockte die
+# Auslieferung (Skript 25, dcf47bbd6117). Jetzt wird je Abschnitt geschaetzt,
+# was er wirklich kostet, und Omni wird zuerst zum Standbild statt zu nichts.
+OMNI_USD = 0.45
+OMNI_MAX = int(os.environ.get("OMNI_MAX_CLIPS", "2"))
+
+
+def _omni_faehig(a: dict) -> bool:
+    k = _komposition(a)
+    b = a.get("braucht") or {}
+    return (k in ("metapher", "metapher_full")
+            and bool(str(b.get("bild_prompt") or "").strip())
+            and not a.get("_kein_omni"))
+
+
+def _schaetzungen(s: dict, plan: dict) -> dict:
+    """Erwartete Kosten je Abschnitt in Planreihenfolge. Die ersten OMNI_MAX
+    omni-faehigen Abschnitte bekommen einen Clip, der Rest ein Bild."""
+    aus, clips = {}, int(s.get("omni_clips", 0))
+    for i, a in enumerate(plan.get("abschnitte") or []):
+        if not _kostet_modell(s, a):
+            aus[i] = 0.0
+        elif _omni_faehig(a) and clips < OMNI_MAX:
+            aus[i] = OMNI_USD
+            clips += 1
+        else:
+            aus[i] = GESTALTER_SCHAETZUNG_USD
+    return aus
+
+
 def _deckel_plan(s: dict, plan: dict, schon_ausgegeben: float) -> dict:
     """Welche Abschnitte muessen zurueckgestuft werden, damit der Deckel haelt.
 
-    Nicht die zuerst gebauten gewinnen — das waere Zufall. Geopfert wird von
-    unten nach Tragkraft: was am wenigsten traegt, wird zuerst Vollbild."""
-    teuer = [(i, a) for i, a in enumerate(plan.get("abschnitte") or [])
-             if _kostet_modell(s, a)]
+    Nicht die zuerst gebauten gewinnen — das waere Zufall. Erst werden
+    Omni-Clips zu Standbildern (0,45 → 0,14), von unten nach Tragkraft; reicht
+    das nicht, wird von unten nach Tragkraft Vollbild. Ein Standbild traegt
+    mehr als 6 s Vollbild — und kostet ein Drittel."""
+    abschnitte = plan.get("abschnitte") or []
     frei = max(0.0, DECKEL_USD - schon_ausgegeben)
-    passt = int(frei // GESTALTER_SCHAETZUNG_USD)
-    if passt >= len(teuer):
-        return {}
-    # aufsteigend nach Tragkraft, bei Gleichstand der kuerzere Abschnitt zuerst
-    rang = sorted(teuer, key=lambda t: (TRAGKRAFT.get(_komposition(t[1]), 2),
-                                        float(t[1].get("bis", 0)) - float(t[1].get("von", 0))))
-    weg = rang[:len(teuer) - max(0, passt)]
-    return {i: (f"Kostendeckel {DECKEL_USD:.2f} USD: {len(teuer)} gebaute Elemente "
-                f"passen nicht, {_komposition(a)} traegt am wenigsten")
-            for i, a in weg}
+
+    def _rang(i):
+        a = abschnitte[i]
+        return (TRAGKRAFT.get(_komposition(a), 2),
+                float(a.get("bis", 0)) - float(a.get("von", 0)), -i)
+
+    def _traegt(i):
+        return TRAGKRAFT.get(_komposition(abschnitte[i]), 2)
+
+    def _still(i, summe):
+        abschnitte[i]["_kein_omni"] = True
+        log.info("[BAU] Kostendeckel: Abschnitt %d wird Standbild statt "
+                 "Omni-Clip (geschaetzt %.2f, frei %.2f USD)", i, summe, frei)
+
+    weg = {}
+    while True:
+        sch = _schaetzungen(s, plan)
+        summe = sum(v for i, v in sch.items() if i not in weg)
+        if summe <= frei:
+            break
+        omni = sorted((i for i, v in sch.items() if v == OMNI_USD and i not in weg),
+                      key=_rang)
+        teuer = sorted((i for i, v in sch.items() if v > 0 and i not in weg),
+                       key=_rang)
+        # 1. Omni-Clips mit wenig Tragkraft werden Standbild.
+        # 2. Beiwerk (Tragkraft <= 2, z.B. motiv-Karten) faellt auf Vollbild.
+        # 3. Erst dann verliert die Hook-Buehne (Tragkraft 5) ihren Clip —
+        #    der bewegte Hook ist mehr wert als eine Karte am Ende.
+        # 4. Zuletzt faellt, was noch uebrig ist.
+        stufen = ([i for i in omni if _traegt(i) < 5],
+                  [i for i in teuer if _traegt(i) <= 2 and sch[i] < OMNI_USD],
+                  omni, teuer)
+        for stufe, kand in enumerate(stufen):
+            if not kand:
+                continue
+            i = kand[0]
+            if stufe in (0, 2):
+                _still(i, summe)
+            else:
+                weg[i] = (f"Kostendeckel {DECKEL_USD:.2f} USD: geschaetzt "
+                          f"{summe:.2f}, frei {frei:.2f}, "
+                          f"{_komposition(abschnitte[i])} traegt am wenigsten")
+            break
+        else:
+            break
+    return weg
 
 
 class BuildRequest(BaseModel):
@@ -12433,6 +12560,7 @@ async def _build_impl(req: BuildRequest):
                     len(zurueckgestuft), ", ".join(str(i) for i in zurueckgestuft))
     protokoll = []
     for i, a in enumerate(plan["abschnitte"]):
+        _abbruch_pruefen()
         kopf = {"nr": i, "von": a.get("von"), "bis": a.get("bis"),
                 "komposition": _komposition(a), "block": a.get("block", "")}
         try:
@@ -12451,11 +12579,19 @@ async def _build_impl(req: BuildRequest):
             # VOR dem Ausgeben pruefen, nicht danach: "schon drueber" heisst,
             # das letzte Element hat den Deckel bereits gerissen. Die Schaetzung
             # zieht mit den echten Kosten dieses Laufs nach.
-            bezahlt = [float(p.get("kosten") or 0) for p in protokoll
-                       if float(p.get("kosten") or 0) > 0]
-            naechstes = max(GESTALTER_SCHAETZUNG_USD,
-                            sum(bezahlt) / len(bezahlt) if bezahlt else 0.0)
+            # Je Art geschaetzt — der Durchschnitt der bezahlten Elemente
+            # machte aus zwei Omni-Clips (0,45) eine 0,45-Erwartung fuer ein
+            # 0,14-Bild und strich es, obwohl 0,30 frei waren (08.09.).
+            naechstes = _schaetzungen(s, plan).get(i, GESTALTER_SCHAETZUNG_USD)
             if _kostet_modell(s, a) and bisher + naechstes > DECKEL_USD:
+                # Letzter Ausweg vor Vollbild: Omni-Clip zum Standbild.
+                if _omni_faehig(a) and bisher + GESTALTER_SCHAETZUNG_USD <= DECKEL_USD:
+                    a["_kein_omni"] = True
+                    log.info("[BAU] Kostendeckel: Abschnitt %d Standbild statt "
+                             "Omni-Clip", i)
+                    s["_ausgegeben"] = sum(float(x.get("kosten") or 0) for x in protokoll)
+                    protokoll.append(await _abschnitt_bauen(s, a, i))
+                    continue
                 protokoll.append(_abweichung(
                     kopf, _komposition(a), "vollbild",
                     f"Kostendeckel: {bisher:.2f} ausgegeben, naechstes Element "
@@ -12463,6 +12599,8 @@ async def _build_impl(req: BuildRequest):
                 continue
             s["_ausgegeben"] = sum(float(x.get("kosten") or 0) for x in protokoll)
             protokoll.append(await _abschnitt_bauen(s, a, i))
+        except JobAbbruch:
+            raise
         except Exception as exc:
             # Ein gescheiterter Abschnitt ist eine Abweichung, kein Abbruch:
             # die anderen acht sollen trotzdem stehen.
@@ -12634,6 +12772,8 @@ WAS KEIN MANGEL IST
 - Geschmack. Du sagst nicht, was schoener waere.
 - Eine Gestaltung, die dir zu schlicht ist, aber lesbar.
 - Das Fehlen von etwas, das der Plan gar nicht vorsieht.
+- Abschnitte mit komposition 'vollbild': dort ist NUR er und die Untertitel
+  geplant. Dass dort kein Element steht, ist kein Mangel.
 - Die Untertitel: sie laufen immer und gehoeren dazu.
 
 SCHWERE
@@ -12664,8 +12804,19 @@ def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float) -> dict:
     for i, a in enumerate(plan.get("abschnitte") or []):
         b = a.get("braucht") or {}
         p = protokoll[i] if i < len(protokoll) else {}
+        umgesetzt = p.get("umgesetzt") or _komposition(a)
+        if umgesetzt == "vollbild":
+            # Zurueckgestuft (Deckel, Planmangel, Ausnahme): im Bild ist nur er
+            # und die Untertitel. Stand hier weiter der Plan-Text, meldete die
+            # Abnahme neun "harte" Maengel fuer Dinge, die absichtlich fehlen
+            # (08.09., dcf47bbd6117) — und der Grund im Vorrat war irrefuehrend.
+            knapp.append({"nr": i, "von": a.get("von"), "bis": a.get("bis"),
+                          "komposition": "vollbild", "zeigt": "", "text": None,
+                          "gebaut_als": "facecam"
+                          + (" (zurueckgestuft)" if p.get("abweichung") else "")})
+            continue
         knapp.append({"nr": i, "von": a.get("von"), "bis": a.get("bis"),
-                      "komposition": p.get("umgesetzt") or _komposition(a),
+                      "komposition": umgesetzt,
                       "zeigt": str(b.get("zeigt") or "")[:160],
                       "text": b.get("text"),
                       "gebaut_als": p.get("quelle_art") or ""})
@@ -12968,6 +13119,7 @@ def _video_job(job_id: str, req: "VideoRequest"):
     Schleife. Der Zwischenstand steht im Job, damit ein Aufrufer sieht, woran
     es haengt, statt nur auf ein Ergebnis zu warten."""
     AKTIVER_CLIENT.set(req.client_id or "")
+    AKTIVER_JOB.set(job_id)
     t0 = time.time()
     try:
         VIDEO_JOBS[job_id] = {"status": "processing", "schritt": "plan"}
@@ -12982,6 +13134,7 @@ def _video_job(job_id: str, req: "VideoRequest"):
             "regelverstoesse": plan_res.get("regelverstoesse"),
             "hinweise": plan_res.get("hinweise"),
             "kosten_plan_usd": plan_res.get("kosten_usd")}
+        _abbruch_pruefen()
         bau = asyncio.run(_build_impl(BuildRequest(
             session_id=sid, rendern=req.rendern)))
         VIDEO_JOBS[job_id] = {
@@ -13004,6 +13157,12 @@ def _video_job(job_id: str, req: "VideoRequest"):
             "sekunden": round(time.time() - t0, 1)}
         log.info("[VIDEO] %s fertig in %.0fs — %s", job_id[:8], time.time() - t0,
                  bau.get("bilanz"))
+    except JobAbbruch:
+        VIDEO_JOBS[job_id] = {"status": "cancelled",
+                              "schritt": VIDEO_JOBS.get(job_id, {}).get("schritt"),
+                              "sekunden": round(time.time() - t0, 1)}
+        ABBRUCH_JOBS.discard(job_id)
+        log.info("[VIDEO] %s abgebrochen nach %.0fs", job_id[:8], time.time() - t0)
     except HTTPException as exc:
         VIDEO_JOBS[job_id] = {"status": "error", "schritt": VIDEO_JOBS.get(job_id, {}).get("schritt"),
                               "error": str(exc.detail)[:600]}
@@ -13031,6 +13190,21 @@ def tool_video_status(job_id: str):
     if not j:
         raise HTTPException(status_code=404, detail="unbekannter Job")
     return j
+
+
+@app.post("/tool/video/cancel/{job_id}")
+def tool_video_cancel(job_id: str):
+    """Kooperativer Abbruch: setzt die Marke, Matte- und Bau-Schleife
+    pruefen sie an ihren teuersten Stellen. Bis dahin lief der Abbruch
+    nur ueber einen Service-Neustart — der toetet auch alles andere."""
+    j = VIDEO_JOBS.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="unbekannter Job")
+    if j.get("status") != "processing":
+        return {"ok": False, "status": j.get("status"),
+                "hinweis": "laeuft nicht mehr"}
+    ABBRUCH_JOBS.add(job_id)
+    return {"ok": True, "status": "cancelling"}
 
 
 class TurnStatsRequest(BaseModel):

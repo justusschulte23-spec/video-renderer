@@ -10412,9 +10412,12 @@ ZOOM_KURVEN = ("linear", "spring", "easeOut", "easeInOut")
 EFFEKTE_ALLE = ("vignette", "grain", "colorWash", "cinematic", "punchFlash",
                 "lightWrap", "brightness", "tone", "scanlines", "progressBar",
                 "glitchSplit", "studioCanvas")
-# Freigegeben nach Sichtpruefung (15.09.); der Rest bleibt im Renderer, aber
-# nicht bestellbar.
-EFFEKTE_ERLAUBT = tuple(x for x in EFFEKTE_ALLE)
+# Freigegeben nach Sichtpruefung (Testrender T2, 15.09.): vignette, grain,
+# colorWash, cinematic (Balken), brightness, lightWrap. Nicht bestellbar:
+# tone (unsichtbar bei 0,022), progressBar (unter den Untertiteln), studioCanvas
+# (ist ein Grund, kein Effekt, deckt die Facecam zu), scanlines/punchFlash/
+# glitchSplit (haengen an Punch-Frames, tun ohne Punch nichts).
+EFFEKTE_ERLAUBT = ("vignette", "grain", "colorWash", "cinematic", "brightness", "lightWrap")
 ZUSATZ_FELDER = ("zoom", "ton", "effekt")
 RHYTHMUS_ZIEL_S = 2.5   # Sekunden je Ereignis, Referenz der Nische 2,4
 RHYTHMUS_MAX_S = 3.0    # darueber geht der Plan zurueck an den Editor
@@ -11749,9 +11752,13 @@ UEBERNAHME_MIT_ECK = ()
 # Geteilte Layouts, Bubbles und Bewegungs-Kompositionen sind gebannt.
 # Bestellt der AD sie trotzdem, wird daraus eine uebernahme — EIN Element,
 # vollflaechig, er ist raus.
-MINIMAL_VERBOTEN = ("unten_aufbau", "oben_unterbau", "seite_links",
-                    "seite_rechts", "haelften", "bubble", "bubble_wandert",
-                    "drift", "overlay_wandert", "flaeche_kippt")
+# 15.09.: Einzeln gerendert (Testlauf T1, Sitzung e2347c8cff02): unten_aufbau,
+# oben_unterbau, seite_links, seite_rechts, haelften, bubble, bubble_wandert,
+# drift und flaeche_kippt bauen und sehen sauber aus — freigegeben. Gesperrt
+# bleibt nur overlay_wandert (im Pruefrender nicht sichtbar geworden).
+# Vollbild-Quote, Hoechstzahl je Komposition und Uebernahme-Limit halten
+# weiter den Rhythmus, die Sperre war pauschal.
+MINIMAL_VERBOTEN = ("overlay_wandert",)
 ECKEN = (
     {"x": BUBBLE_X, "y": BUBBLE_Y, "w": BUBBLE_W, "h": BUBBLE_H},        # oben rechts
     {"x": 0.05, "y": 0.66, "w": BUBBLE_W, "h": BUBBLE_H},                # unten links
@@ -12547,7 +12554,8 @@ def _effekt_ebenen(s: dict, b: dict, von_f: int, bis_f: int, i: int, frames: int
             params = {"keys": [{"t": von_s, "level": 1.0}, {"t": von_s + 0.3, "level": lvl},
                                {"t": max(von_s + 0.3, bis_s - 0.3), "level": lvl}, {"t": bis_s, "level": 1.0}]}
         elif name == "cinematic":
-            params = {"bars": min(0.12, max(0.04, st or 0.07))}
+            # bars sind Pixel, nicht Anteil (T2: 0,07 px war unsichtbar).
+            params = {"bars": int(round(H * min(0.12, max(0.04, st or 0.07))))}
         elif name == "grain":
             params = {"opacity": min(0.12, max(0.02, st or 0.05))}
         elif name == "lightWrap":

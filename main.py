@@ -10258,8 +10258,10 @@ MOTION_TEXT_SZENEN = ("typewriter", "slide", "cascade", "swap")
 MOTION_FLAECHEN = ("drops", "bulb", "bloom")
 MOTION_SZENEN = MOTION_TEXT_SZENEN + MOTION_FLAECHEN
 # Welche Textart welche Szene bekommt, wenn der Plan nichts nennt.
+# slide und cascade sind Durchzieher (der Satz faehrt durchs Bild), keine
+# stehenden Karten: nur wenn der Plan sie ausdruecklich nennt.
 MOTION_JE_ART = {"zitat": "typewriter", "titel": "typewriter",
-                 "befund": "slide", "vergleich": "swap"}
+                 "befund": "typewriter", "vergleich": "swap"}
 MOTION_MAX_JE = 3          # dieselbe Regel wie fuer Kompositionen
 MOTION_KURZ_MAX_WORTE = 3  # slide und cascade sind einzeilig
 SCHMAL_MAX_WORTE = 3

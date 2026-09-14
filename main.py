@@ -10416,6 +10416,8 @@ EFFEKTE_ALLE = ("vignette", "grain", "colorWash", "cinematic", "punchFlash",
 # nicht bestellbar.
 EFFEKTE_ERLAUBT = tuple(x for x in EFFEKTE_ALLE)
 ZUSATZ_FELDER = ("zoom", "ton", "effekt")
+RHYTHMUS_ZIEL_S = 2.5   # Sekunden je Ereignis, Referenz der Nische 2,4
+RHYTHMUS_MAX_S = 3.0    # darueber geht der Plan zurueck an den Editor
 ENDZUSTAND_PFLICHT = ("unten_aufbau", "oben_unterbau")
 # Diese drei duerfen unter die 4 Sekunden — ein Punch IST kurz. Die 1,0 s sind
 # keine Gestaltungsregel, sondern die Grenze, unter der eine Komposition kein
@@ -10449,6 +10451,10 @@ MOTION_JE_ART = {"zitat": "typewriter", "titel": "typewriter",
                  "befund": "typewriter", "vergleich": "swap"}
 MOTION_MAX_JE = 3          # dieselbe Regel wie fuer Kompositionen
 MOTION_KURZ_MAX_WORTE = 3  # slide und cascade sind einzeilig
+# Textmenge statt Schriftgroesse (15.09.): im Kasten hoechstens so viele
+# Zeichen, dass die Schrift im Entwurfsraum nicht unter 72 px faellt.
+MOTION_KASTEN_MAX_ZEICHEN = 18
+MOTION_BREIT_MAX_ZEICHEN = 34
 SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
 MAX_UEBERNAHMEN = 2
@@ -10615,6 +10621,34 @@ WAS DU AUS DEM MATERIAL LIEST (steht unten als Daten)
                ohne Bewegung ist es eine Folie)
   url, ziel    nur bei beleg mit echter Seite
 
+DAS VOKABULAR IST EINE FESTE LISTE — du waehlst, du erfindest nichts.
+Neben den fuenf Zustaenden darf "zustand" eine dieser Kompositionen sein
+(mit "braucht" wie bei motiv: art_element, text, zeigt, bewegung):
+  {{KOMPOSITIONEN_FREI}}
+Jeder Moment darf zusaetzlich tragen:
+  "zoom":   {"art": {{ZOOM_ARTEN}}, "dauer_s": 0.8-4.0,
+             "kurve": {{ZOOM_KURVEN}}, "staerke": 1.05-1.3}
+            Kamerabewegung auf ihm. rein = langsam naeher, raus = loesen,
+            schwenk = leichter Versatz, puls = kurz rein und zurueck.
+  "ton":    [{"impact": {{IMPACTS}}, "bei_s": Sekunde, "gain": 0.3-1.0}]
+            Ein Impact sitzt auf einer Betonung oder einem Schnitt, nie
+            zwischen zwei Woertern. Hoechstens einer je Moment.
+  "effekt": [{{EFFEKTE}}]
+            vollflaechig fuer die Dauer des Moments. Sparsam: ein Effekt
+            traegt einen Moment, drei Effekte tragen keinen.
+  "motion": bei zitat, titel, befund, vergleich: typewriter | slide |
+            swap | cascade. Im Kasten hoechstens 18 Zeichen je Zeile.
+
+RHYTHMUS — daran wird dein Edit im Code geprueft, VOR dem Render:
+- Ziel {{RHYTHMUS_ZIEL}} s je Ereignis, hoechstens {{RHYTHMUS_MAX}} s.
+  Ereignis = Szene, Motiv, Komposition mit Element, Punch, zoom, effekt
+  oder ton. Ein 40-s-Video braucht also 14 bis 16 Ereignisse. Kurze
+  Momente an den Betonungen, nicht lange Momente mit viel Text.
+- Das folgende ist ein ECHTER Plan, der die Referenz getroffen hat (2,5 s
+  je Ereignis, 16 Ereignisse auf 39,5 s), als Massstab fuer Dichte —
+  nicht zum Abschreiben der Inhalte:
+  {{BEISPIEL_LAUF_B}}
+
 HARTE PHYSIK — daran wird dein Edit im Code geprueft:
 - Momente decken 0 bis zum Ende lueckenlos ab, in Reihenfolge
 - hoechstens EIN punch_wort im ganzen Video
@@ -10644,6 +10678,34 @@ AUSGABE — nur JSON:
   ],
   "gesamturteil": "ein Satz, wie der Edit sich anfuehlen soll"
 }"""
+
+
+BEISPIEL_LAUF_B = json.dumps({"momente": [
+    {"von": 0.0, "bis": 4.6, "zustand": "er_szene", "szene": "grosser Zaehler aus leuchtenden Ziffern zerbroeselt zu Staub", "grund": "die falsche Annahme als Buehne hinter ihm"},
+    {"von": 4.6, "bis": 6.8, "zustand": "er", "punch_wort": "kostet", "ton": [{"impact": "impact_cinematic_hit_01", "bei_s": 5.2, "gain": 0.9}], "grund": "Schmerzwort"},
+    {"von": 6.8, "bis": 10.9, "zustand": "uebernahme", "braucht": {"art_element": "vergleich", "text": ["Problem zuerst", "10.700 Views"], "motion": "swap", "zeigt": "Wort 1 wird Wort 2, vollflaechig", "bewegung": "Buchstaben tauschen"}, "grund": "Ursache wird Wirkung"},
+    {"von": 10.9, "bis": 15.5, "zustand": "er", "zoom": {"art": "rein", "dauer_s": 4.0, "kurve": "easeInOut", "staerke": 1.12}, "grund": "Ruhe vor dem Umschlag, Kamera naehert sich"},
+    {"von": 15.5, "bis": 19.9, "zustand": "hell_dunkel", "braucht": {"art_element": "zitat", "text": ["Sein Publikum scrollt"], "motion": "typewriter", "zeigt": "Satz tippt sich, Grund gewendet", "bewegung": "Zeichen fuer Zeichen"}, "grund": "der Umschlag"},
+    {"von": 19.9, "bis": 23.9, "zustand": "er", "effekt": ["vignette"], "grund": "Aufzaehlung, er allein"},
+    {"von": 23.9, "bis": 25.9, "zustand": "er", "zoom": {"art": "puls", "dauer_s": 1.2, "kurve": "spring", "staerke": 1.2}, "grund": "Pointe"},
+    {"von": 25.9, "bis": 27.1, "zustand": "er", "punch_wort": null, "ton": [{"impact": "impact_bass_drop_01", "bei_s": 26.4, "gain": 1.0}], "grund": "Loesungswort"},
+    {"von": 27.1, "bis": 31.1, "zustand": "motiv", "braucht": {"art_element": "befund", "text": ["Problem benennen"], "motion": "typewriter", "zeigt": "Karte oben rechts", "bewegung": "tippt sich ein"}, "grund": "Anweisung neben ihm"},
+    {"von": 31.1, "bis": 35.6, "zustand": "szene", "szene": "drei Betonsilos, zwischen ihnen versickert Wasser", "grund": "Daten in Silos"},
+    {"von": 35.6, "bis": 39.5, "zustand": "motiv", "braucht": {"art_element": "titel", "text": ["Kommentier PROBLEM"], "motion": "typewriter", "zeigt": "Karte oben rechts", "bewegung": "tippt sich ein"}, "grund": "Ausfahrt bis zum letzten Frame"}
+]}, ensure_ascii=False)
+
+def _ad_sys() -> str:
+    """Der Editor-Prompt mit dem aktuellen Vokabular: Listen werden beim Aufruf
+    eingesetzt, damit eine Freigabe in MINIMAL_VERBOTEN sofort im Prompt steht."""
+    return (AD_SYS
+            .replace("{{KOMPOSITIONEN_FREI}}", ", ".join(k for k in KOMPOSITIONEN if k not in MINIMAL_VERBOTEN))
+            .replace("{{ZOOM_ARTEN}}", " | ".join(ZOOM_ARTEN))
+            .replace("{{ZOOM_KURVEN}}", " | ".join(ZOOM_KURVEN))
+            .replace("{{IMPACTS}}", " | ".join(k for k in SFX_LIBRARY if k.startswith("impact_")))
+            .replace("{{EFFEKTE}}", " | ".join(EFFEKTE_ERLAUBT))
+            .replace("{{RHYTHMUS_ZIEL}}", "%.1f" % RHYTHMUS_ZIEL_S)
+            .replace("{{RHYTHMUS_MAX}}", "%.1f" % RHYTHMUS_MAX_S)
+            .replace("{{BEISPIEL_LAUF_B}}", BEISPIEL_LAUF_B))
 
 
 def _ad_kontext(s: dict) -> str:
@@ -10798,6 +10860,26 @@ def _momente_zu_abschnitten(momente: list) -> list:
     return ab
 
 
+def _plan_ereignisse(momente: list) -> int:
+    """Ereignisse wie der QC sie zaehlt: jeder Moment, der etwas ins Bild
+    bringt (Szene, Motiv, Beleg, Komposition mit Element), jeder Punch,
+    jeder Zoom, jeder bestellte Effekt oder Impact."""
+    n = 0
+    for m in momente or []:
+        z = str(m.get("zustand") or "er")
+        if z != "er":
+            n += 1
+        if str(m.get("punch_wort") or "").strip():
+            n += 1
+        for f in ("zoom", "effekt"):
+            if m.get(f):
+                n += 1
+        t = m.get("ton")
+        if t:
+            n += len(t) if isinstance(t, list) else 1
+    return n
+
+
 def _treatment_pruefen(plan: dict, dauer: float) -> list:
     """Die Physik des Edits — nicht sein Geschmack. Alles, was hier NICHT
     steht (Rotation, Familien, Quoten), gehoert dem Editor."""
@@ -10832,6 +10914,17 @@ def _treatment_pruefen(plan: dict, dauer: float) -> list:
         if str(m.get("punch_wort") or "").strip():
             punches += 1
         ende = bis
+    # Rhythmus (15.09.): Benchmark-Plan des Editors lag bei 7,3 s je
+    # Ereignis, Referenz 2,4. Die QC misst das nach dem Render; hier greift
+    # es davor, damit der Plan zurueckgeht statt das Video.
+    ereignisse = _plan_ereignisse(mom)
+    if dauer > 0 and dauer / max(1, ereignisse) > RHYTHMUS_MAX_S:
+        fehler.append(
+            f"Rhythmus: {ereignisse} Ereignisse auf {dauer:.1f}s = "
+            f"{dauer / max(1, ereignisse):.1f}s je Ereignis — Ziel {RHYTHMUS_ZIEL_S:.1f}s, "
+            f"hoechstens {RHYTHMUS_MAX_S:.1f}s. Ereignis = Szene, Motiv, Komposition mit "
+            f"Element, Punch, zoom, effekt oder ton. Setz mehr davon, kuerzer, an den "
+            f"Betonungen — nicht laengere Momente.")
     if punches > 1:
         fehler.append(f"{punches} punch_wort im Edit — erlaubt ist GENAU "
                       "einer im ganzen Video.")
@@ -11544,7 +11637,7 @@ def tool_plan(req: PlanRequest):
         s["belege"] = _belege_sammeln(s)
     uri = _gemini_upload(s["facecam_path"])
     kontext = _ad_kontext(s)
-    plan, modell, tok = _gemini_plan_call(uri, AD_SYS + "\n\n" + kontext, modelle)
+    plan, modell, tok = _gemini_plan_call(uri, _ad_sys() + "\n\n" + kontext, modelle)
     # Das Modell liefert den Plan gelegentlich als nacktes Array statt als
     # {"abschnitte": [...]} — am 10.08. starb daran der ganze Job.
     if isinstance(plan, list):
@@ -11559,7 +11652,7 @@ def tool_plan(req: PlanRequest):
         # Plan schreibt, schreibt auch nach fuenf keinen, und jede Runde kostet
         # den vollen Video-Kontext.
         log.info("[AD] Plan verletzt %d Regeln, geht einmal zurueck", len(fehler))
-        nach = (AD_SYS + "\n\n" + kontext
+        nach = (_ad_sys() + "\n\n" + kontext
                 + "\n\nDEIN ERSTER PLAN VERLETZT DIESE REGELN:\n- "
                 + "\n- ".join(fehler)
                 + "\n\nHier ist er:\n" + json.dumps(plan, ensure_ascii=False)[:6000]
@@ -11681,6 +11774,15 @@ def _motion_quelle(s: dict, a: dict, b: dict, art: str, k: str, kasten: dict) ->
         return None
     text = zeilen[0][:60]
     text2 = (zeilen[1] if len(zeilen) > 1 else "")[:60]
+    breit_vorab = float((kasten or {}).get("w", 1)) >= 0.99
+    grenze = MOTION_BREIT_MAX_ZEICHEN if breit_vorab else MOTION_KASTEN_MAX_ZEICHEN
+    if max(len(text), len(text2)) > grenze:
+        # Zu viel Text fuer die Flaeche: nicht schrumpfen, sondern Kit
+        # (das kann mehrzeilig) — der Plan bekommt das als Hinweis ins Log.
+        log.info("[BAU] Motion: '%s' hat %d Zeichen, Grenze %d im %s — Kit baut",
+                 text[:30], max(len(text), len(text2)), grenze,
+                 "Vollbild" if breit_vorab else "Kasten")
+        return None
     wunsch = str(b.get("motion") or "").lower().strip()
     szene = wunsch if wunsch in MOTION_TEXT_SZENEN else MOTION_JE_ART.get(art, "typewriter")
     if szene == "swap" and not text2:
@@ -12311,7 +12413,10 @@ KOMP_BOXEN = {
     # Treatment-Zustand 'motiv': er bleibt VOLL im Bild, ein kleines
     # lebendes Element (Kit-Karte) steht seitlich oben und entwickelt sich
     # mit dem Inhalt. Die Facecam-Ebene laeuft darunter einfach weiter.
-    "motiv":           (None, {"x": 0.62, "y": 0.09, "w": 0.34, "h": 0.24}),
+    # 15.09.: 0,34 x 0,24 war zu klein — Motion-Text wurde winzig (Benchmark).
+    # Mindestgroesse fuer lesbare Karten: 0,46 breit. Sitzt ueber dem Gesicht
+    # (top ~0,35), rechts, damit die Bildmitte ihm gehoert.
+    "motiv":           (None, {"x": 0.50, "y": 0.07, "w": 0.46, "h": 0.26}),
     "uebernahme":      (None, {"x": 0, "y": 0, "w": 1, "h": 1}),
     # Dieselbe Vollflaeche wie uebernahme — der Unterschied ist die Helligkeit.
     "hell_dunkel":     (None, {"x": 0, "y": 0, "w": 1, "h": 1}),

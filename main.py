@@ -13292,7 +13292,7 @@ async def _build_impl(req: BuildRequest):
 
     # ── STUFE 3: ABNAHME, genau eine Reparaturrunde ──────────────────────────
     pfad = Path(aus["render"].get("pfad") or "")
-    ab = _abnahme(pfad, plan, protokoll, s["frames"] / FPS)
+    ab = _abnahme(pfad, plan, protokoll, s["frames"] / FPS, s.get("words"))
     aus["abnahme"] = ab
     hart = [m for m in ab.get("maengel") or [] if m.get("schwere") == "hart"]
     if hart:
@@ -13302,7 +13302,7 @@ async def _build_impl(req: BuildRequest):
             log.info("[ABNAHME] %d Eingriffe → einmal neu rendern", len(getan))
             zweiter = tool_session_render(SessionRef(session_id=s["id"]))
             zweite_ab = _abnahme(Path(zweiter.get("pfad") or ""), plan, protokoll,
-                                 s["frames"] / FPS)
+                                 s["frames"] / FPS, s.get("words"))
             hart2 = [m for m in zweite_ab.get("maengel") or []
                      if m.get("schwere") == "hart"]
             # Nur uebernehmen, wenn es BESSER geworden ist. Sonst haette eine
@@ -13404,7 +13404,54 @@ Kein Mangel: {"maengel": [], "urteil": "..."}
 kannst."""
 
 
-def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float) -> dict:
+def _untertitel_ausfiltern(maengel: list, words: list, fenster_s: float = 3.0) -> tuple:
+    """(bleibende Maengel, verworfene). Ein 'falscher_text'/'doppelter_text',
+    dessen zitierter Text aus Woertern besteht, die im Transkript im Fenster
+    um 'bei' gesprochen werden, ist ein Untertitel — die Abnahme hat ihn fuer
+    Plantext gehalten. Der Untertitel-Ring (ABNAHME_SYS) sagt das schon;
+    hier steht es als Regel, die nicht ueberredet werden kann."""
+    if not maengel or not words:
+        return maengel, []
+    def _w(x):
+        return str(x.get("word") if "word" in x else x.get("w", "")).strip()
+    def _t(x):
+        try:
+            return float(x.get("start") if x.get("start") is not None else x.get("t", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    def _norm(t):
+        return re.sub(r"[^\wäöüß]", "", str(t).lower())
+    bleibt, weg = [], []
+    for m in maengel:
+        art = str(m.get("art") or "")
+        was = str(m.get("was") or "")
+        if art not in ("falscher_text", "doppelter_text"):
+            bleibt.append(m)
+            continue
+        zitate = re.findall(r"'([^']{2,80})'|\"([^\"]{2,80})\"", was)
+        zitate = [a or b for a, b in zitate]
+        bei = float(m.get("bei") or 0.0)
+        nahe = {_norm(_w(x)) for x in words if abs(_t(x) - bei) <= fenster_s}
+        nahe.discard("")
+        ist_untertitel = False
+        for z in zitate:
+            toks = [_norm(t) for t in z.split()]
+            toks = [t for t in toks if t]
+            if toks and all(t in nahe for t in toks):
+                ist_untertitel = True
+                break
+        if ist_untertitel:
+            weg.append(m)
+        else:
+            bleibt.append(m)
+    if weg:
+        log.info("[ABNAHME] %d Meldung(en) waren Untertitel, verworfen: %s", len(weg),
+                 "; ".join("%.1fs %s" % (x.get("bei", 0), str(x.get("was"))[:60]) for x in weg))
+    return bleibt, weg
+
+
+def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float,
+             words: Optional[list] = None) -> dict:
     """Ein Blick aufs fertige Video gegen den Plan. Faellt bei jedem Fehler
     weich aus — eine Abnahme, die den Lauf killt, waere schlimmer als keine."""
     aus = {"maengel": [], "urteil": "", "kosten_usd": 0.0, "gelaufen": False}
@@ -13463,8 +13510,13 @@ def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float) -> dict:
             m["abschnitt"] = -1
         m["schwere"] = "hart" if str(m.get("schwere")).lower() == "hart" else "weich"
         maengel.append(m)
+    maengel, untertitel = _untertitel_ausfiltern(maengel, words or [])
     aus.update({"maengel": maengel, "urteil": str(roh.get("urteil") or "")[:300],
-                "modell": modell, "tokens": tok, "gelaufen": True})
+                "modell": modell, "tokens": tok, "gelaufen": True,
+                "untertitel_verworfen": untertitel})
+    if untertitel and not maengel:
+        aus["urteil"] = ("Keine Maengel — %d Meldungen waren Untertitel, keine Plantexte."
+                         % len(untertitel))
     hart = sum(1 for m in maengel if m["schwere"] == "hart")
     log.info("[ABNAHME] %d Maengel (%d hart) — %s", len(maengel), hart, aus["urteil"][:120])
     return aus
@@ -13550,7 +13602,7 @@ def tool_abnahme(req: AbnahmeRequest):
     if not pfad:
         raise HTTPException(status_code=404, detail="kein gerendertes Video in der Sitzung")
     plan = s.get("plan") or {"abschnitte": []}
-    ab = _abnahme(pfad, plan, s.get("bau_protokoll") or [], s["frames"] / FPS)
+    ab = _abnahme(pfad, plan, s.get("bau_protokoll") or [], s["frames"] / FPS, s.get("words"))
     return {"ok": True, "video": pfad.name, "abnahme": ab,
             "qc": _qc(pfad, s, plan)}
 

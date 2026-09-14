@@ -12464,6 +12464,11 @@ def _kostet_modell(s: dict, a: dict) -> bool:
     b = a.get("braucht") or {}
     if _material_treffer(s, b) or b.get("url"):
         return False
+    # Motion-Szenen (14.09.) kosten nichts. Ohne diese Zeile schaetzte der
+    # Deckel sie wie einen Gestalter-Aufruf und warf genau die Abschnitte
+    # raus, die umsonst sind (Abnahme: 2 von 3 befund-Motive fielen auf Vollbild).
+    if MOTION_AN and k == "motiv" and str(b.get("art_element") or "").lower() in MOTION_JE_ART:
+        return False
     return True
 
 

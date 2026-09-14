@@ -1462,7 +1462,85 @@ def _whisperx_words(audio_path: Path) -> Optional[list]:
         return None
 
 
+# Whisper-Halluzinationen (Benchmark 14.09.: "Do that I love you" bei 10,9 s
+# lief bis in die Untertitel). Bekannte Floskeln plus Sprachbruch: eine Folge
+# englischer Woerter in einem deutschen Transkript. Gefiltert wird hinter
+# JEDER Transkription, protokolliert in _HALLU_LETZTES und im Log.
+HALLU_PHRASEN = (
+    "untertitel der amara org community", "untertitel der amara.org-community",
+    "untertitel im auftrag des zdf", "untertitelung des zdf",
+    "vielen dank fürs zuschauen", "vielen dank fuers zuschauen", "danke fürs zuschauen",
+    "danke fürs zusehen", "bis zum nächsten mal", "thanks for watching",
+    "thank you for watching", "thank you for listening", "do that i love you",
+    "i love you", "like and subscribe", "please subscribe", "subscribe to my channel",
+    "copyright wdr", "swr 2021", "zdf 2020",
+)
+HALLU_ENGLISCH = {"do", "that", "i", "love", "you", "the", "and", "to", "of", "is",
+                  "it", "this", "for", "we", "are", "my", "your", "what", "with",
+                  "thank", "thanks", "watching", "please", "subscribe", "like",
+                  "yeah", "okay", "oh", "hey", "bye", "see", "next", "time", "video",
+                  "channel", "guys", "hello", "hi", "let's", "go", "be", "have"}
+_HALLU_LETZTES: dict = {"protokoll": []}
+
+
+def _halluzination_filter(words: list) -> tuple:
+    """(saubere Woerter, Protokoll). Markierte Stellen fliegen raus und stehen
+    mit von/bis/Text/Grund im Protokoll — nie still entfernt."""
+    if not words:
+        return words, []
+    def _w(x):
+        return str(x.get("word") if isinstance(x, dict) and "word" in x else (x.get("w") if isinstance(x, dict) else x) or "")
+    def _t(x, k1, k2):
+        v = x.get(k1) if isinstance(x, dict) and x.get(k1) is not None else (x.get(k2) if isinstance(x, dict) else 0)
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    norm = [re.sub(r"[^\wäöüß']", "", _w(x).lower()) for x in words]
+    raus = set()
+    protokoll = []
+    # 1. bekannte Floskeln als Wortfolge
+    for phrase in HALLU_PHRASEN:
+        pw = [re.sub(r"[^\wäöüß']", "", t) for t in phrase.split()]
+        L = len(pw)
+        for a in range(0, len(norm) - L + 1):
+            if norm[a:a + L] == pw:
+                if all(j in raus for j in range(a, a + L)):
+                    continue
+                raus.update(range(a, a + L))
+                protokoll.append({"von": _t(words[a], "start", "t"), "bis": _t(words[a + L - 1], "end", "e"),
+                                  "text": " ".join(_w(x) for x in words[a:a + L]), "grund": "floskel"})
+    # 2. Sprachbruch: drei oder mehr englische Woerter am Stueck in deutschem Text
+    deutsch_anteil = 1.0 - sum(1 for n in norm if n in HALLU_ENGLISCH) / max(1, len(norm))
+    if deutsch_anteil > 0.7:
+        a = 0
+        while a < len(norm):
+            if norm[a] in HALLU_ENGLISCH:
+                e = a
+                while e < len(norm) and norm[e] in HALLU_ENGLISCH:
+                    e += 1
+                if e - a >= 3 and not all(j in raus for j in range(a, e)):
+                    raus.update(range(a, e))
+                    protokoll.append({"von": _t(words[a], "start", "t"), "bis": _t(words[e - 1], "end", "e"),
+                                      "text": " ".join(_w(x) for x in words[a:e]), "grund": "sprachbruch"})
+                a = e
+            else:
+                a += 1
+    sauber = [x for j, x in enumerate(words) if j not in raus]
+    if protokoll:
+        log.warning("[TRANSKRIPT] %d Halluzinationsstellen gefiltert: %s", len(protokoll),
+                    "; ".join("%.1fs '%s' (%s)" % (p_["von"], p_["text"][:40], p_["grund"]) for p_ in protokoll))
+    return sauber, protokoll
+
+
 def transcribe_audio(video_path: Path, prompt: str = "") -> list:
+    words = _transcribe_audio_roh(video_path, prompt)
+    sauber, protokoll = _halluzination_filter(words)
+    _HALLU_LETZTES["protokoll"] = protokoll
+    return sauber
+
+
+def _transcribe_audio_roh(video_path: Path, prompt: str = "") -> list:
     """Returns list of {word, start, end} or [] on failure.
     `prompt` biases Whisper to KEEP disfluencies (äh/ähm) instead of cleaning them up —
     used by the filler-word trimmer. Leave empty for normal clean transcription.
@@ -8528,6 +8606,7 @@ def tool_session_open(req: OpenSessionRequest):
         "facecam_path": cam, "face_url": face_url,
         "duration": duration, "frames": frames,
         "words": words, "face": face, "onsets": onsets,
+        "transkript_filter": list(_HALLU_LETZTES.get("protokoll") or []),
         "sheet": sheet, "sheet_url": sheet_url,
         "style_guide": style, "colors": _tpl_colors(tpl),
         "brand": _brand_fuer(req.client_id, tpl),
@@ -8606,6 +8685,7 @@ class SessionRef(BaseModel):
 # entweder wiederherstellbar oder gehoert nicht in eine Datenbank.
 _CKPT_FIELDS = ("id", "client_id", "face_url", "duration", "frames", "words", "face",
                 "onsets", "sheet_url", "style_guide", "colors", "briefing", "sfx",
+                "transkript_filter",
                 "paper",
                 "material", "material_abgelehnt",
                 "layers", "turns_used", "turn_budget", "abbruch_grund",
@@ -10315,12 +10395,27 @@ KOMPOSITIONEN = ("vollbild", "punch", "drift",
                  "unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                  "haelften", "bubble", "bubble_wandert",
                  "uebernahme", "hell_dunkel", "beleg", "metapher", "metapher_full",
-                 "durchforsten", "overlay_wandert", "flaeche_kippt")
+                 "durchforsten", "overlay_wandert", "flaeche_kippt",
+                 # Benchmark 14.09.: motiv stand nur in KOMP_BOXEN — der Plan
+                 # bestellte es, der Pruefer kannte es nicht, der Moment fiel aus.
+                 "motiv")
 # Bei den wichtigsten Saetzen soll nichts zwischen ihm und dem Zuschauer stehen.
 VOLLBILD_FAMILIE = ("vollbild", "punch", "drift", "overlay_wandert", "flaeche_kippt")
 # Ohne Bewegung waere das eine Folie.
 BEWEGUNG_PFLICHT = ("unten_aufbau", "oben_unterbau", "bubble", "bubble_wandert",
-                    "overlay_wandert", "flaeche_kippt")
+                    "overlay_wandert", "flaeche_kippt", "motiv")
+# Plansprache (15.09.): Zoom, Ton und Effekt sind feste Listen. Der Art
+# Director waehlt daraus, er erfindet nichts. Alles, was hier nicht steht,
+# faellt im Pruefer durch.
+ZOOM_ARTEN = ("rein", "raus", "schwenk_links", "schwenk_rechts", "puls")
+ZOOM_KURVEN = ("linear", "spring", "easeOut", "easeInOut")
+EFFEKTE_ALLE = ("vignette", "grain", "colorWash", "cinematic", "punchFlash",
+                "lightWrap", "brightness", "tone", "scanlines", "progressBar",
+                "glitchSplit", "studioCanvas")
+# Freigegeben nach Sichtpruefung (15.09.); der Rest bleibt im Renderer, aber
+# nicht bestellbar.
+EFFEKTE_ERLAUBT = tuple(x for x in EFFEKTE_ALLE)
+ZUSATZ_FELDER = ("zoom", "ton", "effekt")
 ENDZUSTAND_PFLICHT = ("unten_aufbau", "oben_unterbau")
 # Diese drei duerfen unter die 4 Sekunden — ein Punch IST kurz. Die 1,0 s sind
 # keine Gestaltungsregel, sondern die Grenze, unter der eine Komposition kein
@@ -10684,6 +10779,10 @@ def _momente_zu_abschnitten(momente: list) -> list:
             b.setdefault("art", "beleg")
             b.setdefault("quelle", "vorhanden")
             eintrag.update({"komposition": "beleg", "braucht": b})
+        elif z in KOMPOSITIONEN:
+            # Plansprache offen (15.09.): der Editor darf eine Komposition
+            # direkt nennen, mit demselben braucht wie in der Abschnitte-Sprache.
+            eintrag.update({"komposition": z, "braucht": dict(m.get("braucht") or {}) or None})
         else:
             pw = str(m.get("punch_wort") or "").strip()
             if pw:
@@ -10691,6 +10790,10 @@ def _momente_zu_abschnitten(momente: list) -> list:
                                 "braucht": {"wort": pw}})
             else:
                 eintrag.update({"komposition": "vollbild", "braucht": None})
+        # Zoom, Ton, Effekt haengen am Moment, nicht am Element.
+        zus = {f: m[f] for f in ZUSATZ_FELDER if m.get(f)}
+        if zus:
+            eintrag["braucht"] = dict(eintrag.get("braucht") or {}, **zus)
         ab.append(eintrag)
     return ab
 
@@ -10776,6 +10879,36 @@ def _schnitte_aus_treatment(s: dict) -> int:
     return len(fr)
 
 
+def _zusatz_pruefen(b: dict, i: int, von: float) -> list:
+    """zoom, ton, effekt gegen die festen Listen. Was nicht drinsteht, ist ein
+    Planmangel — der Code erfindet keine Kurve und kein Geraeusch."""
+    f = []
+    if not isinstance(b, dict):
+        return f
+    z = b.get("zoom")
+    if z:
+        if not isinstance(z, dict):
+            f.append(f"Abschnitt {i} ({von:.1f}s): zoom muss ein Objekt sein")
+        else:
+            if str(z.get("art") or "") not in ZOOM_ARTEN:
+                f.append(f"Abschnitt {i} ({von:.1f}s): zoom.art '{z.get('art')}' — erlaubt: {', '.join(ZOOM_ARTEN)}")
+            if z.get("kurve") and str(z.get("kurve")) not in ZOOM_KURVEN:
+                f.append(f"Abschnitt {i} ({von:.1f}s): zoom.kurve '{z.get('kurve')}' — erlaubt: {', '.join(ZOOM_KURVEN)}")
+    t = b.get("ton")
+    if t:
+        for e in (t if isinstance(t, list) else [t]):
+            if not isinstance(e, dict) or str(e.get("impact") or "") not in SFX_LIBRARY:
+                f.append(f"Abschnitt {i} ({von:.1f}s): ton.impact unbekannt — erlaubt: "
+                         + ", ".join(k for k in SFX_LIBRARY if k.startswith("impact_")))
+    e = b.get("effekt")
+    if e:
+        for name in (e if isinstance(e, list) else [e]):
+            n = name.get("name") if isinstance(name, dict) else name
+            if str(n or "") not in EFFEKTE_ERLAUBT:
+                f.append(f"Abschnitt {i} ({von:.1f}s): effekt '{n}' — erlaubt: {', '.join(EFFEKTE_ERLAUBT)}")
+    return f
+
+
 def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     """Die harten Regeln. Sie werden GEPRUEFT, nicht erbeten — und ein Verstoss
     geht EINMAL zurueck an den Art Director, statt in der Ausfuehrung zu einem
@@ -10789,11 +10922,14 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     if not isinstance(ab, list) or not ab:
         return ["kein Feld 'abschnitte' mit Inhalt"]
     fehler, vorher, ende = [], None, 0.0
+    # Pruefrender (15.09.): testlauf=true prueft nur die Physik je Abschnitt
+    # (Felder, Luecken), nicht die Dramaturgie (Hook-Buehne, Quoten, Laengen).
+    test = bool(plan.get("testlauf"))
     # AB SEKUNDE 0 MUSS ETWAS PASSIEREN. Der Hook ist die Stelle, an der
     # entschieden wird, ob jemand bleibt; fuenf Sekunden nacktes Gesicht sind
     # dort verschenkt. Stand bisher nur als Bitte im Prompt und wurde
     # entsprechend oft ignoriert.
-    if ab and _komposition(ab[0]) in ("vollbild", "drift") and not ab[0].get("braucht"):
+    if not test and ab and _komposition(ab[0]) in ("vollbild", "drift") and not ab[0].get("braucht"):
         fehler.append(
             "Abschnitt 0 ist '%s' ohne Element — im Hook passiert damit ab "
             "Sekunde 0 nichts. Nimm punch mit dem staerksten Wort, "
@@ -10801,7 +10937,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             % _komposition(ab[0]))
     # Der Hook oeffnet IMMER mit der Themen-Illustration als Buehne (Justus,
     # 10.08.): Bild als Grund, er freigestellt davor.
-    if ab and _komposition(ab[0]) != "metapher_full":
+    if not test and ab and _komposition(ab[0]) != "metapher_full":
         fehler.append(
             "Abschnitt 0 MUSS metapher_full sein — der Hook oeffnet immer mit "
             "der vollflaechigen 2D-Themen-Illustration als Hintergrund, er "
@@ -10810,7 +10946,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     # Minimal-Regel: geteilte Layouts und Bewegungs-Kompositionen sind
     # gebannt — der AD soll es wissen, nicht erst die Ausfuehrung.
     for _i, _a in enumerate(ab):
-        if _komposition(_a) in MINIMAL_VERBOTEN:
+        if _komposition(_a) in MINIMAL_VERBOTEN and not plan.get("testlauf"):
             fehler.append(
                 "Abschnitt %d bestellt '%s' — gebannt. ER ist Vollbild ODER "
                 "weg: nimm vollbild/punch fuer ihn, uebernahme/beleg/metapher "
@@ -10822,7 +10958,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             _d = float(_a.get("bis", 0)) - float(_a.get("von", 0))
         except (TypeError, ValueError):
             continue
-        if _d > 8.0:
+        if _d > 8.0 and not test:
             fehler.append(
                 "Abschnitt %d laeuft %.1fs am Stueck — laenger als 8s in "
                 "einer Komposition wirkt schlaff. Teil ihn in zwei "
@@ -10846,7 +10982,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         # Rhythmus: kein Takt, aber weder Hektik noch tote Strecke.
         letzter = i == len(ab) - 1
         unten = MIN_TECHNISCH_S if k in KURZ_ERLAUBT else MIN_ABSCHNITT_S
-        if laenge < unten - 1e-6 and not (letzter and laenge >= MIN_KURZ_S):
+        if laenge < unten - 1e-6 and not (letzter and laenge >= MIN_KURZ_S) and not test:
             fehler.append(f"Abschnitt {i} ({von:.1f}-{bis:.1f}s): {laenge:.1f}s — "
                           f"'{k}' braucht mindestens {unten:.0f}s"
                           + (f" (unter {MIN_KURZ_S:.0f}s nur "
@@ -10862,15 +10998,18 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
             fehler.append(f"Abschnitt {i}: beginnt bei {von:.1f}s, der vorige endete "
                           f"bei {ende:.1f}s — luecken- und ueberlappungsfrei aneinander")
         ende = bis
-        if k == vorher:
+        if k == vorher and not test:
             fehler.append(f"Abschnitt {i} ({von:.1f}s): '{k}' steht zweimal "
                           f"hintereinander")
         vorher = k
 
         # Auftrag statt Prosa.
+        for zf in _zusatz_pruefen(b, i, von):
+            fehler.append(zf)
         if k == "vollbild":
-            if b:
-                fehler.append(f"Abschnitt {i} ({von:.1f}s): vollbild braucht nichts")
+            if b and (set(b.keys()) - set(ZUSATZ_FELDER)):
+                fehler.append(f"Abschnitt {i} ({von:.1f}s): vollbild braucht nichts "
+                              f"ausser zoom, ton, effekt")
             continue
         if k == "flaeche_kippt":
             # Die Flaeche legt das System selbst — sie braucht keinen Auftrag,
@@ -10956,7 +11095,7 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
     if abs(ende - dauer) > 1.0:
         fehler.append(f"der Plan endet bei {ende:.1f}s, das Video bei {dauer:.1f}s")
     for k, n in zaehler.items():
-        if n > MAX_JE_KOMPOSITION:
+        if n > MAX_JE_KOMPOSITION and not test:
             fehler.append(f"'{k}' kommt {n}-mal vor, hoechstens "
                           f"{MAX_JE_KOMPOSITION}-mal — du hast 16 zur Auswahl")
     # Drei Vollbild-Belege hintereinander sind ein Dokument-Slideshow, kein
@@ -10976,11 +11115,11 @@ def _plan_pruefen(plan: dict, dauer: float, material: list) -> list:
         fehler.append("metapher_full hoechstens EINMAL im Video — sie ist die "
                       "einzige Komposition ohne ihn im Bild, und die Ausnahme "
                       "bleibt eine Ausnahme. Bevorzugt im Hook.")
-    if weg > MAX_UEBERNAHMEN:
+    if weg > MAX_UEBERNAHMEN and not test:
         fehler.append(f"{weg} Uebernahmen (uebernahme + hell_dunkel), hoechstens "
                       f"{MAX_UEBERNAHMEN} — er soll nicht dauernd verschwinden")
     anteil = voll_s / max(dauer, 1e-6)
-    if anteil < MIN_VOLLBILD_ANTEIL:
+    if anteil < MIN_VOLLBILD_ANTEIL and not test:
         fehler.append(f"nur {anteil * 100:.0f}% Vollbild-Familie (vollbild, punch, "
                       f"drift, overlay_wandert, flaeche_kippt), mindestens "
                       f"{MIN_VOLLBILD_ANTEIL * 100:.0f}%")
@@ -12210,11 +12349,124 @@ TEXTTRAEGER = ("unten_aufbau", "oben_unterbau", "seite_links", "seite_rechts",
                "bubble", "bubble_wandert")
 
 
+def _zoom_kurven(z: dict, von_f: int, bis_f: int) -> list:
+    """Bestellte Kamerabewegung auf der Facecam-Kopie. Art, Dauer, Kurve und
+    Staerke aus dem Plan, alles gegen feste Grenzen geklemmt."""
+    art = str(z.get("art") or "rein")
+    kurve = str(z.get("kurve") or "easeInOut")
+    if kurve not in ZOOM_KURVEN:
+        kurve = "easeInOut"
+    try:
+        staerke = min(1.35, max(1.03, float(z.get("staerke") or 1.15)))
+    except (TypeError, ValueError):
+        staerke = 1.15
+    d = max(2, bis_f - von_f)
+    try:
+        dauer_f = int(round(float(z.get("dauer_s") or 0) * FPS))
+    except (TypeError, ValueError):
+        dauer_f = 0
+    dauer_f = min(d, max(3, dauer_f or d))
+    ende = von_f + dauer_f
+    if art == "raus":
+        return [{"property": "scale", "from": staerke, "to": 1.0,
+                 "start": von_f, "end": ende, "easing": kurve}]
+    if art in ("schwenk_links", "schwenk_rechts"):
+        w = (staerke - 1.0) / 2.0
+        von_x, bis_x = (w, -w) if art == "schwenk_links" else (-w, w)
+        return [{"property": "scale", "from": staerke, "to": staerke,
+                 "start": von_f, "end": bis_f, "easing": "linear"},
+                {"property": "x", "from": von_x, "to": bis_x,
+                 "start": von_f, "end": ende, "easing": kurve}]
+    if art == "puls":
+        mitte = von_f + max(3, dauer_f // 2)
+        return [{"property": "scale", "from": 1.0, "to": staerke,
+                 "start": von_f, "end": mitte, "easing": "spring" if kurve == "spring" else kurve},
+                {"property": "scale", "from": staerke, "to": 1.0,
+                 "start": mitte, "end": ende, "easing": "easeOut"}]
+    return [{"property": "scale", "from": 1.0, "to": staerke,
+             "start": von_f, "end": ende, "easing": kurve}]
+
+
+def _ton_bestellen(s: dict, b: dict, von_f: int, bis_f: int) -> list:
+    """Bestellte Impacts in die SFX-Liste der Sitzung. Nur Assets aus der
+    Bibliothek, Zeitpunkt innerhalb des Abschnitts, Gain 0,2 bis 1,0."""
+    aus = []
+    t = (b or {}).get("ton")
+    if not t:
+        return aus
+    for e in (t if isinstance(t, list) else [t]):
+        if not isinstance(e, dict):
+            continue
+        asset = str(e.get("impact") or "")
+        if asset not in SFX_LIBRARY:
+            continue
+        try:
+            bei = float(e.get("bei_s") if e.get("bei_s") is not None else von_f / FPS)
+        except (TypeError, ValueError):
+            bei = von_f / FPS
+        bei = min(bis_f / FPS, max(von_f / FPS, bei))
+        try:
+            gain = min(1.0, max(0.2, float(e.get("gain") or 1.0)))
+        except (TypeError, ValueError):
+            gain = 1.0
+        ev = {"asset": asset, "time": round(bei, 3), "gain": gain, "quelle": "plan"}
+        s.setdefault("sfx", []).append(ev)
+        aus.append(ev)
+    return aus
+
+
+def _effekt_ebenen(s: dict, b: dict, von_f: int, bis_f: int, i: int, frames: int) -> list:
+    """Bestellte Effekte als vollflaechige Ebenen ueber der Facecam, unter den
+    Elementen. Parameter kommen aus dem Abschnitt (Zeiten), nie aus dem Plan
+    als Zahlensalat."""
+    aus = []
+    e = (b or {}).get("effekt")
+    if not e:
+        return aus
+    von_s, bis_s = von_f / FPS, bis_f / FPS
+    for eintrag in (e if isinstance(e, list) else [e]):
+        name = eintrag.get("name") if isinstance(eintrag, dict) else eintrag
+        name = str(name or "")
+        if name not in EFFEKTE_ERLAUBT:
+            continue
+        try:
+            st = float((eintrag.get("staerke") if isinstance(eintrag, dict) else None) or 0)
+        except (TypeError, ValueError):
+            st = 0.0
+        params: dict = {}
+        if name == "colorWash":
+            params = {"washes": [{"start": von_s, "end": bis_s, "color": "accent",
+                                  "strength": min(0.6, max(0.1, st or 0.28))}]}
+        elif name == "brightness":
+            lvl = min(1.0, max(0.3, st or 0.6))
+            params = {"keys": [{"t": von_s, "level": 1.0}, {"t": von_s + 0.3, "level": lvl},
+                               {"t": max(von_s + 0.3, bis_s - 0.3), "level": lvl}, {"t": bis_s, "level": 1.0}]}
+        elif name == "cinematic":
+            params = {"bars": min(0.12, max(0.04, st or 0.07))}
+        elif name == "grain":
+            params = {"opacity": min(0.12, max(0.02, st or 0.05))}
+        elif name == "lightWrap":
+            params = {"gfx": [[von_f, bis_f]]}
+        elif name == "glitchSplit":
+            params = {"src": s.get("face_url")}
+        aus.append(_layer_defaults({
+            "id": f"fx_{name}_{i}", "z": Z_ELEMENT + 3,
+            "source": {"kind": "effect", "name": name, "params": params},
+            "from": von_f, "to": bis_f,
+            "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+            "herkunft": "plan:effekt", "konzept": name,
+        }, frames))
+    return aus
+
+
 def _komp_animate(k: str, b: dict, von_f: int, bis_f: int) -> tuple:
     """Die Bewegung, die den Namen erst zur Komposition macht. Gibt
     (Kurven fuer die Facecam-Kopie, Kurven fuer das Element) zurueck."""
     d = max(2, bis_f - von_f)
     rein = min(bis_f, von_f + max(3, int(0.25 * FPS)))
+    if k in ("punch", "vollbild") and isinstance(b, dict) and b.get("zoom"):
+        # Bestellte Kurve schlaegt die Vorgabe.
+        return (_zoom_kurven(b["zoom"], von_f, bis_f), [])
     if k == "punch":
         # Rein und wieder raus. Zwei Kurven auf derselben Eigenschaft gehen hier,
         # weil die Ebene nur im Fenster existiert: davor gibt es sie nicht.
@@ -12309,8 +12561,31 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     bis_f = min(frames, int(round(float(a["bis"]) * FPS)))
     kopf = {"nr": i, "von": a["von"], "bis": a["bis"], "komposition": k,
             "block": a.get("block", "")}
+    ton_ev = _ton_bestellen(s, b if isinstance(b, dict) else {}, von_f, bis_f)
+    fx = _effekt_ebenen(s, b if isinstance(b, dict) else {}, von_f, bis_f, i, frames)
+    if k == "vollbild" and isinstance(b, dict) and b.get("zoom") and bis_f - von_f >= 2:
+        # Vollbild MIT bestellter Kamerabewegung: eine Facecam-Kopie traegt
+        # die Kurve, Zoomursprung ist das Gesicht.
+        face = s.get("face") or {}
+        cam = _layer_defaults({
+            "id": f"cam_{i}", "z": Z_ELEMENT + 1,
+            "source": {"kind": "video", "url": s["face_url"]},
+            "from": max(0, von_f - 2), "to": min(frames, bis_f + 1),
+            "transform": {"x": 0, "y": 0, "w": 1, "h": 1,
+                          "origin": [face.get("origin_x", 0.5), face.get("origin_y", 0.42)]},
+            "animate": _zoom_kurven(b["zoom"], von_f, bis_f),
+            "herkunft": "plan:zoom", "konzept": str(b["zoom"].get("art") or "")[:40],
+        }, frames)
+        s["layers"].append(cam)
+        s["layers"].extend(fx)
+        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam",
+                "ebenen": [cam["id"]] + [l["id"] for l in fx],
+                "zoom": str(b["zoom"].get("art") or ""), "ton": ton_ev}
     if k == "vollbild" or bis_f - von_f < 2:
-        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam"}
+        s["layers"].extend(fx)
+        return {**kopf, "umgesetzt": "vollbild", "quelle_art": "facecam",
+                **({"ebenen": [l["id"] for l in fx]} if fx else {}),
+                **({"ton": ton_ev} if ton_ev else {})}
     if k == "flaeche_kippt":
         # Eine Toenung in der Markenfarbe, die kommt und wieder geht. Die
         # Deckkraft-Kurve steht schon in _komp_animate.
@@ -12349,7 +12624,7 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         return _abweichung(kopf, k, "vollbild", "unbekannte Komposition")
     # Minimal-Regel: gebannte Kompositionen werden zur uebernahme — EIN
     # Element traegt vollflaechig, er ist raus. Kein Sonderfall, kein Rest.
-    if k in MINIMAL_VERBOTEN:
+    if k in MINIMAL_VERBOTEN and not s.get("testlauf"):
         log.info("[BAU] %d '%s' → uebernahme (Minimal-Regel)", i, k)
         k = "uebernahme"
 
@@ -12517,9 +12792,12 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             "herkunft": f"plan:{k}", "konzept": str(a.get("block") or "")[:80],
         }, frames))
 
+    neu.extend(fx)
     s["layers"].extend(neu)
     aus = {**kopf, "umgesetzt": k, "quelle_art": res.get("quelle_art") or "facecam",
            "ebenen": [l["id"] for l in neu], "kosten": res.get("kosten", 0.0)}
+    if ton_ev:
+        aus["ton"] = ton_ev
     if res.get("ueberlauf"):
         aus["abweichung"] = {"geplant": k, "tatsaechlich": k,
                              "grund": "Element laeuft aus der Leinwand: "
@@ -12729,6 +13007,9 @@ async def _build_impl(req: BuildRequest):
     plan = req.plan or s.get("plan")
     if not plan or not (plan.get("abschnitte") or []):
         raise HTTPException(status_code=400, detail="kein Plan zu dieser Sitzung")
+    # Pruefrender (15.09.): plan.testlauf=true hebt die Minimal-Sperre auf,
+    # damit gebannte Kompositionen einzeln gerendert und beurteilt werden koennen.
+    s["testlauf"] = bool(plan.get("testlauf"))
     # Ein hakender Abschnitt darf nicht den ganzen Plan wegwerfen. Beim Planen
     # bleiben die Regeln hart (dafuer gibt es die Rueckgabe an den Art
     # Director); beim BAUEN wird der betroffene Abschnitt vollbild und steht
@@ -12987,7 +13268,13 @@ WAS KEIN MANGEL IST
 - Das Fehlen von etwas, das der Plan gar nicht vorsieht.
 - Abschnitte mit komposition 'vollbild': dort ist NUR er und die Untertitel
   geplant. Dass dort kein Element steht, ist kein Mangel.
-- Die Untertitel: sie laufen immer und gehoeren dazu.
+- Die Untertitel: sie laufen immer und gehoeren dazu. Sie stehen im
+  UNTEREN Drittel, gross, weiss mit Akzentfarbe, EIN BIS DREI WOERTER auf
+  einmal, wechseln im Sprechtempo und geben WOERTLICH wieder, was er sagt.
+  Sie sind NIE Plantext. Ein Untertitel ist kein 'falscher_text' und kein
+  'doppelter_text', auch nicht in Abschnitten ohne Element und auch nicht,
+  wenn der Plan dort keinen Text vorsieht. Plantext sind nur Karten, Titel,
+  Zahlen in Kaesten oder auf Flaechen, die NICHT im Sprechtempo wechseln.
 
 SCHWERE
   hart   man sieht es sofort und es stoert die Aussage

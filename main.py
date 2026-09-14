@@ -13431,12 +13431,15 @@ def _untertitel_ausfiltern(maengel: list, words: list, fenster_s: float = 3.0) -
         zitate = re.findall(r"'([^']{2,80})'|\"([^\"]{2,80})\"", was)
         zitate = [a or b for a, b in zitate]
         bei = float(m.get("bei") or 0.0)
-        nahe = {_norm(_w(x)) for x in words if abs(_t(x) - bei) <= fenster_s}
-        nahe.discard("")
         ist_untertitel = False
         for z in zitate:
             toks = [_norm(t) for t in z.split()]
             toks = [t for t in toks if t]
+            # Fenster waechst mit der Zitatlaenge: sieben Woerter Untertitel
+            # liegen ueber vier Sekunden Sprechzeit, nicht ueber drei.
+            fenster = fenster_s + 0.5 * len(toks)
+            nahe = {_norm(_w(x)) for x in words if abs(_t(x) - bei) <= fenster}
+            nahe.discard("")
             if toks and all(t in nahe for t in toks):
                 ist_untertitel = True
                 break

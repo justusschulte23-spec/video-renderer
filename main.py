@@ -6745,6 +6745,12 @@ _REMBG_SESSION = None
 _RVM_MODEL = None
 
 
+# Freisteller (15.09.): 432 px breit und downsample 0.5 statt 540/0.6 —
+# RVM auf Railway-CPU lag bei ~8 s je Frame, die Matte fiel JEDES Mal aus.
+MATTE_W = int(os.environ.get("MATTE_W", "432"))
+MATTE_DOWNSAMPLE = float(os.environ.get("MATTE_DOWNSAMPLE", "0.5"))
+
+
 def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                  W: int = 480) -> str:
     """Self-hosted background removal (rembg, CPU — no API cost): matte the speaker
@@ -6762,6 +6768,10 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         rvm = None
         try:
             import torch
+            try:
+                torch.set_num_threads(max(1, int(os.cpu_count() or 1)))
+            except Exception:
+                pass
             if _RVM_MODEL is None:
                 _RVM_MODEL = torch.hub.load(
                     "PeterL1n/RobustVideoMatting", "mobilenetv3",
@@ -6795,12 +6805,16 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
             # Matte fiel ohnehin jedes Mal aus (08.09.: 10316 s > 420 s).
             if idx and (idx == 5 or idx % 25 == 0):
                 _abbruch_pruefen()
-                projektion = (time.time() - t_start) / idx * max(
-                    total, max_frames or total)
+                # Benchmark 14.09.: hier stand max(total, max_frames) — der
+                # Hook (140 Frames) wurde auf 1195 Frames hochgerechnet und
+                # fiel mit "Projektion 9628 s" aus, obwohl er 140 gebraucht
+                # haette. Projiziert wird auf das, was wirklich gemattet wird.
+                noetig = min(total, max_frames) if (total and max_frames) else (max_frames or total)
+                projektion = (time.time() - t_start) / idx * max(1, noetig)
                 if projektion > deckel_s:
                     log.warning("[MATTE] Deckel: %d/%d Frames, Projektion "
                                 "%.0fs > %.0fs — Matte faellt aus, Original-"
-                                "Hintergrund bleibt", idx, total,
+                                "Hintergrund bleibt", idx, noetig,
                                 projektion, deckel_s)
                     cap.release()
                     return ""
@@ -6818,7 +6832,7 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                 with torch.no_grad():
                     src_t = (torch.from_numpy(rgb).permute(2, 0, 1)
                              .unsqueeze(0).float() / 255)
-                    _fgr, pha, *rec = rvm(src_t, *rec, downsample_ratio=0.6)
+                    _fgr, pha, *rec = rvm(src_t, *rec, downsample_ratio=MATTE_DOWNSAMPLE)
                 a = (pha[0, 0].numpy() * 255).astype("uint8")
                 cut = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
                 cut[:, :, 3] = a
@@ -6853,18 +6867,52 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
 OMNI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 
-def _omni_clip(idee: str, k: str, job_dir: Path) -> str:
+def _farbwort(hexwert: str, hell_dunkel: bool = False) -> str:
+    """Hex -> Farbwort fuer Bildprompts. Benchmark 14.09.: der Omni-Clip
+    malte '#8B5CF6' als Schrift ins Bild, weil der Hexcode im Prompt stand."""
+    try:
+        h = str(hexwert or "").lstrip("#")
+        r, g, b = int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255
+    except Exception:
+        return "soft violet"
+    mx, mn = max(r, g, b), min(r, g, b)
+    l = (mx + mn) / 2
+    if hell_dunkel:
+        return "light gray" if l > 0.6 else ("mid gray" if l > 0.3 else "near-black")
+    if mx - mn < 0.08:
+        return "neutral gray"
+    d = mx - mn
+    if mx == r:
+        hue = (60 * ((g - b) / d) + 360) % 360
+    elif mx == g:
+        hue = 60 * ((b - r) / d) + 120
+    else:
+        hue = 60 * ((r - g) / d) + 240
+    namen = [(15, "warm red"), (45, "amber orange"), (70, "golden yellow"), (160, "green"),
+             (200, "teal"), (250, "blue"), (285, "violet"), (330, "magenta"), (360, "warm red")]
+    for grenze, name in namen:
+        if hue < grenze:
+            return name
+    return "violet"
+
+
+def _omni_clip(idee: str, k: str, job_dir: Path, brand: Optional[dict] = None) -> str:
     """Gemini Omni Flash (Interactions API): 4s-Szenen-Clip im hellen
     Studio-Look, als Palindrom auf ~8s geloopt, hochgeladen. '' bei
     Fehler — dann greift der nano-banana-Rueckfall. ~0,40 USD je Clip."""
     key = os.environ.get("GOOGLE_AI_KEY") or ""
     if not key:
         return ""
-    stil = ("premium minimal tech promo in the style of a Google Gemini ad, "
-            "clean light-gray studio background (#F1F0F4), soft purple "
-            "(#8B5CF6) rim light, soft contact shadow, generous empty space, "
-            "smooth spring-like motion, static camera, no shake. NO text, "
-            "NO letters, NO logos, NO faces.")
+    br = brand or BRAND_PRESETS["justus"]
+    grund = _farbwort(br.get("bg", "#F1F0F4"), hell_dunkel=True)
+    akzent = _farbwort(br.get("accent", "#8B5CF6"))
+    # Farben als Worte, nie als Hexcode: der Code landet sonst als Schrift
+    # im Bild (Benchmark 14.09., '#8B5CF6' und '@F1F6' im Hook-Clip).
+    stil = ("premium minimal studio promo, clean %s studio background, soft %s "
+            "rim light, soft contact shadow, generous empty space, smooth "
+            "spring-like motion, static camera, no shake. Absolutely NO text, "
+            "NO letters, NO numbers, NO symbols, NO watermarks, NO logos, "
+            "NO faces." % (grund, akzent))
     lage = (" COMPOSITION: key motifs across the top and along the left and "
             "right edges; the lower center third stays calm and empty - a "
             "presenter will be cut out and standing there."
@@ -6919,7 +6967,7 @@ def _hook_freisteller(s: dict, bis_f: int) -> str:
     GRUND, er steht davor — Motive liegen oben/links/rechts, die untere
     Bildmitte gehoert ihm. '' wenn rembg fehlt oder scheitert."""
     return _matte_video(Path(s["facecam_path"]), Path(s["dir"]),
-                        max_frames=int(bis_f) + 2, W=540)
+                        max_frames=int(bis_f) + 2, W=MATTE_W)
 
 
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
@@ -8965,6 +9013,48 @@ def tool_generate_image(req: GenerateImageRequest):
                 "layer_source": {"kind": "image", "url": url}}
     finally:
         shutil.rmtree(job, ignore_errors=True)
+
+
+@app.get("/tool/diag/matte")
+def diag_matte(frames: int = 8, w: int = 0):
+    """Wie schnell mattet dieser Container wirklich? Misst RVM und rembg an
+    einem synthetischen Clip, Sekunden je Frame. Gemessen, nicht angenommen."""
+    import numpy as np, cv2
+    w = int(w or MATTE_W)
+    h = int(w * 16 / 9)
+    aus = {"cpus": os.cpu_count(), "w": w, "frames": int(frames)}
+    rgb = (np.random.rand(h, w, 3) * 255).astype("uint8")
+    try:
+        import torch
+        torch.set_num_threads(max(1, int(os.cpu_count() or 1)))
+        global _RVM_MODEL
+        t0 = time.time()
+        if _RVM_MODEL is None:
+            _RVM_MODEL = torch.hub.load("PeterL1n/RobustVideoMatting", "mobilenetv3",
+                                        trust_repo=True).eval()
+        aus["rvm_laden_s"] = round(time.time() - t0, 1)
+        rec = [None] * 4
+        t0 = time.time()
+        with torch.no_grad():
+            for _ in range(int(frames)):
+                src_t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float() / 255
+                _f, _p, *rec = _RVM_MODEL(src_t, *rec, downsample_ratio=MATTE_DOWNSAMPLE)
+        aus["rvm_s_je_frame"] = round((time.time() - t0) / int(frames), 2)
+        aus["torch_threads"] = torch.get_num_threads()
+    except Exception as exc:
+        aus["rvm_fehler"] = str(exc)[:200]
+    try:
+        from rembg import remove, new_session
+        t0 = time.time()
+        ses = new_session("u2netp")
+        aus["rembg_laden_s"] = round(time.time() - t0, 1)
+        t0 = time.time()
+        for _ in range(int(frames)):
+            remove(rgb, session=ses)
+        aus["rembg_s_je_frame"] = round((time.time() - t0) / int(frames), 2)
+    except Exception as exc:
+        aus["rembg_fehler"] = str(exc)[:200]
+    return aus
 
 
 @app.get("/tool/diag/playwright")
@@ -11788,7 +11878,8 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
         if int(s.get("omni_clips", 0)) < OMNI_MAX and not a.get("_kein_omni"):
             try:
                 omni_url = await asyncio.to_thread(
-                    _omni_clip, str(b.get("bild_prompt"))[:400], k, s["dir"])
+                    _omni_clip, str(b.get("bild_prompt"))[:400], k, s["dir"],
+                    s.get("brand") or None)
                 if omni_url:
                     s["omni_clips"] = int(s.get("omni_clips", 0)) + 1
                     return {"quelle_art": "omni", "kosten": OMNI_USD,
@@ -12279,6 +12370,25 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     cam_anim, el_anim = _komp_animate(k, b, von_f, bis_f)
     neu, res = [], {}
 
+    # Freisteller ZUERST (15.09.): Benchmark 14.09. zeigte den Hook in beiden
+    # Laeufen ohne Sprecher, weil die Matte still ausfiel und der teure
+    # Omni-Clip trotzdem gekauft wurde. Jetzt: erst matten; scheitert das,
+    # wird nichts gekauft, der Hook bleibt Vollbild mit ihm, und die
+    # Abweichung steht im Protokoll statt nur im Log.
+    matte = ""
+    if k == "metapher_full":
+        if bis_f <= int(12 * FPS):
+            matte = await asyncio.to_thread(_hook_freisteller, s, bis_f)
+        if not matte:
+            log.warning("[BAU] %d metapher_full: Freisteller lieferte nichts — "
+                        "Hook bleibt Vollbild mit ihm, Szene nicht gekauft", i)
+            aus = _abweichung(kopf, "metapher_full", "vollbild",
+                              "Freisteller fehlgeschlagen (Matte-Deckel oder "
+                              "Modell) — Hook bleibt Vollbild mit ihm, Szene "
+                              "nicht gekauft")
+            aus["quelle_art"] = "facecam"
+            return aus
+
     if k not in OHNE_MATERIAL:
         res = await _beschaffen(s, a, i)
         if not res.get("quelle_art"):
@@ -12374,9 +12484,6 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             # CPU mattet ~2-4 Frames/s, ein spaeter 40s-Abschnitt wuerde den
             # Render minutenlang anhalten. Ohne Matte bleibt das alte
             # Verhalten: Bild vollflaechig, er ist kurz raus.
-            matte = ""
-            if bis_f <= int(12 * FPS):
-                matte = await asyncio.to_thread(_hook_freisteller, s, bis_f)
             if matte:
                 neu.append(_layer_defaults({
                     "id": f"cam_frei_{i}", "z": Z_ELEMENT + 1,

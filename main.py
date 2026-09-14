@@ -10688,7 +10688,7 @@ BEISPIEL_LAUF_B = json.dumps({"momente": [
     {"von": 15.5, "bis": 19.9, "zustand": "hell_dunkel", "braucht": {"art_element": "zitat", "text": ["Sein Publikum scrollt"], "motion": "typewriter", "zeigt": "Satz tippt sich, Grund gewendet", "bewegung": "Zeichen fuer Zeichen"}, "grund": "der Umschlag"},
     {"von": 19.9, "bis": 23.9, "zustand": "er", "effekt": ["vignette"], "grund": "Aufzaehlung, er allein"},
     {"von": 23.9, "bis": 25.9, "zustand": "er", "zoom": {"art": "puls", "dauer_s": 1.2, "kurve": "spring", "staerke": 1.2}, "grund": "Pointe"},
-    {"von": 25.9, "bis": 27.1, "zustand": "er", "punch_wort": null, "ton": [{"impact": "impact_bass_drop_01", "bei_s": 26.4, "gain": 1.0}], "grund": "Loesungswort"},
+    {"von": 25.9, "bis": 27.1, "zustand": "er", "punch_wort": None, "ton": [{"impact": "impact_bass_drop_01", "bei_s": 26.4, "gain": 1.0}], "grund": "Loesungswort"},
     {"von": 27.1, "bis": 31.1, "zustand": "motiv", "braucht": {"art_element": "befund", "text": ["Problem benennen"], "motion": "typewriter", "zeigt": "Karte oben rechts", "bewegung": "tippt sich ein"}, "grund": "Anweisung neben ihm"},
     {"von": 31.1, "bis": 35.6, "zustand": "szene", "szene": "drei Betonsilos, zwischen ihnen versickert Wasser", "grund": "Daten in Silos"},
     {"von": 35.6, "bis": 39.5, "zustand": "motiv", "braucht": {"art_element": "titel", "text": ["Kommentier PROBLEM"], "motion": "typewriter", "zeigt": "Karte oben rechts", "bewegung": "tippt sich ein"}, "grund": "Ausfahrt bis zum letzten Frame"}

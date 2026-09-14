@@ -8120,9 +8120,36 @@ BRAND_PRESETS = {
 CAPTION_STIL = {"justus": "hormozi", "tim": "editorial"}
 
 
+_BRAND_COLORS_CACHE: dict = {}
+
+
+def _client_brand_colors(client_id: str) -> dict:
+    """clients.brand_colors des Kunden (akzent, flaeche, tinte, neben, ...).
+    Die Datenbank ist die Wahrheit; das Template ist nur noch Rueckfall."""
+    cid = (client_id or "").lower()
+    if not cid or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {}
+    if cid in _BRAND_COLORS_CACHE:
+        return _BRAND_COLORS_CACHE[cid]
+    farben = {}
+    try:
+        hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients",
+                         params={"client_id": f"eq.{cid}", "select": "brand_colors"},
+                         headers=hdr, timeout=15).json()
+        farben = (r[0].get("brand_colors") if r else None) or {}
+        if not isinstance(farben, dict):
+            farben = {}
+    except Exception as exc:
+        log.warning("[BRAND] brand_colors fuer %s nicht geladen: %s", cid, exc)
+    _BRAND_COLORS_CACHE[cid] = farben
+    return farben
+
+
 def _brand_fuer(client_id: str, tpl: dict) -> dict:
-    """Markenfarben des Kunden. Das Template darf die Akzente ueberschreiben,
-    der Rest kommt aus dem Preset."""
+    """Markenfarben des Kunden. Reihenfolge: clients.brand_colors (Dashboard,
+    die Wahrheit) > Template-Farben > Preset. Kein Wert steht fest im Code —
+    der Amethyst-Fall (Tim bekam Justus' Lila) darf nicht wiederkommen."""
     b = dict(BRAND_PRESETS.get((client_id or "justus").lower(), BRAND_PRESETS["justus"]))
     c = _tpl_colors(tpl) or {}
     if c.get("primary"):
@@ -8131,6 +8158,18 @@ def _brand_fuer(client_id: str, tpl: dict) -> dict:
         b["accent2"] = c["secondary"]
     if c.get("bg"):
         b["bg"] = c["bg"]
+    k = _client_brand_colors(client_id)
+    if k.get("akzent"):
+        b["accent"] = k["akzent"]
+    if k.get("flaeche"):
+        b["bg"] = k["flaeche"]
+        b["bgGlow"] = k.get("offen") or k["flaeche"]
+    if k.get("tinte"):
+        b["text"] = k["tinte"]
+    if k.get("neben"):
+        b["muted"] = k["neben"]
+    if k.get("gut") and not c.get("secondary"):
+        b["accent2"] = k["gut"]
     return b
 
 
@@ -10211,6 +10250,18 @@ EIGENBEWEGUNG = ("punch", "drift", "durchforsten", "overlay_wandert", "flaeche_k
 ART_ELEMENTE = ("stat", "vergleich", "ablauf", "zitat", "titel", "befund", "marke",
                 "hero_illustration")
 SCHMALE = ("seite_links", "seite_rechts", "bubble", "bubble_wandert")
+# Curvable-Szenen (14.09.): sieben freigegebene Szenen als Ebenen-Quelle
+# 'motion' im Renderer. Festes Vokabular — der Code waehlt, das Modell darf
+# eine Textszene NENNEN, nicht erfinden. Grainient kommt zuletzt dazu.
+MOTION_AN = os.environ.get("MOTION_AN", "1") != "0"
+MOTION_TEXT_SZENEN = ("typewriter", "slide", "cascade", "swap")
+MOTION_FLAECHEN = ("drops", "bulb", "bloom")
+MOTION_SZENEN = MOTION_TEXT_SZENEN + MOTION_FLAECHEN
+# Welche Textart welche Szene bekommt, wenn der Plan nichts nennt.
+MOTION_JE_ART = {"zitat": "typewriter", "titel": "typewriter",
+                 "befund": "slide", "vergleich": "swap"}
+MOTION_MAX_JE = 3          # dieselbe Regel wie fuer Kompositionen
+MOTION_KURZ_MAX_WORTE = 3  # slide und cascade sind einzeilig
 SCHMAL_MAX_WORTE = 3
 MAX_JE_KOMPOSITION = 3
 MAX_UEBERNAHMEN = 2
@@ -10365,6 +10416,11 @@ WAS DU AUS DEM MATERIAL LIEST (steht unten als Daten)
 "braucht" fuer motiv und beleg — ein Auftrag, keine Prosa:
   art_element  stat (EINE Zahl gross) | ablauf (Schritte) | befund
                (Haken/X-Liste) | vergleich | zitat | marke (Logo-Kachel)
+  motion       nur bei zitat, titel, befund, vergleich; feste Liste:
+               typewriter (Satz tippt sich) | slide (bis drei Woerter heben
+               sich ein) | swap (vergleich: Wort 1 wird Wort 2) | cascade
+               (bis drei Woerter ziehen durch). Fehlt es, waehlt der Code.
+               Nichts anderes erfinden.
   text         kurze Zeilen; Zustandszeichen davor: "+ geht" / "- geht
                nicht" / "! Vorsicht" (das Zeichen steht nie im Bild)
   zeigt        was zu sehen ist, konkret
@@ -11380,6 +11436,37 @@ ECKEN = (
 )
 
 
+def _motion_quelle(s: dict, a: dict, b: dict, art: str, k: str, kasten: dict) -> Optional[dict]:
+    """Textelement als Curvable-Szene. Gibt die Ebenen-Quelle zurueck oder None
+    (dann baut das Kit wie bisher). Regeln stehen hier, nicht im Prompt:
+    slide/cascade nur bis drei Woerter, cascade nur formatfuellend, hoechstens
+    MOTION_MAX_JE je Szene und Video."""
+    auftrag = _auftrag_aus_braucht(a)
+    zeilen = [z for z in [auftrag.get("hauptwert"), auftrag.get("beschriftung"),
+                          auftrag.get("einordnung")] if z]
+    if isinstance(b.get("text"), list):
+        zeilen = [str(z).strip().lstrip("+-! ").strip() for z in b["text"] if str(z).strip()]
+    if not zeilen:
+        return None
+    text = zeilen[0][:60]
+    text2 = (zeilen[1] if len(zeilen) > 1 else "")[:60]
+    wunsch = str(b.get("motion") or "").lower().strip()
+    szene = wunsch if wunsch in MOTION_TEXT_SZENEN else MOTION_JE_ART.get(art, "typewriter")
+    if szene == "swap" and not text2:
+        szene = "typewriter"
+    breit = float((kasten or {}).get("w", 1)) >= 0.99
+    if szene in ("slide", "cascade") and len(text.split()) > MOTION_KURZ_MAX_WORTE:
+        szene = "typewriter"
+    if szene == "cascade" and not breit:
+        szene = "typewriter"
+    zaehler = s.setdefault("_motion_zaehler", {})
+    if zaehler.get(szene, 0) >= MOTION_MAX_JE:
+        return None
+    zaehler[szene] = zaehler.get(szene, 0) + 1
+    return {"kind": "motion", "szene": szene, "text": text, "text2": text2,
+            "size": 0, "transparent": bool(breit and k != "motiv")}
+
+
 def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
                     bild_url: str = "") -> dict:
     """Markenflaeche hinter durchsichtigen Elementen und hinter der Bubble.
@@ -11388,9 +11475,15 @@ def _backdrop_layer(a: dict, von_f: int, bis_f: int, frames: int, i: int,
     das ganze Bauwerk vermeiden soll."""
     scene = ({"type": "image", "imageUrl": bild_url} if bild_url
              else {"type": "statement", "title": "", "subtitle": ""})
+    source = {"kind": "scene", "scene": scene}
+    if not bild_url and MOTION_AN:
+        # Markenflaeche aus der Bibliothek, im Wechsel — Farben kommen im
+        # Renderer aus dem Brand, hier steht kein Farbwert.
+        source = {"kind": "motion", "szene": MOTION_FLAECHEN[i % len(MOTION_FLAECHEN)],
+                  "text": "", "text2": "", "size": 0, "transparent": False}
     return _layer_defaults({
         "id": f"bg_{i}", "z": Z_HINTERGRUND,
-        "source": {"kind": "scene", "scene": scene},
+        "source": source,
         "from": von_f, "to": bis_f,
         "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
         "herkunft": "plan:hintergrund",
@@ -11796,6 +11889,12 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     w_px = max(200, int(round(float(kasten.get("w", 1)) * W)))
     h_px = max(160, int(round(float(kasten.get("h", 1)) * H)))
     art = str(b.get("art_element") or "").lower()
+    if MOTION_AN and art in MOTION_JE_ART:
+        ms = _motion_quelle(s, a, b, art, k, kasten)
+        if ms:
+            log.info("[BAU] %d '%s' als Motion-Szene '%s' — 0 USD", i, art, ms["szene"])
+            return {"quelle_art": "motion", "runden": 0, "kosten": 0.0,
+                    "sekunden_material": sek, "layer_source": ms}
     _kit_geruest = ""
     if art in kit.KANN:
         auftrag = _auftrag_aus_braucht(a)

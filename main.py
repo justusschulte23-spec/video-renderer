@@ -6829,8 +6829,39 @@ MATTE_W = int(os.environ.get("MATTE_W", "432"))
 MATTE_DOWNSAMPLE = float(os.environ.get("MATTE_DOWNSAMPLE", "0.5"))
 
 
+def _cpu_kontingent() -> int:
+    """Echte CPUs dieses Containers. os.cpu_count() meldet die Host-CPUs
+    (48), das Kontingent des Containers ist kleiner. Mit 48 Threads auf
+    wenigen Kernen lief RVM mit 7,6 s je Frame statt unter einer Sekunde
+    (15.09., /tool/diag/matte) - der Freisteller im Hook fiel so bei jedem
+    Render aus. Gelesen wird cgroup v2 (cpu.max), dann v1, sonst Host."""
+    host = int(os.cpu_count() or 1)
+    try:
+        roh = open("/sys/fs/cgroup/cpu.max").read().split()
+        if roh and roh[0] != "max":
+            return max(1, min(host, int(float(roh[0]) / float(roh[1]))))
+    except Exception:
+        pass
+    try:
+        q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read().strip())
+        per = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read().strip())
+        if q > 0 and per > 0:
+            return max(1, min(host, q // per))
+    except Exception:
+        pass
+    env = os.environ.get("MATTE_THREADS", "")
+    return max(1, int(env)) if env.isdigit() else host
+
+
+def _torch_threads() -> int:
+    env = os.environ.get("MATTE_THREADS", "")
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    return max(1, _cpu_kontingent())
+
+
 def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
-                 W: int = 480) -> str:
+                 W: int = 480, kante: str = "") -> str:
     """Self-hosted background removal (rembg, CPU — no API cost): matte the speaker
     onto transparency and return a Cloudinary alpha-webm URL. Rendered at reduced
     width for speed; Remotion upscales it over the generated canvas. '' on failure
@@ -6845,9 +6876,11 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         # torch im Image fehlt.
         rvm = None
         try:
+            if kante == "rembg":
+                raise RuntimeError("rembg ausdruecklich verlangt")
             import torch
             try:
-                torch.set_num_threads(max(1, int(os.cpu_count() or 1)))
+                torch.set_num_threads(_torch_threads())
             except Exception:
                 pass
             if _RVM_MODEL is None:
@@ -6861,6 +6894,10 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
             from rembg import remove, new_session
             if _REMBG_SESSION is None:
                 _REMBG_SESSION = new_session("u2netp")  # light + fast
+        if rvm is None:
+            from rembg import remove, new_session
+            if _REMBG_SESSION is None:
+                _REMBG_SESSION = new_session("u2netp")
         cap = cv2.VideoCapture(str(facecam_path))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -6898,13 +6935,24 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                 rate = (time.time() - (t_warm or t_start)) / max(1, idx - (5 if t_warm else 0))
                 projektion = rate * max(1, noetig)
                 if projektion > deckel_s:
-                    log.warning("[MATTE] Deckel: %d/%d Frames, Projektion "
-                                "%.0fs > %.0fs — Matte faellt aus, Original-"
-                                "Hintergrund bleibt", idx, noetig,
-                                projektion, deckel_s)
                     cap.release()
-                    _MATTE_GRUND["text"] = ("Deckel: %d/%d Frames, Projektion %.0f s > %.0f s"
-                                            % (idx, noetig, projektion, deckel_s))
+                    grund = ("Deckel %s: %d/%d Frames, Projektion %.0f s > %.0f s"
+                             % ("rvm" if rvm is not None else "rembg", idx, noetig,
+                                projektion, deckel_s))
+                    if rvm is not None:
+                        # Definierte Alternative (15.09.): RVM zu langsam ->
+                        # rembg von vorn (0,2 s je Frame). Kante etwas
+                        # weicher, aber er steht im Hook - nie still leer.
+                        log.warning("[MATTE] %s — Rueckfall auf rembg", grund)
+                        import shutil as _sh
+                        _sh.rmtree(frames, ignore_errors=True)
+                        url = _matte_video(facecam_path, job_dir, max_frames=max_frames,
+                                           W=W, kante="rembg")
+                        if url:
+                            _MATTE_GRUND["rueckfall"] = grund
+                        return url
+                    log.warning("[MATTE] %s — Matte faellt aus", grund)
+                    _MATTE_GRUND["text"] = grund
                     return ""
             ok, frame = cap.read()
             if not ok:
@@ -6944,7 +6992,9 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                         "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "2M", str(webm)],
                        check=True, capture_output=True)
         url = upload_cloudinary(webm, f"matte_{uuid.uuid4().hex[:8]}")
-        log.info("[MATTE] %d frames → %s", idx, url)
+        log.info("[MATTE] %d frames (%s, %.1f s) → %s", idx,
+                 "rvm" if rvm is not None else "rembg", time.time() - t_start, url)
+        _MATTE_GRUND["kante"] = "rvm" if rvm is not None else "rembg"
         return url
     except JobAbbruch:
         raise
@@ -7062,11 +7112,19 @@ def _hook_freisteller(s: dict, bis_f: int) -> str:
     GRUND, er steht davor — Motive liegen oben/links/rechts, die untere
     Bildmitte gehoert ihm. '' wenn rembg fehlt oder scheitert; der Grund
     steht dann in s["matte_grund"] (15.09.: nie still)."""
+    _MATTE_GRUND.clear()
     _MATTE_GRUND["text"] = ""
     url = _matte_video(Path(s["facecam_path"]), Path(s["dir"]),
                        max_frames=int(bis_f) + 2, W=MATTE_W)
     if not url:
         s["matte_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
+    else:
+        s["matte_kante"] = _MATTE_GRUND.get("kante") or ""
+        if _MATTE_GRUND.get("rueckfall"):
+            _warnung(s, "hook_freisteller_rueckfall",
+                     "Freisteller im Hook ueber rembg statt RVM (%s). Er steht "
+                     "im Bild, die Kante kann weicher sein." % _MATTE_GRUND["rueckfall"],
+                     melden=True)
     return url
 
 
@@ -9158,17 +9216,19 @@ def tool_generate_image(req: GenerateImageRequest):
 
 
 @app.get("/tool/diag/matte")
-def diag_matte(frames: int = 8, w: int = 0):
+def diag_matte(frames: int = 8, w: int = 0, threads: int = 0):
     """Wie schnell mattet dieser Container wirklich? Misst RVM und rembg an
-    einem synthetischen Clip, Sekunden je Frame. Gemessen, nicht angenommen."""
+    einem synthetischen Clip, Sekunden je Frame. Gemessen, nicht angenommen.
+    ?threads=N misst RVM mit N Threads (sonst das Kontingent)."""
     import numpy as np, cv2
     w = int(w or MATTE_W)
     h = int(w * 16 / 9)
-    aus = {"cpus": os.cpu_count(), "w": w, "frames": int(frames)}
+    aus = {"cpus": os.cpu_count(), "kontingent": _cpu_kontingent(),
+           "w": w, "frames": int(frames)}
     rgb = (np.random.rand(h, w, 3) * 255).astype("uint8")
     try:
         import torch
-        torch.set_num_threads(max(1, int(os.cpu_count() or 1)))
+        torch.set_num_threads(int(threads) if threads else _torch_threads())
         global _RVM_MODEL
         t0 = time.time()
         if _RVM_MODEL is None:

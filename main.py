@@ -6877,18 +6877,26 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         # ''-Rueckweg (Original-Hintergrund bleibt). Ehrlich geloggt.
         deckel_s = float(os.environ.get("MATTE_DECKEL_S", "420"))
         t_start = time.time()
+        t_warm = None          # Zeitmarke nach dem Warmlauf (Frame 5)
         while True:
-            # Erste Projektion schon nach 5 Frames: auf Railway-CPU kostet ein
-            # Frame ~8 s, die 25-Frame-Probe allein 200 s je Render — und die
-            # Matte fiel ohnehin jedes Mal aus (08.09.: 10316 s > 420 s).
-            if idx and (idx == 5 or idx % 25 == 0):
+            # Projektion (15.09., Tims Material): die ersten Frames sind
+            # Warmlauf - nach einem Deploy kostete Frame 1-5 je 6,8 s
+            # (Projektion 952 s), warm laeuft RVM mit 0,37 s je Frame.
+            # Deshalb: die Rate ab Frame 5 messen und erst ab Frame 25
+            # projizieren. Ein wirklich langsamer Container faellt dann bei
+            # Frame 25 aus, nicht bei 5 - das kostet hoechstens 3 Minuten,
+            # ein falscher Ausfall kostet den Sprecher im Hook.
+            if idx == 5:
+                t_warm = time.time()
+            if idx and idx >= 25 and idx % 25 == 0:
                 _abbruch_pruefen()
                 # Benchmark 14.09.: hier stand max(total, max_frames) — der
                 # Hook (140 Frames) wurde auf 1195 Frames hochgerechnet und
                 # fiel mit "Projektion 9628 s" aus, obwohl er 140 gebraucht
                 # haette. Projiziert wird auf das, was wirklich gemattet wird.
                 noetig = min(total, max_frames) if (total and max_frames) else (max_frames or total)
-                projektion = (time.time() - t_start) / idx * max(1, noetig)
+                rate = (time.time() - (t_warm or t_start)) / max(1, idx - (5 if t_warm else 0))
+                projektion = rate * max(1, noetig)
                 if projektion > deckel_s:
                     log.warning("[MATTE] Deckel: %d/%d Frames, Projektion "
                                 "%.0fs > %.0fs — Matte faellt aus, Original-"

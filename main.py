@@ -6895,6 +6895,8 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                                 "Hintergrund bleibt", idx, noetig,
                                 projektion, deckel_s)
                     cap.release()
+                    _MATTE_GRUND["text"] = ("Deckel: %d/%d Frames, Projektion %.0f s > %.0f s"
+                                            % (idx, noetig, projektion, deckel_s))
                     return ""
             ok, frame = cap.read()
             if not ok:
@@ -6927,6 +6929,7 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
                 log.info("[MATTE] %d/%d frames", idx, total)
         cap.release()
         if idx < 5:
+            _MATTE_GRUND["text"] = "nur %d Frames lesbar (Facecam leer oder unlesbar)" % idx
             return ""
         webm = job_dir / "matte.webm"
         subprocess.run(["ffmpeg", "-y", "-framerate", str(int(round(fps))), "-i", str(frames / "%05d.png"),
@@ -6939,7 +6942,13 @@ def _matte_video(facecam_path: Path, job_dir: Path, max_frames: int = 0,
         raise
     except Exception as exc:
         log.warning("[MATTE] failed: %s", exc)
+        _MATTE_GRUND["text"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
         return ""
+
+
+# Letzter Ausfallgrund der Matte, fuer die Meldung an den Betreiber (ein
+# Render laeuft je Prozess, mehr braucht es nicht).
+_MATTE_GRUND: dict = {"text": ""}
 
 
 OMNI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
@@ -7043,9 +7052,14 @@ def _hook_freisteller(s: dict, bis_f: int) -> str:
     """Er, freigestellt vor der Hook-Illustration: die ersten bis_f Frames
     der Facecam ohne Hintergrund, als Alpha-WebM. Die Illustration ist der
     GRUND, er steht davor — Motive liegen oben/links/rechts, die untere
-    Bildmitte gehoert ihm. '' wenn rembg fehlt oder scheitert."""
-    return _matte_video(Path(s["facecam_path"]), Path(s["dir"]),
-                        max_frames=int(bis_f) + 2, W=MATTE_W)
+    Bildmitte gehoert ihm. '' wenn rembg fehlt oder scheitert; der Grund
+    steht dann in s["matte_grund"] (15.09.: nie still)."""
+    _MATTE_GRUND["text"] = ""
+    url = _matte_video(Path(s["facecam_path"]), Path(s["dir"]),
+                       max_frames=int(bis_f) + 2, W=MATTE_W)
+    if not url:
+        s["matte_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
+    return url
 
 
 def _gemini_qa(mp4_path: Path, moments: list, duration: float) -> dict:
@@ -7277,6 +7291,46 @@ def _gen_scene_image(concept: str, client_id: str, job_dir: Path) -> str:
     except Exception as exc:
         log.warning("[SCENE-IMG] failed: %s", exc)
         return ""
+
+
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
+DASHBOARD_LAUF_KEY = os.environ.get("DASHBOARD_LAUF_KEY", "")
+
+
+def _betreiber_melden(text: str) -> bool:
+    """Eine Zeile an den Betreiber (Telegram, ueber das Dashboard - der
+    Renderer selbst kennt keinen Bot). 15.09.: der Freisteller fiel im
+    Benchmark zweimal still aus, der Hook kam ohne Sprecher, und niemand
+    hat es gemerkt. Was den wichtigsten Moment des Videos betrifft, wird
+    gemeldet, nicht geloggt. Rueckgabe: ob die Meldung angekommen ist."""
+    if not (DASHBOARD_URL and DASHBOARD_LAUF_KEY):
+        log.warning("[MELDEN] kein DASHBOARD_URL/DASHBOARD_LAUF_KEY - Meldung nur im Log: %s", text[:200])
+        return False
+    try:
+        r = requests.post(f"{DASHBOARD_URL}/api/intern/melden", timeout=20,
+                          headers={"x-lauf-key": DASHBOARD_LAUF_KEY,
+                                   "Content-Type": "application/json"},
+                          json={"text": text[:1500]})
+        if r.status_code >= 300:
+            log.warning("[MELDEN] Dashboard %s: %s", r.status_code, r.text[:200])
+            return False
+        return True
+    except Exception as exc:
+        log.warning("[MELDEN] %s", exc)
+        return False
+
+
+def _warnung(s: dict, art: str, text: str, melden: bool = True) -> None:
+    """Warnung an der Sitzung: landet im Bau-Ergebnis (warnungen) und beim
+    Betreiber. Ein leeres Feld heisst: nichts Bekanntes ist schiefgegangen."""
+    eintrag = {"art": art, "text": text[:300], "session_id": s.get("id"),
+               "client_id": s.get("client_id")}
+    s.setdefault("warnungen", []).append(eintrag)
+    log.warning("[WARNUNG] %s: %s", art, text[:300])
+    if melden:
+        eintrag["gemeldet"] = _betreiber_melden(
+            "RENDER-WARNUNG %s (%s, Sitzung %s): %s" % (
+                art, s.get("client_id") or "?", s.get("id") or "?", text))
 
 
 def _log_run(client_id: str, tool: str, status: str, detail: dict) -> None:
@@ -12775,6 +12829,13 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
                               "Modell) — Hook bleibt Vollbild mit ihm, Szene "
                               "nicht gekauft")
             aus["quelle_art"] = "facecam"
+            # 15.09.: nie still. Der Hook ist der wichtigste Moment; faellt
+            # der Freisteller aus, steht das im Ergebnis UND beim Betreiber.
+            _warnung(s, "hook_ohne_freisteller",
+                     "Freisteller im Hook (%.1f-%.1fs) fehlgeschlagen: %s. "
+                     "Ersatz: Vollbild mit ihm, Szene nicht gekauft."
+                     % (float(kopf.get("von", 0)), float(kopf.get("bis", 0)),
+                        s.get("matte_grund") or "Matte-Deckel oder Modell"))
             return aus
 
     if k not in OHNE_MATERIAL:
@@ -13278,6 +13339,9 @@ async def _build_impl(req: BuildRequest):
            "protokoll": protokoll,
            "umgesetzt": umgesetzt, "geplant": geplant,
            "abweichungen": abweichungen,
+           # 15.09.: was schiefging und gemeldet wurde (z.B. Freisteller im
+           # Hook). Leer = nichts Bekanntes.
+           "warnungen": list(s.get("warnungen") or []),
            "ebenen": len(s["layers"]), "kosten_usd": kosten,
            "kosten_gesamt_usd": gesamt, "kosten_gesamt_eur": _eur(gesamt),
            "deckel_usd": DECKEL_USD, "deckel_eur": DECKEL_EUR,
@@ -13810,6 +13874,7 @@ def _video_job(job_id: str, req: "VideoRequest"):
             "bilanz": bau.get("bilanz"),
             "url": (bau.get("render") or {}).get("url"),
             "abweichungen": bau.get("abweichungen"),
+            "warnungen": bau.get("warnungen"),
             "protokoll": bau.get("protokoll"),
             "plan": plan_res.get("plan"),
             "kosten_gesamt_usd": bau.get("kosten_gesamt_usd"),

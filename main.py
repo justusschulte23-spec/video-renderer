@@ -7859,6 +7859,22 @@ async def _kachel_png(markup: str, breit: int, hoch: int, grund: str, ziel: Path
             document.getAnimations().forEach(a => { a.pause(); });
         }""")
         await seite.evaluate(SEEK_JS, 2.2)
+        # Ueberlauf-Sicherung (16.09.): das Kit bemisst die Schrift an der
+        # BREITE. Auf 4:5 lief ein langer Titel unten aus dem Bild, und
+        # overflow:hidden schnitt ihn still ab. Hier wird gemessen und, wenn
+        # noetig, die Schrift schrittweise verkleinert — lieber kleiner als
+        # abgeschnitten.
+        for _ in range(8):
+            ueber = await seite.evaluate(
+                """() => { const d = document.body;
+                     return Math.max(d.scrollHeight - window.innerHeight,
+                                     d.scrollWidth - window.innerWidth); }""")
+            if ueber is None or ueber <= 2:
+                break
+            await seite.evaluate(
+                """() => { document.querySelectorAll('.wert, .zitat, .cta, .stuetze, li, h4')
+                     .forEach(el => { const px = parseFloat(getComputedStyle(el).fontSize);
+                       if (px > 12) el.style.fontSize = (px * 0.88) + 'px'; }); }""")
         await seite.screenshot(path=str(ziel))
         await ctx.close()
         await browser.close()

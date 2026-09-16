@@ -7816,6 +7816,105 @@ class RenderHtmlRequest(BaseModel):
     seconds: float = 3.0
 
 
+class KachelRequest(BaseModel):
+    client_id: str = "justus"
+    kacheln:   list = []          # [{art, zeilen, kicker}]
+    breite:    int = 1200
+    hoehe:     int = 1500         # 4:5, das Hochformat im LinkedIn-Feed
+    pdf:       bool = True
+    wende:     bool = False
+
+
+async def _kachel_png(markup: str, breit: int, hoch: int, grund: str, ziel: Path) -> bool:
+    """Ein Standbild aus Kit-Markup. Keine Animation: die Uhr steht am Ende,
+    damit die Elemente ausgefahren sind (im Video bewegen sie sich, hier
+    nicht)."""
+    from playwright.async_api import async_playwright
+    fx_css = FX_CSS.read_text(encoding="utf-8") if FX_CSS.exists() else ""
+    fx_js = FX_JS.read_text(encoding="utf-8") if FX_JS.exists() else ""
+    seite_html = (
+        "<!doctype html><html><head><meta charset='utf-8'><style>"
+        f"html,body{{margin:0;padding:0;background:{grund};overflow:hidden;"
+        f"width:{breit}px;height:{hoch}px}}*{{box-sizing:border-box}}"
+        f"</style><style>{fx_css}</style></head>"
+        f"<body>{_icon_sprite(markup)}{_logo_sprite(markup)}{markup}"
+        f"<script>{KEIN_ZEIGER_JS}</script><script>{fx_js}</script></body></html>")
+    tmp = ziel.parent / (ziel.stem + ".html")
+    tmp.write_text(seite_html, encoding="utf-8")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+                  "--use-gl=swiftshader", "--enable-unsafe-swiftshader",
+                  "--enable-webgl", "--ignore-gpu-blocklist"])
+        ctx = await browser.new_context(viewport={"width": breit, "height": hoch},
+                                        device_scale_factor=1)
+        await ctx.add_init_script("(" + UHR_JS + ")()")
+        if GSAP_LOCAL.exists():
+            await ctx.add_init_script(path=str(GSAP_LOCAL))
+        seite = await ctx.new_page()
+        await seite.goto(f"file://{tmp.absolute()}", wait_until="load", timeout=20000)
+        await seite.evaluate("""() => {
+            if (window.gsap) { gsap.globalTimeline.pause(); }
+            document.getAnimations().forEach(a => { a.pause(); });
+        }""")
+        await seite.evaluate(SEEK_JS, 2.6)
+        await seite.screenshot(path=str(ziel))
+        await ctx.close()
+        await browser.close()
+    return ziel.exists()
+
+
+@app.post("/tool/kacheln")
+async def tool_kacheln(req: KachelRequest):
+    """Bildkette fuer einen LinkedIn-Beitrag: je Kachel ein PNG im Kit des
+    Kunden, dazu ein PDF mit allen Seiten in der Reihenfolge. LinkedIn zeigt
+    das PDF als blaetterbares Dokument, das ist dort das Karussell."""
+    kacheln = [k for k in (req.kacheln or []) if (k or {}).get("zeilen")]
+    if not kacheln:
+        raise HTTPException(status_code=400, detail="keine Kacheln")
+    if len(kacheln) > 20:
+        raise HTTPException(status_code=400, detail="hoechstens 20 Kacheln")
+    k_kit = kit.kit_fuer(req.client_id, req.wende)
+    grund = k_kit.get("canvas") or "#FFFFFF"
+    job = Path(f"/tmp/kacheln_{uuid.uuid4().hex[:10]}")
+    job.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    try:
+        bilder, pfade, fehlend = [], [], []
+        for i, k in enumerate(kacheln):
+            art = str(k.get("art") or "titel")
+            felder = {"zeilen": k.get("zeilen") or [], "kicker": k.get("kicker") or ""}
+            markup = kit.baue(art, felder, req.client_id, req.breite, req.hoehe,
+                              sekunden=3.0, wende=req.wende)
+            if not markup:
+                # Unbekannte Art: lieber als Titel bauen als die Kette abbrechen.
+                markup = kit.baue("titel", felder, req.client_id, req.breite,
+                                  req.hoehe, sekunden=3.0, wende=req.wende)
+                fehlend.append(art)
+            ziel = job / f"kachel_{i:02d}.png"
+            if not await _kachel_png(markup, req.breite, req.hoehe, grund, ziel):
+                raise HTTPException(status_code=500, detail=f"Kachel {i} nicht gerendert")
+            pfade.append(ziel)
+            bilder.append(upload_supabase(ziel, f"li_{uuid.uuid4().hex[:10]}",
+                                          folder="linkedin", content_type="image/png"))
+        pdf_url = ""
+        if req.pdf:
+            from PIL import Image
+            seiten = [Image.open(x).convert("RGB") for x in pfade]
+            pdf_pfad = job / "beitrag.pdf"
+            seiten[0].save(str(pdf_pfad), "PDF", save_all=True,
+                           append_images=seiten[1:], resolution=150.0)
+            pdf_url = upload_supabase(pdf_pfad, f"li_{uuid.uuid4().hex[:10]}",
+                                      folder="linkedin", content_type="application/pdf")
+        log.info("[KACHELN] %s: %d Kacheln, PDF=%s, %.1fs", req.client_id,
+                 len(bilder), bool(pdf_url), time.time() - t0)
+        return {"ok": True, "bilder": bilder, "pdf": pdf_url,
+                "ersetzt": fehlend, "sekunden": round(time.time() - t0, 1)}
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+
 @app.post("/tool/render-html")
 async def tool_render_html(req: RenderHtmlRequest):
     """Der Agent schreibt die Animation selbst und bekommt sie als transparentes

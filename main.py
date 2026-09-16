@@ -7858,7 +7858,7 @@ async def _kachel_png(markup: str, breit: int, hoch: int, grund: str, ziel: Path
             if (window.gsap) { gsap.globalTimeline.pause(); }
             document.getAnimations().forEach(a => { a.pause(); });
         }""")
-        await seite.evaluate(SEEK_JS, 2.6)
+        await seite.evaluate(SEEK_JS, 2.2)
         await seite.screenshot(path=str(ziel))
         await ctx.close()
         await browser.close()
@@ -7884,13 +7884,23 @@ async def tool_kacheln(req: KachelRequest):
         bilder, pfade, fehlend = [], [], []
         for i, k in enumerate(kacheln):
             art = str(k.get("art") or "titel")
-            felder = {"zeilen": k.get("zeilen") or [], "kicker": k.get("kicker") or ""}
+            zeilen = [str(z) for z in (k.get("zeilen") or []) if str(z).strip()]
+            # Das Kit legt bei 'titel' die ZWEITE Zeile in die kleine Kopfzeile
+            # und die DRITTE unter die grosse Zeile. Fuer einen Lesebeitrag
+            # gehoert der zweite Satz nach unten, nicht nach oben.
+            if art == "titel" and len(zeilen) == 2:
+                zeilen = [zeilen[0], "", zeilen[1]]
+            felder = {"zeilen": zeilen, "kicker": k.get("kicker") or ""}
+            # Standzeit 8 s statt 3 s: das Kit blendet Elemente gegen Ende
+            # wieder aus (raus_ms + Versatz). Beim Standbild bei 2,2 s sind
+            # alle Elemente eingefahren und noch keines am Gehen — vorher
+            # fehlten Kopfzeile und Label im fertigen Bild (16.09.).
             markup = kit.baue(art, felder, req.client_id, req.breite, req.hoehe,
-                              sekunden=3.0, wende=req.wende)
+                              sekunden=8.0, wende=req.wende)
             if not markup:
                 # Unbekannte Art: lieber als Titel bauen als die Kette abbrechen.
                 markup = kit.baue("titel", felder, req.client_id, req.breite,
-                                  req.hoehe, sekunden=3.0, wende=req.wende)
+                                  req.hoehe, sekunden=8.0, wende=req.wende)
                 fehlend.append(art)
             ziel = job / f"kachel_{i:02d}.png"
             if not await _kachel_png(markup, req.breite, req.hoehe, grund, ziel):

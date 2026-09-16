@@ -7884,12 +7884,21 @@ async def tool_kacheln(req: KachelRequest):
         bilder, pfade, fehlend = [], [], []
         for i, k in enumerate(kacheln):
             art = str(k.get("art") or "titel")
-            zeilen = [str(z) for z in (k.get("zeilen") or []) if str(z).strip()]
-            # Das Kit legt bei 'titel' die ZWEITE Zeile in die kleine Kopfzeile
-            # und die DRITTE unter die grosse Zeile. Fuer einen Lesebeitrag
-            # gehoert der zweite Satz nach unten, nicht nach oben.
-            if art == "titel" and len(zeilen) == 2:
-                zeilen = [zeilen[0], "", zeilen[1]]
+            zeilen = [str(z).strip() for z in (k.get("zeilen") or []) if str(z).strip()]
+            # Auf ganzer Leinwand zeigt das Kit NUR die Mitte (One-Element-Regel,
+            # kit._ist_vollbild): Kopfzeile und Stuetze bleiben leer. Eine
+            # Kachel traegt darum genau eine Aussage — mehrere Zeilen werden
+            # zusammengezogen statt still verschluckt (16.09.).
+            if art in ("titel", "zitat", "cta") and len(zeilen) > 1:
+                zeilen = [" ".join(zeilen)]
+            if art == "stat" and len(zeilen) > 1:
+                # Zahl und Label in EINE Zeile: das Kit trennt sie selbst und
+                # setzt das Label als Chip neben die Zahl.
+                zeilen = [" ".join(zeilen[:2])] + zeilen[2:]
+            if art == "ablauf":
+                # Die Nummer setzt die Vorlage. Schreibt das Modell sie trotzdem
+                # in die Zeile, stuenden zwei Nummern nebeneinander.
+                zeilen = [re.sub(r"^\s*\d+\s*[.)\]:-]\s*", "", z) for z in zeilen]
             felder = {"zeilen": zeilen, "kicker": k.get("kicker") or ""}
             # Standzeit 8 s statt 3 s: das Kit blendet Elemente gegen Ende
             # wieder aus (raus_ms + Versatz). Beim Standbild bei 2,2 s sind

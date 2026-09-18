@@ -8543,6 +8543,20 @@ def _client_brand_colors(client_id: str) -> dict:
     return farben
 
 
+def _farben_vereint(client_id: str, tpl: dict) -> dict:
+    """s["colors"] fuer Agent, Bild-Akzent und Toenung. Bis 18.09. lagen hier die
+    Template-Farben von Juni (Tim gold/navy, Justus amethyst+cyan), waehrend s["brand"]
+    laengst clients.brand_colors trug: zwei Wahrheiten, Tim bekam an einer Stelle sogar
+    Justus' Lila (#8B5CF6 als Rueckfall ohne primary). Jetzt gewinnt brand."""
+    c = dict(_tpl_colors(tpl) or {})
+    b = _brand_fuer(client_id, tpl)
+    c.update({"akzent": b["accent"], "accent": b["accent"], "primary": b["accent"],
+              "secondary": b.get("accent2") or c.get("secondary"),
+              "bg": b.get("bg") or c.get("bg"), "flaeche": b.get("bg") or c.get("bg"),
+              "tinte": b.get("text") or c.get("tinte")})
+    return {k: v for k, v in c.items() if v}
+
+
 def _brand_fuer(client_id: str, tpl: dict) -> dict:
     """Markenfarben des Kunden. Reihenfolge: clients.brand_colors (Dashboard,
     die Wahrheit) > Template-Farben > Preset. Kein Wert steht fest im Code —
@@ -8565,7 +8579,9 @@ def _brand_fuer(client_id: str, tpl: dict) -> dict:
         b["text"] = k["tinte"]
     if k.get("neben"):
         b["muted"] = k["neben"]
-    if k.get("gut") and not c.get("secondary"):
+    if k.get("gut"):
+        # brand_colors ist die Wahrheit, auch fuer die Zweitfarbe. Bis 18.09. gewann hier
+        # das Template-secondary von Juni: Tim off-white, Justus cyan.
         b["accent2"] = k["gut"]
     return b
 
@@ -8879,7 +8895,7 @@ def tool_session_open(req: OpenSessionRequest):
         "words": words, "face": face, "onsets": onsets,
         "transkript_filter": list(_HALLU_LETZTES.get("protokoll") or []),
         "sheet": sheet, "sheet_url": sheet_url,
-        "style_guide": style, "colors": _tpl_colors(tpl),
+        "style_guide": style, "colors": _farben_vereint(req.client_id, tpl),
         "brand": _brand_fuer(req.client_id, tpl),
         "caption_stil": CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"),
         "briefing": req.briefing, "sfx": [], "paper": paper,
@@ -12415,8 +12431,9 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
             idee = str(b.get("bild_prompt")).strip()[:400]
             # Omni-Referenz (11.08.): EIN zentriertes 3D-Objekt auf hellem
             # Studio-Grund, viel Leerraum — nicht Szene, sondern Objekt.
-            vibe = ("ONE single centered 3D object on a clean light-gray "
-                    "studio background (#F1F0F4), soft contact shadow, "
+            grund = str(farben.get("flaeche") or farben.get("bg") or "#F1F0F4")
+            vibe = ("ONE single centered 3D object on a clean plain "
+                    "studio background (" + grund + "), soft contact shadow, "
                     "generous empty space around it, premium minimal "
                     "product-render look like a Google Gemini promo. "
                     "Dramatic but dignified, subtle wit allowed, sharp "
@@ -12427,7 +12444,7 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                 # freigestellt davor gesetzt. Motive muessen oben und an den
                 # Seiten liegen — die untere Bildmitte gehoert ihm.
                 vibe = ("Bold flat 2D editorial illustration for a vertical "
-                        "9:16 B2B tech short, premium vector style, rich but "
+                        "9:16 short (topic and tone from the idea), premium vector style, rich but "
                         "clean detail, one scene that explains the topic at a "
                         "glance. COMPOSITION RULE: place all key motifs across "
                         "the TOP third and along the LEFT and RIGHT edges; "
@@ -12545,11 +12562,11 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                 try:
                     farben_h = s.get("colors") or {}
                     akz_h = (farben_h.get("akzent") or farben_h.get("accent")
-                             or "#8B5CF6")
+                             or farben_h.get("primary") or "#8B5CF6")
                     hero_bild = await asyncio.to_thread(
                         _call_fal_thumbnail, bp[:400], akz_h,
-                        vibe=("Clean editorial 3D illustration for a B2B tech "
-                              "short. Premium studio look, single scene, NO "
+                        vibe=("Clean editorial 3D illustration for a vertical "
+                              "short, topic and tone from the idea. Premium studio look, single scene, NO "
                               "text, NO letters, NO real brand logos."))
                 except Exception as exc:
                     log.warning("[BAU] %d Hero-Bild: %s", i, str(exc)[:140])

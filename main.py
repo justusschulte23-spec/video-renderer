@@ -10683,8 +10683,12 @@ GEMINI_API = "https://generativelanguage.googleapis.com"
 # Erst das staerkste Modell — der Plan ist der ganze Umbau, an ihm zu sparen
 # waere die falsche Stelle. Die Kette faengt Modellnamen ab, die in der Region
 # noch nicht ausgerollt sind.
-AD_MODELLE = ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest",
-              "gemini-2.0-flash-001")
+# 18.09.: gemini-2.5-pro und gemini-2.0-flash-001 antworten 404 („no longer available to new
+# users"), gemini-2.5-flash und flash-latest brechen den Plan bei 8192 Tokens ab („Unterminated
+# string"). Sechs Renders von Justus starben so als „Art Director ohne Antwort". Kette neu aus
+# ListModels, staerkstes zuerst; Ausgabelimit hoch.
+AD_MODELLE = ("gemini-3.1-pro-preview", "gemini-3.6-flash", "gemini-3.5-flash",
+              "gemini-2.5-flash")
 # 16 Kompositionen statt 5 Zustaende. Raffinesse entsteht aus Kombination:
 # wer aus 16 waehlt, wirkt gestaltend; wer aus 5 waehlt, schematisch. Der
 # Renderer konnte das alles schon — es fehlte der Name dafuer.
@@ -10830,7 +10834,7 @@ def _gemini_plan_call(uri: str, prompt: str, modelle: tuple) -> tuple:
             {"file_data": {"mime_type": "video/mp4", "file_uri": uri}},
             {"text": prompt}]}],
         "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json",
-                             "maxOutputTokens": 8192},
+                             "maxOutputTokens": 32768},
     }
     letzter = ""
     for modell in modelle:
@@ -11995,7 +11999,7 @@ def tool_plan(req: PlanRequest):
     dauer_s = round(time.time() - t0, 1)
     # Preis nach der oeffentlichen Gemini-Liste, damit der Deckel aus F
     # ueberhaupt messbar ist statt geschaetzt.
-    preise = {"gemini-2.5-pro": (1.25, 10.0)}.get(modell, (0.30, 2.50))
+    preise = {"gemini-2.5-pro": (1.25, 10.0), "gemini-3.1-pro-preview": (2.0, 12.0)}.get(modell, (0.30, 2.50))
     kosten = round(tok.get("ein", 0) / 1e6 * preise[0]
                    + tok.get("aus", 0) / 1e6 * preise[1], 4)
     s["kosten_plan"] = kosten

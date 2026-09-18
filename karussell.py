@@ -172,7 +172,8 @@ def _mitte(art: str, zeilen: list, kicker: str, k: dict) -> tuple:
         return (f"<div class='titel'>{kick}<div class='gross'>{_e(' '.join(zeilen))}</div>"
                 f"<div class='strich'></div></div>", False)
     if art == "zitat":
-        return (f"<div class='zitat'>{kick or "<span class='anf'>Kurz gesagt</span>"}"
+        kopf = kick or "<span class='anf'>Kurz gesagt</span>"
+        return (f"<div class='zitat'>{kopf}"
                 f"<div class='mittel'>{_e(' '.join(zeilen))}</div></div>", False)
     if art == "cta":
         return (f"<div class='cta'>{kick}<div class='mittel'>{_e(' '.join(zeilen))}</div>"

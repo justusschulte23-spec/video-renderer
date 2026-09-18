@@ -8514,7 +8514,14 @@ BRAND_PRESETS = {
 }
 # Justus: harte Wortkarten, drei gleichzeitig, das gesprochene ploppt.
 # Tim: ruhige Editorial-Zeile. Vertrauen vor Reiz, ausdruecklich sein Stil.
-CAPTION_STIL = {"justus": "hormozi", "tim": "editorial"}
+CAPTION_STIL = {"justus": "hormozi", "tim": "karaoke"}
+# Geometrie je Stil. Karaoke (Tim, 18.09. aus dem alten Renderer portiert): Boxmitte bei
+# H*0.80, weicht einer Einblendung nach OBEN auf H*0.12 aus (das alte KARA_YELLOW),
+# Schrift 76 = 90 * 0.85 wie dort. Hormozi/Editorial behalten die Werte von vorher.
+CAPTION_GEOMETRIE = {
+    "karaoke": {"y": 0.80, "fontSize": 76, "duckY": 0.12, "duckFontSize": 68,
+                "hookY": 0.80, "hookFontSize": 76},
+}
 
 
 _BRAND_COLORS_CACHE: dict = {}
@@ -8928,7 +8935,8 @@ def tool_session_open(req: OpenSessionRequest):
                            "y": round(min(0.68, float(face.get("bottom", 0.63)) + 0.05), 3),
                            "fontSize": 66, "duckFor": [], "duckY": 0.62,
                            "duckFontSize": 58, "hookEndFrame": 0, "hookY": 0.68,
-                           "hookFontSize": 62, "outroStartFrame": 0, "allAccent": False},
+                           "hookFontSize": 62, "outroStartFrame": 0, "allAccent": False,
+                           **CAPTION_GEOMETRIE.get(CAPTION_STIL.get((req.client_id or "justus").lower(), "hormozi"), {})},
                 "from": 0, "to": frames, "herkunft": "captions",
             }, frames)],
     }
@@ -10063,7 +10071,7 @@ def tool_markiere(req: MarkiereRequest):
     # derselben Sache — hier zaehlt die, aus der auch die Captions kommen.
     akzent = "#8B5CF6"
     try:
-        farben = _tpl_colors(_load_template(req.client_id, None))
+        farben = _farben_vereint(req.client_id, _load_template(req.client_id, None))
         akzent = (farben.get("akzent") or farben.get("accent")
                   or farben.get("primary") or akzent)
     except Exception as exc:
@@ -15032,7 +15040,7 @@ def _html_subagent(auftrag: dict, w_px: int, h_px: int, dauer_s: float,
         for f in ("hauptwert", "beschriftung", "einordnung")))
     sys_p = _html_agent_prompt(art, client_id, _marken)
     try:
-        _marken_farben = _tpl_colors(_load_template(client_id, None))
+        _marken_farben = _farben_vereint(client_id, _load_template(client_id, None))
     except Exception:
         _marken_farben = {}
     # Der Farbwaechter kannte nur die Tokens aus der Datenbank. Damit haette er

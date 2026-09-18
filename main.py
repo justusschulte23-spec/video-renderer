@@ -7,6 +7,7 @@ import subprocess
 import math
 import asyncio
 import kit
+import karussell
 import json
 import copy
 from datetime import datetime, timezone
@@ -7823,6 +7824,36 @@ class KachelRequest(BaseModel):
     hoehe:     int = 1500         # 4:5, das Hochformat im LinkedIn-Feed
     pdf:       bool = True
     wende:     bool = False
+    marke:     str = ""           # Name des Kunden in Kopf- und Fusszeile
+    nummern:   bool = True        # Seitenzaehler "3 / 7"; aus beim Einzelbild
+
+
+async def _seite_png(html: str, breit: int, hoch: int, ziel: Path) -> bool:
+    """Eine Karussell-Seite als Standbild. Kein Kit, kein GSAP: die Seite ist
+    ein gesetztes Blatt (karussell.py). Ueberlauf wird an der Mitte gemessen
+    und die Schrift schrittweise verkleinert — lieber kleiner als
+    abgeschnitten."""
+    from playwright.async_api import async_playwright
+    tmp = ziel.parent / (ziel.stem + ".html")
+    tmp.write_text(html, encoding="utf-8")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
+        ctx = await browser.new_context(viewport={"width": breit, "height": hoch},
+                                        device_scale_factor=1)
+        seite = await ctx.new_page()
+        await seite.goto(tmp.resolve().as_uri(), wait_until="load", timeout=20000)
+        await seite.evaluate("document.fonts.ready")
+        for _ in range(8):
+            ueber = await seite.evaluate(karussell.UEBERLAUF_JS)
+            if ueber is None or ueber <= 2:
+                break
+            await seite.evaluate(karussell.KLEINER_JS)
+        await seite.screenshot(path=str(ziel))
+        await ctx.close()
+        await browser.close()
+    return ziel.exists()
 
 
 async def _kachel_png(markup: str, breit: int, hoch: int, grund: str, ziel: Path) -> bool:
@@ -7891,44 +7922,30 @@ async def tool_kacheln(req: KachelRequest):
         raise HTTPException(status_code=400, detail="keine Kacheln")
     if len(kacheln) > 20:
         raise HTTPException(status_code=400, detail="hoechstens 20 Kacheln")
-    k_kit = kit.kit_fuer(req.client_id, req.wende)
-    grund = k_kit.get("canvas") or "#FFFFFF"
     job = Path(f"/tmp/kacheln_{uuid.uuid4().hex[:10]}")
     job.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     try:
         bilder, pfade, fehlend = [], [], []
+        gesamt = len(kacheln) if req.nummern else 0
         for i, k in enumerate(kacheln):
-            art = str(k.get("art") or "titel")
+            art = str(k.get("art") or "titel").strip().lower()
             zeilen = [str(z).strip() for z in (k.get("zeilen") or []) if str(z).strip()]
-            # Auf ganzer Leinwand zeigt das Kit NUR die Mitte (One-Element-Regel,
-            # kit._ist_vollbild): Kopfzeile und Stuetze bleiben leer. Eine
-            # Kachel traegt darum genau eine Aussage — mehrere Zeilen werden
-            # zusammengezogen statt still verschluckt (16.09.).
-            if art in ("titel", "zitat", "cta") and len(zeilen) > 1:
-                zeilen = [" ".join(zeilen)]
-            if art == "stat" and len(zeilen) > 1:
-                # Zahl und Label in EINE Zeile: das Kit trennt sie selbst und
-                # setzt das Label als Chip neben die Zahl.
-                zeilen = [" ".join(zeilen[:2])] + zeilen[2:]
             if art == "ablauf":
                 # Die Nummer setzt die Vorlage. Schreibt das Modell sie trotzdem
                 # in die Zeile, stuenden zwei Nummern nebeneinander.
                 zeilen = [re.sub(r"^\s*\d+\s*[.)\]:-]\s*", "", z) for z in zeilen]
-            felder = {"zeilen": zeilen, "kicker": k.get("kicker") or ""}
-            # Standzeit 8 s statt 3 s: das Kit blendet Elemente gegen Ende
-            # wieder aus (raus_ms + Versatz). Beim Standbild bei 2,2 s sind
-            # alle Elemente eingefahren und noch keines am Gehen — vorher
-            # fehlten Kopfzeile und Label im fertigen Bild (16.09.).
-            markup = kit.baue(art, felder, req.client_id, req.breite, req.hoehe,
-                              sekunden=8.0, wende=req.wende)
-            if not markup:
-                # Unbekannte Art: lieber als Titel bauen als die Kette abbrechen.
-                markup = kit.baue("titel", felder, req.client_id, req.breite,
-                                  req.hoehe, sekunden=8.0, wende=req.wende)
+            if art not in ("titel", "zitat", "cta", "stat", "befund", "ablauf", "vergleich"):
                 fehlend.append(art)
+            # Seiten statt Kit-Kacheln (18.09.): das Kit ist fuer Reels gebaut,
+            # als Dokument-Seite wirkte es billig (ein Satz, leerer Grund, keine
+            # Marke, Ausweichschrift). karussell.py setzt jedes Blatt mit Kopf,
+            # Seitenzahl, Fusszeile und der echten Schrift aus fonts/.
+            html = karussell.seite(art, {"zeilen": zeilen, "kicker": k.get("kicker") or ""},
+                                   req.client_id, req.marke, i + 1, gesamt,
+                                   req.breite, req.hoehe, req.wende)
             ziel = job / f"kachel_{i:02d}.png"
-            if not await _kachel_png(markup, req.breite, req.hoehe, grund, ziel):
+            if not await _seite_png(html, req.breite, req.hoehe, ziel):
                 raise HTTPException(status_code=500, detail=f"Kachel {i} nicht gerendert")
             pfade.append(ziel)
             bilder.append(upload_supabase(ziel, f"li_{uuid.uuid4().hex[:10]}",

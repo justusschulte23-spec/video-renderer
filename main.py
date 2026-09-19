@@ -13671,7 +13671,7 @@ ABNAHME_MAENGEL = ("text_abgeschnitten", "element_ausserhalb", "gesicht_verdeckt
 ABNAHME_REPARIERBAR = ("text_abgeschnitten", "element_ausserhalb",
                        "gesicht_verdeckt", "leer", "unlesbar", "doppelter_text")
 
-ABNAHME_SYS = """Du bist die ABNAHME. Du siehst das fertige Video und den Plan,
+ABNAHME_SYS = """Texte und Grafiken bauen sich in den ersten 1 bis 2 Sekunden eines Abschnitts auf (Tippen, Einfliegen). Beurteile Text und Vollstaendigkeit am ENDE des Abschnitts, nie an seinem Anfang. Du bist die ABNAHME. Du siehst das fertige Video und den Plan,
 nach dem es gebaut wurde. Du pruefst, ob das Video den Plan einloest.
 
 Du baust nichts und aenderst nichts. Du meldest Maengel — mit Zeitstempel.
@@ -13826,6 +13826,34 @@ def _abnahme(video: Path, plan: dict, protokoll: list, dauer: float,
         m["schwere"] = "hart" if str(m.get("schwere")).lower() == "hart" else "weich"
         maengel.append(m)
     maengel, untertitel = _untertitel_ausfiltern(maengel, words or [])
+    # 19.09.: Text im Aufbau ist kein abgeschnittener Text. Skript 84 fiel dreimal an „Wann Werb|"
+    # (Typewriter bei 23,5 s, vollstaendig bei 24,5 s). Meldungen dieser Arten in den ersten 1,5 s
+    # ihres Abschnitts werden verworfen und protokolliert.
+    im_aufbau, rest_m = [], []
+    for m in maengel:
+        art = str(m.get("art") or "")
+        von = None
+        try:
+            von = float((knapp[m["abschnitt"]] or {}).get("von")) if 0 <= m.get("abschnitt", -1) < len(knapp) else None
+        except Exception:
+            von = None
+        if von is None:
+            # Ohne Abschnittsnummer ueber die Zeit suchen
+            for a_ in knapp:
+                try:
+                    if float(a_.get("von")) <= float(m.get("bei") or 0) <= float(a_.get("bis")):
+                        von = float(a_.get("von")); break
+                except Exception:
+                    pass
+        if art in ("text_abgeschnitten", "leer", "unleserlich", "text_fehlt") and von is not None and 0 <= float(m.get("bei") or 0) - von < 1.5:
+            im_aufbau.append(m)
+        else:
+            rest_m.append(m)
+    if im_aufbau:
+        log.info("[ABNAHME] %d Meldung(en) lagen im Aufbau eines Abschnitts (erste 1,5 s), verworfen: %s",
+                 len(im_aufbau), "; ".join("%.1fs %s" % (m.get("bei") or 0, str(m.get("was") or "")[:60]) for m in im_aufbau))
+    maengel = rest_m
+    aus["im_aufbau_verworfen"] = im_aufbau
     aus.update({"maengel": maengel, "urteil": str(roh.get("urteil") or "")[:300],
                 "modell": modell, "tokens": tok, "gelaufen": True,
                 "untertitel_verworfen": untertitel})

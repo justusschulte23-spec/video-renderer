@@ -1549,8 +1549,11 @@ def _transcribe_audio_roh(video_path: Path, prompt: str = "") -> list:
     try:
         log.info("Extracting audio for Whisper …")
         audio_path = video_path.parent / "audio.mp3"
+        # -map_metadata -1: ohne das schreibt ffmpeg Encoder- und Zeitangaben ins
+        # MP3. Zwei Laeufe ueber dasselbe Video ergeben dann verschiedene
+        # Pruefsummen, und der Cache eine Zeile weiter unten greift nie.
         subprocess.run([
-            "ffmpeg", "-y", "-i", str(video_path),
+            "ffmpeg", "-y", "-i", str(video_path), "-map_metadata", "-1",
             "-vn", "-ar", "16000", "-ac", "1", "-b:a", "64k",
             str(audio_path),
         ], check=True, capture_output=True)
@@ -7100,9 +7103,10 @@ def _omni_clip(idee: str, k: str, job_dir: Path, brand: Optional[dict] = None) -
                     str(exc)[:80])
         lang = roh
     url = upload_supabase(lang, lang.stem, folder="omni")
+    # 'teil': steckt schon in der pauschal-Zeile des Baus, wird nur ausgewiesen.
     _log_run(AKTIVER_CLIENT.get() or "justus", "omni-clip", "ok",
              {"sekunden": 4, "dauer_ms": int((time.time() - t0) * 1000),
-              "kosten_usd": 0.45})
+              "kosten_usd": 0.45, "art": "teil"})
     log.info("[OMNI] Clip in %.0fs → %s", time.time() - t0, url)
     return url
 
@@ -8858,21 +8862,35 @@ def tool_session_open(req: OpenSessionRequest):
     # Zeitachse, die hier entsteht. Liefe er spaeter, zeigte jeder Zeitstempel
     # im Plan auf eine Stelle, die es nicht mehr gibt.
     paper = {"weg_s": 0.0, "schnitte": [], "verworfen": "nicht ausgefuehrt"}
+    # 20.09.: Das Transkript des Paper-Edits bleibt gueltig, solange NICHT geschnitten
+    # wurde. Vorher wurde es weggeworfen und dieselbe Tonspur ein zweites Mal
+    # transkribiert - gemessen drei bis vier Whisper-Laeufe je Session-Start.
+    transkript_gueltig = None
     if req.paper_edit:
         pw = transcribe_audio(cam) or []
         keeps, paper = _paper_edit(pw, probe_duration(cam))
+        geschnitten_worden = False
         if len(keeps) > 1 or paper.get("weg_s"):
             geschnitten = job / "paper.mp4"
             if _trim_dead_air(cam, keeps, geschnitten):
                 cam = geschnitten
+                geschnitten_worden = True
             else:
                 paper["verworfen"] = "Schnitt technisch fehlgeschlagen"
                 paper["schnitte"] = []
+        if not geschnitten_worden:
+            # Dieselbe Tonspur, nur spaeter neu kodiert: die Zeitachse steht noch.
+            transkript_gueltig = pw
     cam = _fit_size(cam, job, target_mb=46, name="facecam_fit.mp4")
     face_url = upload_supabase(cam, f"facecam_{sid}", folder="uploads")
 
     duration = probe_duration(cam)
-    words = transcribe_audio(cam) or []
+    if transkript_gueltig is not None:
+        words = transkript_gueltig
+        log.info("[TRANSKRIPT] nicht geschnitten — Transkript des Paper-Edits "
+                 "weiterverwendet (%d Woerter), kein zweiter Whisper-Lauf", len(words))
+    else:
+        words = transcribe_audio(cam) or []
     face = _face_track(cam, duration)
     onsets = _audio_onsets(cam, job)
     sheet = _contact_sheet(cam, words, face, duration, onsets, job)
@@ -11184,6 +11202,48 @@ def _plan_ereignisse(momente: list) -> int:
     return n
 
 
+# Die fuenf Zustaende aus dem Editor-Prompt. Der Editor darf zusaetzlich eine
+# Komposition direkt nennen (Plansprache offen, 15.09.) - alles andere ist ein
+# Vertipper und wurde bisher still zu "vollbild ohne Element".
+ZUSTAENDE = ("er", "szene", "er_szene", "motiv", "beleg")
+# Kuerzer traegt kein Moment: darunter ist es ein Zucken, kein Bild.
+MOMENT_MIN_S = 1.2
+# 20.09.: Neue Pruefungen erst melden, nicht blockieren. Auf 'hart' erst, wenn an
+# echten Plaenen zu sehen war, wie viele Befunde sie bringen.
+TREATMENT_NEU_HART = os.environ.get("TREATMENT_NEU_HART", "").lower() in ("1", "true", "ja")
+
+
+def _treatment_weich(plan: dict) -> list:
+    """Die vier Pruefungen, die es in der Abschnitte-Sprache gab und in der
+    Momente-Sprache noch nicht. Getrennt gehalten, damit sich ihre Wirkung an
+    echten Plaenen ablesen laesst, bevor sie scharf geschaltet werden."""
+    mom = plan.get("momente") or []
+    aus, vorher = [], None
+    for i, m in enumerate(mom):
+        z = str(m.get("zustand") or "er")
+        if z not in ZUSTAENDE and z not in KOMPOSITIONEN:
+            aus.append(f"Moment {i}: zustand '{z}' gibt es nicht — er wird still zu "
+                       f"vollbild ohne Element. Erlaubt: {', '.join(ZUSTAENDE)}.")
+        try:
+            laenge = float(m.get("bis", 0)) - float(m.get("von", 0))
+        except (TypeError, ValueError):
+            laenge = None
+        if laenge is not None and 0 < laenge < MOMENT_MIN_S:
+            aus.append(f"Moment {i} laeuft {laenge:.1f}s — unter {MOMENT_MIN_S}s "
+                       "traegt kein Moment, das ist ein Zucken.")
+        if vorher is not None and z == vorher and z == "er":
+            aus.append(f"Moment {i}: zweimal '{z}' hintereinander — das ist EIN "
+                       "Moment, kein Schnitt. Fass sie zusammen oder setz etwas dazwischen.")
+        vorher = z
+    if mom:
+        m0 = mom[0]
+        if (str(m0.get("zustand") or "er") == "er" and not str(m0.get("punch_wort") or "").strip()
+                and not m0.get("braucht") and not m0.get("szene")):
+            aus.append("Moment 0 ist 'er' ohne Punch und ohne Element — im Hook "
+                       "passiert ab Sekunde 0 nichts. er_szene ist dort die erste Wahl.")
+    return aus
+
+
 def _treatment_pruefen(plan: dict, dauer: float) -> list:
     """Die Physik des Edits — nicht sein Geschmack. Alles, was hier NICHT
     steht (Rotation, Familien, Quoten), gehoert dem Editor."""
@@ -11235,6 +11295,18 @@ def _treatment_pruefen(plan: dict, dauer: float) -> list:
     if abs(ende - dauer) > 0.6:
         fehler.append(f"der letzte Moment endet bei {ende:.1f}s, das Video "
                       f"bei {dauer:.1f}s.")
+    # 20.09.: vier Pruefungen aus der alten Abschnitte-Sprache, die auf Momente
+    # uebertragbar sind. Bis TREATMENT_NEU_HART gesetzt ist, stehen sie nur im Log -
+    # so laesst sich zaehlen, was sie braechten, ohne dass ein Plan daran scheitert.
+    weich = _treatment_weich(plan)
+    if weich:
+        log.info("[PLAN] %d weiche Befunde (%s): %s", len(weich),
+                 "zaehlen" if TREATMENT_NEU_HART else "nur Hinweis", " | ".join(weich))
+        _log_run("", "plan-weich", "warn",
+                 {"art": "teil", "anzahl": len(weich), "hart": TREATMENT_NEU_HART,
+                  "befunde": weich[:8]})
+        if TREATMENT_NEU_HART:
+            fehler.extend(weich)
     return fehler
 
 
@@ -12588,11 +12660,15 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
                 # Generiert = bezahlt. Muss in die Abschnittskosten, sonst
                 # rechnet der Deckel an der Wirklichkeit vorbei.
                 b["_hero_kosten"] = PREISE_EINHEIT.get("fal-nano-banana-pro", 0.14)
+        # 20.09.: die hinterlegten Farben des Kunden mitgeben, sonst faellt kit.py
+        # auf ein Preset zurueck - und bei einem unbekannten Kunden auf Justus' Lila.
         markup = kit.baue(art, {"zeilen": zeilen, "kicker": str(b.get("kicker") or ""),
                                 "logo": slug, "logo_farbe": farbe,
                                 "bild": hero_bild,
                                 "geprueft": bool(b.get("geprueft"))},
-                          s["client_id"], w_px, h_px, min(sek, HTML_TOOL_MAX_S),
+                          s["client_id"], w_px, h_px,
+                          farben=_client_brand_colors(s["client_id"]),
+                          sekunden=min(sek, HTML_TOOL_MAX_S),
                           wende=(k in GEWENDET))
         if markup:
             _kit_geruest = markup
@@ -13568,7 +13644,11 @@ async def _build_impl(req: BuildRequest):
              "(mit Plan %.4f von %.2f), %.1fs", s["id"], umgesetzt, geplant,
              len(s["layers"]), kosten, gesamt, DECKEL_USD, time.time() - t0)
     _log_run(s["client_id"], "build", "ok" if not abweichungen else "warn",
-             {"session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
+             # 20.09.: 'pauschal' heisst: dieser Betrag zaehlt in der Auswertung. Er ist
+             # die Summe ueber das Bau-Protokoll und enthaelt Plan und Omni-Clips schon,
+             # deshalb tragen jene Zeilen 'teil' und werden nicht noch einmal addiert.
+             {"art": "pauschal", "usd": round(kosten + float(s.get("kosten_plan") or 0.0), 4),
+              "session_id": s["id"], "umgesetzt": umgesetzt, "geplant": geplant,
               "ebenen": len(s["layers"]), "kosten_usd": kosten,
               "kosten_gesamt_usd": gesamt, "kosten_gesamt_eur": _eur(gesamt),
               "zurueckgestuft": len(zurueckgestuft),
@@ -14337,6 +14417,12 @@ def _kosten_zeile(d: dict) -> float:
                 + int(d.get("aus") or 0) * aus_p) / 1_000_000.0
     if art == "einheit":
         return float(d.get("menge") or 0.0) * PREISE_EINHEIT.get(d.get("einheit") or "", 0.0)
+    if art == "pauschal":
+        # Ein fertig gerechneter Betrag, etwa die Summe eines ganzen Baus.
+        return float(d.get("usd") or d.get("kosten_gesamt_usd") or d.get("kosten_usd") or 0.0)
+    # art 'teil' bewusst 0: der Betrag steckt schon in einer pauschal-Zeile. Er wird
+    # ausgewiesen, damit man sieht, woraus sich der Bau zusammensetzt, aber nicht
+    # addiert - sonst zaehlt dasselbe Geld zweimal.
     return 0.0
 
 
@@ -14371,7 +14457,7 @@ def tool_stats_kosten(req: KostenRequest):
     for x in rows:
         d = x.get("detail") or {}
         art = d.get("art")
-        if art not in ("llm", "einheit"):
+        if art not in ("llm", "einheit", "pauschal", "teil"):
             ohne_messung += 1
             continue
         p = posten.setdefault(x.get("tool") or "?", {

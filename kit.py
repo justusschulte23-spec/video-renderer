@@ -81,11 +81,61 @@ WENDE = {
 }
 
 
-def kit_fuer(client_id: str, wende: bool = False) -> dict:
-    k = KITS.get((client_id or "justus").lower(), KITS["justus"])
-    if not wende:
-        return k
-    return {**k, **WENDE.get((client_id or "justus").lower(), WENDE["justus"])}
+# Ein Kunde ohne hinterlegte Farben bekommt DAS hier, nicht die eines anderen.
+# Neutral heisst: sichtbar unfertig, aber nie gelogen. Wer Justus' Amethyst in einem
+# fremden Video sieht, haelt ihn fuer eine Entscheidung.
+# Die FARBEN sind neutral, alles Bauliche (Schrift, Radien, Zeiten, Verlauf) kommt
+# aus dem Basis-Kit. Ein Kunde ohne hinterlegte Farben soll nicht abstuerzen und auch
+# nicht wie Justus aussehen - er soll unfertig aussehen und trotzdem rendern.
+# Ohne diese Vererbung fehlten 'font', 'radius' und sechs weitere Schluessel, und der
+# erste Render eines neuen Kunden waere mit KeyError gestorben.
+NEUTRAL = {
+    **{k: v for k, v in KITS["justus"].items()
+       if k in ("font", "serif", "radius", "rein_ms", "raus_ms", "versatz_ms")},
+    "canvas": "#F2F2F3", "surface": "#FFFFFF", "raised": "#E6E6E8",
+    "akzent": "#4B5563", "akzent_soft": "#374151", "text": "#111113",
+    "muted": "#6B7280", "linie": "rgba(17,17,19,.12)", "signal": "#B91C1C",
+    "gut": "#15803D", "grenze": "#B91C1C", "warnung": "#A16207",
+    "glow": "0 0 60px rgba(75,85,99,.22)",
+    "grund": "radial-gradient(120% 80% at 50% 0%, #FFFFFF 0%, #F2F2F3 60%)",
+    "raster": "rgba(17,17,19,.04)",
+}
+NEUTRAL_WENDE = {
+    "canvas": "#121214", "surface": "#1A1A1D", "raised": "#242428",
+    "text": "#F5F5F6", "muted": "#9CA3AF", "linie": "rgba(255,255,255,.10)",
+    "glow": "0 0 60px rgba(75,85,99,.30)",
+    "grund": "radial-gradient(120% 80% at 50% 0%, #1E1E22 0%, #121214 60%)",
+    "raster": "rgba(255,255,255,.05)", "gut": "#4ADE80", "grenze": "#F87171",
+}
+
+# Welche Schluessel aus clients.brand_colors auf welche Kit-Farbe zeigen.
+AUS_BRAND = {"akzent": "akzent", "flaeche": "canvas", "tinte": "text",
+             "neben": "muted", "linie": "linie", "gut": "gut", "offen": "raised"}
+
+
+def kit_fuer(client_id: str, wende: bool = False, farben: dict = None) -> dict:
+    """Das Farb-Kit eines Kunden.
+
+    20.09.: Vorher fiel jeder unbekannte Kunde still auf KITS["justus"] - Kunde drei
+    bekam Justus' Amethyst, und niemand merkte es. Jetzt gilt: die hinterlegten
+    Farben aus clients.brand_colors stechen alles, ein bekannter Kunde behaelt sein
+    Preset, und ein unbekannter ohne Farben bekommt NEUTRAL. Niemals die Farben
+    eines anderen Kunden.
+
+    farben: das Ergebnis von _client_brand_colors (main.py). kit.py selbst spricht
+    nicht mit der Datenbank."""
+    cid = (client_id or "").lower()
+    k = dict(KITS.get(cid) or NEUTRAL)
+    if wende:
+        k.update(WENDE.get(cid) or NEUTRAL_WENDE)
+    for quelle, ziel in AUS_BRAND.items():
+        wert = (farben or {}).get(quelle)
+        if isinstance(wert, str) and wert.strip():
+            k[ziel] = wert.strip()
+    if (farben or {}).get("akzent"):
+        k.setdefault("akzent_soft", farben["akzent"])
+        k["akzent_soft"] = k.get("akzent_soft") or farben["akzent"]
+    return k
 
 
 def _ist_vollbild(breit: int, hoch: int) -> bool:
@@ -655,12 +705,13 @@ def _logo(slug: str, farbe: str = "") -> str:
 
 
 def baue(art: str, felder: dict, client_id: str, breit: int, hoch: int,
+         farben: dict = None,
          sekunden: float = 3.0, wende: bool = False) -> Optional[str]:
     """Fertiges Markup fuer eine Komponente. Gibt None, wenn das Kit die Art
     nicht kennt — dann uebernimmt der Gestalter.
 
     wende=True baut dieselbe Komponente in der anderen Helligkeit."""
-    k = kit_fuer(client_id, wende)
+    k = kit_fuer(client_id, wende, farben)
     roh_zeilen = [str(z).strip() for z in (felder.get("zeilen") or []) if str(z).strip()]
     # Zustand einmal abtrennen. Danach ist `zeilen` reiner Anzeigetext — sonst
     # stuende das '+' im Bild, und genau so etwas hat schon einmal die interne

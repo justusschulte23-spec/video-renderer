@@ -11218,7 +11218,7 @@ def _treatment_weich(plan: dict) -> list:
     Momente-Sprache noch nicht. Getrennt gehalten, damit sich ihre Wirkung an
     echten Plaenen ablesen laesst, bevor sie scharf geschaltet werden."""
     mom = plan.get("momente") or []
-    aus, vorher = [], None
+    aus, vorher, vorher_einst = [], None, None
     for i, m in enumerate(mom):
         z = str(m.get("zustand") or "er")
         if z not in ZUSTAENDE and z not in KOMPOSITIONEN:
@@ -11231,10 +11231,18 @@ def _treatment_weich(plan: dict) -> list:
         if laenge is not None and 0 < laenge < MOMENT_MIN_S:
             aus.append(f"Moment {i} laeuft {laenge:.1f}s — unter {MOMENT_MIN_S}s "
                        "traegt kein Moment, das ist ein Zucken.")
-        if vorher is not None and z == vorher and z == "er":
-            aus.append(f"Moment {i}: zweimal '{z}' hintereinander — das ist EIN "
-                       "Moment, kein Schnitt. Fass sie zusammen oder setz etwas dazwischen.")
-        vorher = z
+        # Zwei er-Momente hintereinander sind nur dann EIN Moment, wenn auch die
+        # Einstellung dieselbe ist. Der Wechsel normal->nah ist laut Editor-Prompt
+        # ausdruecklich ein SCHNITT ("nah = Gestaendnis, Pointe, Umschwung"), und im
+        # Testlauf vom 20.09. waren alle vier Befunde genau dieser Fall - die Regel
+        # haette richtige Plaene bemaengelt.
+        einst = str(m.get("einstellung") or "normal")
+        if (vorher is not None and z == vorher and z == "er"
+                and einst == vorher_einst and not str(m.get("punch_wort") or "").strip()):
+            aus.append(f"Moment {i}: zweimal '{z}' in derselben Einstellung "
+                       f"('{einst}') — das ist EIN Moment, kein Schnitt. Fass sie "
+                       "zusammen, wechsle die Einstellung oder setz etwas dazwischen.")
+        vorher, vorher_einst = z, einst
     if mom:
         m0 = mom[0]
         if (str(m0.get("zustand") or "er") == "er" and not str(m0.get("punch_wort") or "").strip()

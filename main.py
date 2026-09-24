@@ -5292,6 +5292,104 @@ def _block_grenzen(hints: dict, words: list, duration: float) -> dict:
     return grenzen
 
 
+WHITEBOARD_UNTERTITEL_Y = 0.88   # ganz unten: das Board haengt an der Wand, nicht am Boden
+
+
+def _regie_sperren(s: dict) -> dict:
+    """Die Whiteboard-Regie aus dem Skript auf die ECHTE Zeitachse legen (24.09.).
+
+    Der Dashboard-Autor schreibt in den Spickzettel `regie.bloecke`: jeder Block mit
+    seinem Text, ob er am Whiteboard spielt und ob sein letzter Frame das Standbild ist.
+    Die Zeiten kommen hier aus dem Wort-Transkript (_block_grenzen), nicht aus dem Plan
+    des Modells: der Plan benennt Bloecke selbst und liegt dabei daneben.
+
+    Rueckgabe: sperren [(von, bis, block)], cover_s, und was nicht gefunden wurde. Ein
+    Whiteboard-Block, der im Transkript nicht auftaucht, wird NICHT geraten, er steht als
+    Warnung im Ergebnis."""
+    if "regie_sperren" in s:
+        return s["regie_sperren"]
+    regie = ((s.get("briefing") or {}).get("regie") or {})
+    bloecke = [b for b in (regie.get("bloecke") or []) if isinstance(b, dict) and b.get("block")]
+    aus = {"sperren": [], "cover_s": None, "fehlt": [], "vorrat_id": regie.get("vorrat_id"),
+           "bauform": regie.get("bauform")}
+    if not bloecke or not any(b.get("whiteboard") for b in bloecke):
+        s["regie_sperren"] = aus
+        return aus
+    grenzen = _block_grenzen({"blocks": [{"rolle": b["block"], "text": b.get("text") or ""} for b in bloecke]},
+                             s.get("words") or [], float(s.get("duration") or 0))
+    for b in bloecke:
+        if not b.get("whiteboard"):
+            continue
+        g = grenzen.get(b["block"])
+        if not g:
+            aus["fehlt"].append(b["block"])
+            continue
+        # Der erste Block beginnt mit dem Video, nicht beim ersten seltenen Wort: davor
+        # laege sonst ein Streifen, in den B-Roll rutschen darf.
+        von = 0.0 if b is bloecke[0] else g[0]
+        aus["sperren"].append((round(von, 2), round(g[1], 2), b["block"]))
+        if b.get("thumbnail"):
+            # Der LETZTE Frame des Durchstreich-Blocks: das durchgestrichene Board.
+            aus["cover_s"] = round(max(g[0], g[1] - 1.0 / FPS), 3)
+    if aus["fehlt"]:
+        s.setdefault("warnungen", []).append(
+            "Whiteboard-Block nicht im Transkript gefunden, keine Sperre gesetzt: " + ", ".join(aus["fehlt"]))
+    log.info("[REGIE] %s: Whiteboard-Sperren %s, Cover %s, fehlt %s", s.get("id"),
+             aus["sperren"], aus["cover_s"], aus["fehlt"])
+    s["regie_sperren"] = aus
+    return aus
+
+
+def _regie_filter(s: dict, layers: list) -> list:
+    """Vor JEDEM Remotion-Lauf: keine Ebene ausser Facecam und Untertitel ueber einem
+    Whiteboard-Block. Das Matching wuerde sonst genau den Moment ueberdecken, der das
+    Format traegt. Sitzt am Render, nicht am Plan, weil nach dem Plan noch Metaphern,
+    Effekte und die Reparatur Ebenen anlegen."""
+    sp = _regie_sperren(s)["sperren"]
+    if not sp:
+        return layers
+    fr = [(int(v * FPS), int(b * FPS), blk) for v, b, blk in sp]
+    raus, bleibt = [], []
+    for l in layers:
+        if not _ist_pflicht(l) and any(a < l["to"] and b > l["from"] for a, b, _ in fr):
+            raus.append(l)
+        else:
+            bleibt.append(l)
+    for l in bleibt:
+        if (l.get("source") or {}).get("kind") == "captions":
+            duck = list(l["source"].get("duckFor") or [])
+            for a, b, _ in fr:
+                if [a, b] not in duck:
+                    duck.append([a, b])
+            l["source"]["duckFor"] = duck
+            # Eine gemeinsame Hoehe fuer alle Ausweichstellen: ganz unten liegt unter
+            # jedem gebauten Element und unter dem Board.
+            l["source"]["duckY"] = max(float(l["source"].get("duckY") or 0), WHITEBOARD_UNTERTITEL_Y)
+    if raus:
+        log.info("[REGIE] %s: %d Ebene(n) ueber Whiteboard-Bloecken entfernt (%s)", s.get("id"), len(raus),
+                 ", ".join("%s %s" % ((l.get("source") or {}).get("kind"), l.get("id")) for l in raus[:8]))
+    return bleibt
+
+
+def _cover_melden(s: dict) -> Optional[int]:
+    """Den Cover-Zeitpunkt an die Vorratszeile schreiben, damit das Posten ihn findet."""
+    sp = _regie_sperren(s)
+    if sp.get("cover_s") is None:
+        return None
+    ms = int(round(sp["cover_s"] * 1000))
+    vid = sp.get("vorrat_id")
+    if vid:
+        try:
+            requests.patch(f"{SUPABASE_URL}/rest/v1/skript_vorrat?id=eq.{int(vid)}", timeout=20,
+                           json={"cover_ms": ms},
+                           headers={"apikey": SUPABASE_SERVICE_KEY,
+                                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                    "Content-Type": "application/json"})
+        except Exception as exc:
+            log.warning("[REGIE] cover_ms nicht geschrieben: %s", exc)
+    return ms
+
+
 def _briefing_props(briefing: dict, words: list, hook_end_s: float, duration: float,
                     hints: dict = None) -> tuple:
     """Map the regie onto the ACTUAL transcript timeline.
@@ -10771,6 +10869,10 @@ def tool_session_render(req: SessionRef):
     def _render_session(layers: list, tag: str) -> Path:
         """Ebenen → Remotion → Ton drunter. Zweimal aufrufbar, damit die
         QA-Korrektur nicht den halben Renderpfad kopieren muss."""
+        gefiltert = _regie_filter(s, layers)
+        if layers is s["layers"]:
+            s["layers"][:] = gefiltert   # Telemetrie und Abnahme sehen, was gerendert wird
+        layers = gefiltert
         props = {"layers": layers, "legacy": None, "face_url": s["face_url"],
                  "durationInSeconds": round(dauer, 3),
                  # OHNE das rendert jeder Kunde in Justus' Amethyst — die
@@ -13775,6 +13877,12 @@ async def _build_impl(req: BuildRequest):
             kaputt.setdefault(int(m.group(1)), f)
         else:
             log.warning("[BAU] Planmangel (nicht abschnittsgebunden): %s", f)
+    # 24.09.: Whiteboard-Regie. Ein Abschnitt, der einen Whiteboard-Block beruehrt, wird
+    # vollbild: dort steht er am Board, und das Board ist das Bild.
+    for _i, _a in enumerate(plan["abschnitte"]):
+        for _v, _b, _blk in _regie_sperren(s)["sperren"]:
+            if float(_a.get("von") or 0) < _b and float(_a.get("bis") or 0) > _v and _i not in kaputt:
+                kaputt[_i] = "Abschnitt %d: Whiteboard-Regie (Block %s), kein B-Roll" % (_i, _blk)
     if kaputt:
         log.warning("[BAU] %d Abschnitt(e) verletzen Regeln und werden vollbild",
                     len(kaputt))
@@ -14478,8 +14586,12 @@ def _video_job(job_id: str, req: "VideoRequest"):
         _abbruch_pruefen()
         bau = asyncio.run(_build_impl(BuildRequest(
             session_id=sid, rendern=req.rendern)))
+        _s = BUILD_SESSIONS.get(sid)
+        cover_ms = _cover_melden(_s) if _s else None
         VIDEO_JOBS[job_id] = {
             "status": "done", "schritt": "fertig", "session_id": sid,
+            "cover_ms": cover_ms,
+            "regie": (_s or {}).get("regie_sperren"),
             "bilanz": bau.get("bilanz"),
             "url": (bau.get("render") or {}).get("url"),
             "abweichungen": bau.get("abweichungen"),

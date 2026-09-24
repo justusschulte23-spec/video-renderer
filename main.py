@@ -9,6 +9,7 @@ import asyncio
 import kit
 import karussell
 import json
+import random          # Musikwahl: ein Stueck je Stimmung
 import copy
 from datetime import datetime, timezone
 import re
@@ -5481,7 +5482,7 @@ def _director_to_props(plan: dict, duration: float, hook_end_s: float, face: dic
         kind = o.get("kind")
         if kind == "glass" and o.get("text"):
             overlays.append({"startFrame": int(st * FPS), "endFrame": int(en * FPS),
-                             "kind": "glass", "text": str(o["text"])[:60], "size": "third",
+                             "kind": "glass", "text": _kurz(o["text"], 60, "Glass-Kasten"), "size": "third",
                              "position": pos, "topRatio": rail, "from": frm, "asset_url": ""})
         elif kind == "stock" and o.get("query"):
             if want_upper:   # stock is big; only place it below the face, never on the top rail
@@ -6155,6 +6156,28 @@ def metaphern_debug(req: MetaphernRequest):
     return _metaphern(words, max_anker=req.max_anker)
 
 
+def _kurz(text: str, grenze: int, wofuer: str = "") -> str:
+    """Text auf eine Bildschirmbreite bringen, OHNE mitten im Wort zu schneiden.
+
+    22.09.: Vorher stand an drei Stellen `str(x)[:60]`. Auf dem Bildschirm
+    erschien dann "was dich wirklich Kunden kos", und die Abnahme meldete vier
+    Laeufe hintereinander "abgeschnittene Texte" und "unvollstaendige
+    Einblendungen". Das war kein Fehlurteil der Abnahme, sondern eine genaue
+    Beschreibung.
+
+    Geschnitten wird an der letzten Wortgrenze davor. Passt nicht einmal ein
+    ganzes Wort, bleibt das erste Wort stehen - ein halbes Wort nie."""
+    t = " ".join(str(text or "").split())
+    if len(t) <= grenze:
+        return t
+    schnitt = t[:grenze]
+    leer = schnitt.rfind(" ")
+    kurz = (schnitt[:leer] if leer > 0 else t.split(" ")[0]).rstrip(" ,;:-–—")
+    log.info("[TEXT] %s gekuerzt: %d auf %d Zeichen (%r -> %r)",
+             wofuer or "Einblendung", len(t), len(kurz), t[:70], kurz[:70])
+    return kurz
+
+
 def _timed_transcript(words: list, max_chars: int = 4200) -> str:
     """Wort-Transkript MIT Zeiten, in Zeilen zu 8 Woertern. Der Regie fehlte
     bisher jede Zeitachse — sie bekam Fliesstext und musste raten, wie eng die
@@ -6576,8 +6599,9 @@ def _map_visual_script(beats: list, words: list, duration: float,
                 want_upper = False
             rail = upper_rail if want_upper else lower_rail
             overlays.append({"startFrame": sf, "endFrame": ef, "kind": "glass",
-                             "text": str(headline)[:60],
-                             "kicker": str((content or {}).get("kicker") or "")[:24] if isinstance(content, dict) else "",
+                             "text": _kurz(headline, 60, "Headline"),
+                             "kicker": (_kurz((content or {}).get("kicker") or "", 24, "Kicker")
+                                        if isinstance(content, dict) else ""),
                              "size": "third", "position": "upper_third" if want_upper else "lower_third",
                              "topRatio": rail, "from": "left" if ci % 2 == 0 else "right", "asset_url": ""})
             ci += 1
@@ -10450,6 +10474,220 @@ def tool_validate(req: SessionRef):
 #   Pausen    steht NICHT hier, sondern im Schnitt (_compute_keep_segments,
 #             PAUSE_HALTEN_S) — eine Pause nachtraeglich in den Ton zu legen
 #             wuerde jedes Bild dahinter verschieben.
+# ── MUSIKBETT ───────────────────────────────────────────────────────────────
+# Am 29.07. ersatzlos entfernt ("der Ton kommt auf der Plattform dazu"). Seit
+# dem Kanaele-Anbau posten wir ueber die API, und dort gibt es diesen Schritt
+# nicht mehr. Deshalb wieder da, aber an der richtigen Stelle: im Tonpass,
+# nach der Pegelfuehrung der Stimme.
+MUSIK_DIR = Path(os.environ.get("MUSIK_DIR", "musik"))
+MUSIK_AN = os.environ.get("MUSIK_AN", "1").lower() in ("1", "true", "ja")
+MUSIK_DB = float(os.environ.get("MUSIK_DB", "-21"))       # Grundpegel unter der Stimme
+MUSIK_DUCK_DB = float(os.environ.get("MUSIK_DUCK_DB", "-9"))   # zusaetzlich, solange gesprochen wird
+MUSIK_HOOK_S = float(os.environ.get("MUSIK_HOOK_S", "3.0"))    # die ersten Sekunden
+MUSIK_HOOK_EXTRA_DB = float(os.environ.get("MUSIK_HOOK_EXTRA_DB", "-6"))
+MUSIK_FADE_S = 1.2
+
+# Stimmung je Hook-Bauform. Der Autor setzt die Bauform bei JEDEM Skript, also
+# kostet die Zuordnung keine einzige Modell-Runde. hook_formel waere feiner,
+# ist aber nur bei einem Viertel der Skripte gefuellt.
+MUSIK_STIMMUNG = {
+    "ABOUT_ME":    "nachdenklich",   # er erzaehlt von sich
+    "THIRD_PARTY": "ruhig",          # er erzaehlt von jemand anderem
+    "IF_I":        "treibend",       # hypothetisch, vorwaerts
+    "CAN_YOU":     "energisch",      # Frage an den Zuschauer
+    "TO_YOU":      "energisch",      # direkte Ansprache
+}
+MUSIK_STIMMUNG_STANDARD = "ruhig"
+
+
+def _musik_bibliothek() -> list:
+    """Die Stuecke mit belegter Herkunft. Ohne Beleg kein Stueck.
+
+    Erwartet musik/bibliothek.json:
+      [{"datei": "...mp3", "stimmung": "ruhig", "tempo": 82, "sekunden": 124,
+        "quelle": "Pixabay", "adresse": "https://pixabay.com/...",
+        "lizenz": "Pixabay Content License", "geholt_am": "2026-09-22",
+        "lizenz_beleg": "belege/xyz.png",   # Screenshot der Lizenzseite
+        "fuer_kunden": false}]              # nur fuer Justus, nicht fuer Kunden
+
+    Pflicht sind datei, stimmung, quelle, lizenz UND ein Beleg. Ein Link
+    allein reicht nicht: Seiten aendern sich, und wenn eine Plattform in einem
+    Jahr beanstandet, muss der Stand von heute nachweisbar sein.
+    """
+    pfad = MUSIK_DIR / "bibliothek.json"
+    if not pfad.exists():
+        return []
+    try:
+        roh = json.loads(pfad.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("[MUSIK] bibliothek.json unlesbar: %s", str(exc)[:160])
+        return []
+    aus = []
+    for e in roh if isinstance(roh, list) else []:
+        fehlt = [k for k in ("datei", "stimmung", "quelle", "lizenz",
+                             "lizenz_beleg", "geholt_am") if not e.get(k)]
+        if fehlt:
+            log.warning("[MUSIK] %s uebersprungen, es fehlt: %s",
+                        e.get("datei") or "?", ", ".join(fehlt))
+            continue
+        if not (MUSIK_DIR / e["datei"]).exists():
+            log.warning("[MUSIK] %s steht im Verzeichnis nicht", e["datei"])
+            continue
+        if not (MUSIK_DIR / e["lizenz_beleg"]).exists():
+            # Der Link allein belegt nichts, Seiten aendern sich. Ohne den
+            # Screenshot vom Tag des Ladens wird das Stueck nicht benutzt.
+            log.warning("[MUSIK] %s ohne Lizenzbeleg (%s) - nicht benutzt",
+                        e["datei"], e["lizenz_beleg"])
+            continue
+        aus.append(e)
+    return aus
+
+
+def _musik_waehlen(stimmung: str, zuletzt: str = "",
+                   fuer_kunden: bool = False) -> Optional[dict]:
+    """Ein Stueck der gewuenschten Stimmung, aber nie dasselbe zweimal
+    hintereinander je Kunde. Gibt es in der Stimmung nur eines und war es das
+    letzte, wird die Stimmung gewechselt statt sich zu wiederholen.
+
+    fuer_kunden: Bei einem fremden Kunden kommen nur Stuecke in Frage, die
+    ausdruecklich dafuer freigegeben sind. Die Pixabay-Stuecke sind es nicht -
+    sie laufen unter Justus' eigenem Namen. Sobald eine Quelle mit klarer
+    Weitergabe dazukommt, bekommt sie fuer_kunden: true."""
+    lib = _musik_bibliothek()
+    if fuer_kunden:
+        lib = [e for e in lib if e.get("fuer_kunden") is True]
+        if not lib:
+            log.info("[MUSIK] kein fuer Kunden freigegebenes Stueck - ohne Bett")
+    if not lib:
+        return None
+    passend = [e for e in lib if e.get("stimmung") == stimmung]
+    frei = [e for e in passend if e["datei"] != zuletzt]
+    if frei:
+        return random.choice(frei)
+    if passend and not zuletzt:
+        return random.choice(passend)
+    rest = [e for e in lib if e["datei"] != zuletzt]
+    if rest:
+        log.info("[MUSIK] in '%s' nur das zuletzt benutzte Stueck, weiche aus", stimmung)
+        return random.choice(rest)
+    return None
+
+
+def _musik_zuletzt(client_id: str) -> str:
+    """Welches Stueck lief zuletzt bei diesem Kunden? Damit sich nichts
+    unmittelbar wiederholt. Faellt der Merker aus, ist das kein Fehler -
+    dann darf es sich eben wiederholen."""
+    try:
+        d = json.loads((MUSIK_DIR / "zuletzt.json").read_text(encoding="utf-8"))
+        return str(d.get(client_id) or "")
+    except Exception:
+        return ""
+
+
+def _musik_merken(client_id: str, datei: str) -> None:
+    try:
+        p = MUSIK_DIR / "zuletzt.json"
+        d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        d[client_id] = datei
+        p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        log.warning("[MUSIK] Merker nicht geschrieben: %s", str(exc)[:120])
+
+
+def _musik_drunter(src: Path, job_dir: Path, s: dict, dauer: float,
+                   tag: str = "a") -> Path:
+    """Der eine Aufruf von aussen. Faellt bei JEDEM Fehler auf den Originalton.
+
+    22.09.: Musik ist Beiwerk. _musik_unterlegen faengt schon eigene Fehler ab,
+    aber die Schritte davor (Bibliothek lesen, zuletzt benutztes Stueck aus der
+    DB, Vermerk schreiben) taten das nicht - ein Renderlauf haette an einer
+    kaputten bibliothek.json sterben koennen. Ein Video ohne Bett ist
+    hinnehmbar, ein Video das nicht entsteht nicht."""
+    try:
+        return _musik_drunter_roh(src, job_dir, s, dauer, tag)
+    except Exception as e:
+        log.warning("[MUSIK] Schritt ausgefallen (%s: %s) - Originalton bleibt",
+                    type(e).__name__, str(e)[:200])
+        return src
+
+
+def _musik_drunter_roh(src: Path, job_dir: Path, s: dict, dauer: float,
+                       tag: str = "a") -> Path:
+    """Stimmung bestimmen, Stueck waehlen, mischen.
+
+    Je Kunde abschaltbar ueber clients.musik_aus, ohne Deploy."""
+    if not MUSIK_AN:
+        return src
+    cid = str(s.get("client_id") or "")
+    if (s.get("client") or {}).get("musik_aus"):
+        log.info("[MUSIK] fuer %s abgeschaltet", cid)
+        return src
+    bauform = str(s.get("hook_bauform") or (s.get("vorrat") or {}).get("hook_bauform") or "")
+    stimmung = MUSIK_STIMMUNG.get(bauform.upper(), MUSIK_STIMMUNG_STANDARD)
+    # Justus' eigene Kanaele duerfen alles, was belegt ist. Fuer jeden anderen
+    # Kunden nur, was ausdruecklich zur Weitergabe freigegeben ist.
+    stueck = _musik_waehlen(stimmung, _musik_zuletzt(cid),
+                            fuer_kunden=(cid not in ("justus", "perftest")))
+    if not stueck:
+        log.info("[MUSIK] kein Stueck fuer '%s' (Bauform %s) - ohne Bett",
+                 stimmung, bauform or "unbekannt")
+        return src
+    ziel = _musik_unterlegen(src, job_dir, stueck, dauer, tag)
+    if ziel != src:
+        _musik_merken(cid, stueck["datei"])
+        _log_run(cid, "musik", "ok",
+                 {"art": "pauschal", "usd": 0.0, "datei": stueck["datei"],
+                  "stimmung": stimmung, "bauform": bauform,
+                  "quelle": stueck.get("quelle"), "lizenz": stueck.get("lizenz"),
+                  "db": MUSIK_DB})
+    return ziel
+
+
+def _musik_unterlegen(src: Path, job_dir: Path, stueck: dict, dauer: float,
+                      tag: str = "a") -> Path:
+    """Das Bett unter die schon gefuehrte Stimme. Faellt bei jedem Fehler auf
+    `src` zurueck - ein Video ohne Musik ist besser als keines."""
+    datei = MUSIK_DIR / stueck["datei"]
+    grund_db = MUSIK_DB + (0.0 if dauer > MUSIK_HOOK_S else MUSIK_HOOK_EXTRA_DB)
+    aus_st = max(dauer - MUSIK_FADE_S, 0.0)
+    # Die ersten Sekunden zusaetzlich leiser: der erste Satz muss stehen.
+    hook = ("volume=eval=frame:volume='if(lt(t,%.2f),%.4f,1)'"
+            % (MUSIK_HOOK_S, 10 ** (MUSIK_HOOK_EXTRA_DB / 20.0)))
+    kette = (
+        "[1:a]aloop=loop=-1:size=2e9,atrim=0:%.3f,asetpts=PTS-STARTPTS,"
+        "volume=%.2fdB,%s,"
+        "afade=t=in:st=0:d=%.2f,afade=t=out:st=%.3f:d=%.2f[bett];"
+        # Die Stimme steuert, wie laut das Bett sein darf. threshold tief,
+        # damit auch leise Passagen noch ducken; release lang, damit es in
+        # kurzen Atempausen nicht nervoes hochpumpt.
+        "[0:a]asplit=2[stimme][kette];"
+        "[bett][kette]sidechaincompress=threshold=0.02:ratio=%0.1f:attack=12:"
+        "release=420:makeup=1[bett_ge];"
+        "[stimme][bett_ge]amix=inputs=2:duration=first:normalize=0[gemischt];"
+        "[gemischt]loudnorm=I=-14:LRA=11:TP=-1.5[aout]"
+    ) % (dauer, MUSIK_DB, hook, MUSIK_FADE_S, aus_st, MUSIK_FADE_S,
+         max(1.5, abs(MUSIK_DUCK_DB) / 3.0))
+
+    ziel = job_dir / f"musik_{tag}.mp4"
+    try:
+        run(["ffmpeg", "-y", "-i", str(src), "-i", str(datei),
+             "-filter_complex", kette,
+             "-map", "0:v:0", "-map", "[aout]",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_HZ),
+             "-t", "%.3f" % dauer, "-movflags", "+faststart", str(ziel)],
+            f"musik_{tag}")
+    except Exception as exc:
+        log.warning("[MUSIK] Mischen fehlgeschlagen: %s", str(exc)[:200])
+        return src
+    if not ziel.exists() or ziel.stat().st_size < 1024:
+        log.warning("[MUSIK] Mischen ergab nichts - Ton bleibt wie er war")
+        return src
+    log.info("[MUSIK] %s (%s, %s) unter %.1fs gelegt, Grundpegel %.0f dB",
+             stueck["datei"], stueck.get("stimmung"), stueck.get("quelle"),
+             dauer, MUSIK_DB)
+    return ziel
+
+
 TONPASS_DIP_DB = 3.5       # so viel weicht die Stimme unter einem Impact
 TONPASS_DIP_VOR_S = 0.09   # sie geht schon davor runter, sonst kommt sie zu spaet
 TONPASS_DIP_NACH_S = 0.26
@@ -10593,6 +10831,10 @@ def tool_session_render(req: SessionRef):
             log.warning("[SESSION] SFX-Mix ergab nichts — Ton bleibt trocken")
     log.info("[SESSION] %s SFX: %d (%s)", s["id"], len(sfx_events), sfx_quelle)
 
+    # Musikbett zuletzt: unter die schon gefuehrte Stimme UND unter die Impacts.
+    # Frueher gelegt wuerde loudnorm im Tonpass es wieder hochziehen.
+    out = _musik_drunter(out, job, s, dauer, "a")
+
     # ── QA-Gate mit einer Korrekturrunde ─────────────────────────────────────
     qa_zeiten = sorted({round(l["from"] / FPS + 0.4, 2) for l in s["layers"]
                         if not _ist_pflicht(l)})[:6]
@@ -10630,6 +10872,9 @@ def tool_session_render(req: SessionRef):
             mixed_b = mix_sfx_into_video(out_b, sfx_events, job, dauer)
             if mixed_b:
                 out_b = mixed_b
+        # Auch die Korrekturfassung bekommt ihr Bett, sonst klaenge die
+        # zweite Runde anders als die erste.
+        out_b = _musik_drunter(out_b, job, s, dauer, "b")
         qa_b = _gemini_qa(out_b, qa_zeiten, dauer)
         n_a = sum(1 for f in qa.get("frames", []) if not f.get("ok", True))
         n_b = sum(1 for f in qa_b.get("frames", []) if not f.get("ok", True))
@@ -14251,6 +14496,14 @@ def _video_job(job_id: str, req: "VideoRequest"):
             "abnahme": bau.get("abnahme"),
             "qc": bau.get("qc"),
             "auslieferbar": bool((bau.get("qc") or {}).get("ok", True)),
+            # 22.09.: Der Aufrufer nannte bisher das Urteil der ABNAHME als
+            # Grund, obwohl ueber auslieferbar die mechanische QC entscheidet.
+            # Ein Grund, der nicht zu der Stelle gehoert, die entschieden hat,
+            # fuehrt in die Irre - siehe LinkedIn mit TikTok-Fehlertext (21.09.).
+            "auslieferbar_grund": ", ".join(
+                "%s (%s)" % (x.get("punkt"), x.get("befund") or "")
+                for x in ((bau.get("qc") or {}).get("punkte") or [])
+                if x.get("hart") and not x.get("ok")) or "",
             "sekunden": round(time.time() - t0, 1)}
         log.info("[VIDEO] %s fertig in %.0fs — %s", job_id[:8], time.time() - t0,
                  bau.get("bilanz"))

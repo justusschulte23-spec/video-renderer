@@ -1822,11 +1822,24 @@ def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08
     return True
 
 
+def _spuren(p: Path) -> str:
+    """Laenge von Bild- und Tonspur, fuer das Protokoll (25.09.: 0,6 s Ton fehlten nach dem
+    Schnitt, lokal nicht nachstellbar; das Log sagt jetzt, welcher Schritt sie verliert)."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration",
+                            "-of", "csv=p=0", str(p)], capture_output=True, text=True, timeout=30)
+        return " ".join(r.stdout.split())
+    except Exception as exc:
+        return "ffprobe: %s" % exc
+
+
 def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.03) -> bool:
     """Smooth pro cut via crossfades; falls back to hard concat (+declick) if that fails."""
     if not keeps:
         return False
     if _trim_with_crossfade(src, keeps, out_path):
+        log.info("[SPUREN] %s -> %s (%d Stuecke, Ende %.3f): vorher %s | nachher %s", src.name, out_path.name,
+                 len(keeps), keeps[-1][1], _spuren(src), _spuren(out_path))
         return True
     parts, concat_in = [], []
     for i, (s, e) in enumerate(keeps):
@@ -1852,6 +1865,8 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
     if result.returncode != 0:
         log.error("[TRIM] ffmpeg failed: %s", result.stderr[-1200:])
         return False
+    log.info("[SPUREN] %s -> %s (hart, %d Stuecke): vorher %s | nachher %s", src.name, out_path.name,
+             len(keeps), _spuren(src), _spuren(out_path))
     return True
 
 
@@ -7523,6 +7538,7 @@ def _fit_size(path: Path, job_dir: Path, target_mb: float = 47.0, name: str = "f
              "-movflags", "+faststart", str(out)], "fit_size")
         if out.exists() and out.stat().st_size < path.stat().st_size:
             log.info("[REMOTION] size-guard %.1fMB → %.1fMB", path.stat().st_size / 1e6, out.stat().st_size / 1e6)
+            log.info("[SPUREN] fit_size: vorher %s | nachher %s", _spuren(path), _spuren(out))
             return out
     except Exception as exc:
         log.warning("[REMOTION] size-guard failed: %s", exc)

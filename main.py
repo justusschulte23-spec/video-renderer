@@ -1838,9 +1838,21 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
     if not keeps:
         return False
     if _trim_with_crossfade(src, keeps, out_path):
+        sp = _spuren(out_path)
         log.info("[SPUREN] %s -> %s (%d Stuecke, Ende %.3f): vorher %s | nachher %s", src.name, out_path.name,
-                 len(keeps), keeps[-1][1], _spuren(src), _spuren(out_path))
-        return True
+                 len(keeps), keeps[-1][1], _spuren(src), sp)
+        # 25.09.: acrossfade im Server-ffmpeg verliert am Ende Ton (Render 83: Bild 92,73 s,
+        # Ton 92,06 s; lokal mit ffmpeg 7.1/8 nicht nachstellbar). -shortest schneidet das
+        # Video dann auf den Ton, die QC meldet Laufzeit hart. Kuerzerer Ton = Ergebnis
+        # verwerfen und hart schneiden, das haelt beide Spuren gleich lang.
+        try:
+            dauern = dict(x.split(",") for x in sp.split() if "," in x)
+            v, a = float(dauern.get("video", 0)), float(dauern.get("audio", 0))
+        except (ValueError, TypeError):
+            v = a = 0.0
+        if not (v and a and a < v - 0.1):
+            return True
+        log.warning("[SPUREN] Ueberblendung verliert Ton (Bild %.2f s, Ton %.2f s), harter Schnitt statt dessen", v, a)
     parts, concat_in = [], []
     for i, (s, e) in enumerate(keeps):
         seg = e - s

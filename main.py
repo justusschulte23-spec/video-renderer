@@ -7,6 +7,7 @@ import subprocess
 import math
 import asyncio
 import kit
+import stil
 import karussell
 import json
 import random          # Musikwahl: ein Stueck je Stimmung
@@ -4410,26 +4411,20 @@ async def generate_thumbnail(req: ThumbnailRequest):
     tmp_raw   = job_dir / "raw.jpg"
     tmp_final = job_dir / "final.jpg"
     try:
-        # ── fal.ai generation ─────────────────────────────────────────────────
-        concept = req.thumbnail_concept or req.thumbnail_prompt or req.topic
-        # per-client thumbnail brand from template (defaults = Justus tech look)
-        _tpl  = _load_template(req.client_id, None)
-        _cols = _tpl_colors(_tpl)
-        _timg = ((_tpl or {}).get("images") or {})
-        thumb_accent = _cols.get("primary") or req.brand_color_primary
-        thumb_bg     = _cols.get("bg") or "#12101a"
-        thumb_glow   = _timg.get("glow_word") or "amethyst purple"
-        thumb_vibe   = _timg.get("thumbnail_vibe")
+        # ── 25.09.: ohne fal. Der Text im Kundenstil als Standbild (stil.thumbnail).
+        # Bewusst der TOPIC-Text (Hook/Thema aus dem Aufrufer), kein Bildkonzept: ein
+        # generiertes Bild zeigte etwas, das im Video nicht vorkommt.
+        text = (req.topic or req.thumbnail_concept or req.thumbnail_prompt or "").strip()[:140]
         ok = False
         try:
-            loop    = asyncio.get_event_loop()
-            img_url = await loop.run_in_executor(
-                None, _call_fal_thumbnail, concept, thumb_accent, thumb_bg, thumb_glow, thumb_vibe
-            )
-            log.info("[THUMB] fal.ai returned: %s", img_url)
-            ok = download_file(img_url, tmp_raw)
+            markup = stil.thumbnail(text, req.client_id, W, H, _client_brand_colors(req.client_id))
+            png = job_dir / "raw.png"
+            ok = await _html_png_async(markup, W, H, png)
+            if ok:
+                Image.open(str(png)).convert("RGB").save(str(tmp_raw), "JPEG", quality=95)
         except Exception as exc:
-            log.warning("[THUMB] fal.ai failed — dark fallback: %s", exc)
+            log.warning("[THUMB] Standbild fehlgeschlagen: %s", exc)
+            ok = False
 
         # ── Fallback: solid dark canvas ───────────────────────────────────────
         if not ok:
@@ -5465,7 +5460,8 @@ def _regie_sperren(s: dict) -> dict:
         return s["regie_sperren"]
     regie = ((s.get("briefing") or {}).get("regie") or {})
     bloecke = [b for b in (regie.get("bloecke") or []) if isinstance(b, dict) and b.get("block")]
-    aus = {"sperren": [], "cover_s": None, "fehlt": [], "vorrat_id": regie.get("vorrat_id"),
+    aus = {"sperren": [], "cover_s": None, "fehlt": [],
+           "vorrat_id": regie.get("vorrat_id") or (s.get("briefing") or {}).get("vorrat_id"),
            "bauform": regie.get("bauform")}
     if not bloecke or not any(b.get("whiteboard") for b in bloecke):
         s["regie_sperren"] = aus
@@ -7537,9 +7533,58 @@ def _make_thumbnail_image(concept: str, client_id: str, out_path: Path) -> bool:
     return True
 
 
+async def _html_png_async(markup: str, width: int, height: int, out: Path) -> bool:
+    from playwright.async_api import async_playwright
+    src = out.with_suffix(".html")
+    src.write_text(markup, encoding="utf-8")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(args=["--no-sandbox", "--disable-setuid-sandbox",
+                                                "--disable-dev-shm-usage"])
+        ctx = await browser.new_context(viewport={"width": width, "height": height})
+        page = await ctx.new_page()
+        await page.goto(f"file://{src.absolute()}", wait_until="load", timeout=20000)
+        await page.screenshot(path=str(out))
+        await browser.close()
+    return out.exists()
+
+
+def _html_png(markup: str, width: int, height: int, out: Path) -> bool:
+    """Ein Standbild aus Markup. Laeuft in einem eigenen Thread mit eigener Schleife,
+    weil der Aufrufer (tool_session_render) selbst in einer laufenden Schleife steckt."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(_html_png_async(markup, width, height, out))).result(timeout=90)
+
+
+def _hook_standbild(s: dict, job_dir: Path) -> Optional[Path]:
+    """25.09.: Thumbnail ohne fal. Der Hook-Text (die ersten gesprochenen Woerter bis zum
+    ersten Satzende, hoechstens zwoelf) im Kundenstil als Standbild."""
+    worte = [str(w.get("word", "")).strip() for w in (s.get("words") or [])[:24] if str(w.get("word", "")).strip()]
+    if len(worte) < 3:
+        return None
+    hook = []
+    for w in worte:
+        hook.append(w)
+        if re.search(r"[.!?]$", w) and len(hook) >= 4:
+            break
+        if len(hook) >= 12:
+            break
+    text = re.sub(r"[,;:]$", "", " ".join(hook)).strip()
+    try:
+        markup = stil.thumbnail(text, s.get("client_id"), W, H, _client_brand_colors(s.get("client_id")))
+        out = job_dir / "hook_standbild.png"
+        if _html_png(markup, W, H, out):
+            log.info("[THUMB] Hook-Standbild ohne fal: %r", text[:80])
+            return out
+    except Exception as exc:
+        log.warning("[THUMB] Hook-Standbild fehlgeschlagen: %s", str(exc)[:200])
+    return None
+
+
 def _append_end_thumbnail(video_path: Path, job_dir: Path, *, concept: str = "",
                           client_id: str = "justus",
-                          thumbnail_url: Optional[str] = None) -> Path:
+                          thumbnail_url: Optional[str] = None,
+                          thumbnail_pfad: Optional[Path] = None) -> Path:
     """Append a 0.2s thumbnail freeze-frame to the END of the render (never the
     start — a still on frame 0 kills the hook). Returns the original path on any
     failure so a thumbnail problem never drops the video.
@@ -7548,7 +7593,9 @@ def _append_end_thumbnail(video_path: Path, job_dir: Path, *, concept: str = "",
     keinen RemotionRenderRequest, braucht aber dieselbe Endkarte."""
     try:
         thumb_img = job_dir / "thumb.jpg"
-        if thumbnail_url:
+        if thumbnail_pfad and Path(thumbnail_pfad).exists():
+            Image.open(str(thumbnail_pfad)).convert("RGB").save(str(thumb_img), "JPEG", quality=95)
+        elif thumbnail_url:
             if not download_file(thumbnail_url, thumb_img):
                 log.warning("[REMOTION] thumbnail_url download failed — skipping end-card")
                 return video_path
@@ -11156,12 +11203,17 @@ def tool_session_render(req: SessionRef):
             out, qa, s["layers"] = out_b, {**qa_b, "auto_fixed": True}, sicher
 
     # ── Endkarte ─────────────────────────────────────────────────────────────
-    briefing = s.get("briefing") or {}
-    out = _append_end_thumbnail(
-        out, job,
-        concept=str(briefing.get("thumbnail_concept") or briefing.get("hook")
-                    or briefing.get("topic") or ""),
-        client_id=cid)
+    # 25.09.: kein fal mehr. Whiteboard: das Cover ist der letzte Frame des
+    # Durchstreichens (cover_s aus _regie_sperren), keine Endkarte. Sonst: der Hook-Text
+    # im Kundenstil als Endkarte, und das Cover zeigt auf sie.
+    if _regie_sperren(s).get("cover_s") is None:
+        bild = _hook_standbild(s, job)
+        if bild:
+            vorher = probe_duration(out)
+            neu_out = _append_end_thumbnail(out, job, client_id=cid, thumbnail_pfad=bild)
+            if neu_out != out:
+                out = neu_out
+                s["regie_sperren"]["cover_s"] = round(vorher + 0.1, 3)
 
     out = _fit_size(out, job)
     url = upload_supabase(out, f"session_{s['id']}", folder="renders")
@@ -13043,8 +13095,147 @@ def _einblendung_merken(s: dict, a: dict, i: int, idee: str, res: dict, **extra)
     return res
 
 
-def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
-    """Platzhalter fuer Teil 3 (Stil-Bausteine aus Code). Bis dahin: keiner."""
+STIL_WEG_AUS = ("vollbild", "punch", "drift", "flaeche_kippt", "durchforsten")
+
+
+def _stil_liste(s: dict) -> list:
+    """Die erlaubten Bausteine fuer DIESES Video: clients.stil[schicht]. Die Schicht kommt
+    aus dem Briefing (Spickzettel). Ohne Schicht (Altbestand) alle Bausteine des Kunden."""
+    cfg = _client_feld(s.get("client_id"), "stil")
+    if not cfg:
+        return []
+    schicht = str((s.get("briefing") or {}).get("schicht") or "").strip()
+    if schicht in cfg and isinstance(cfg[schicht], list):
+        liste = cfg[schicht]
+    else:
+        liste = []
+        for sch in ("top", "middle", "niche"):
+            liste += [b for b in (cfg.get(sch) or []) if b not in liste]
+    return [b for b in liste if b in stil.BAUSTEINE]
+
+
+def _stil_weg(s: dict, a: dict) -> bool:
+    return bool(s.get("stil_liste")) and _komposition(a) not in STIL_WEG_AUS
+
+
+def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
+    """Inhalt NUR aus den gesprochenen Woertern des Abschnitts. Gibt None, wenn der
+    Abschnitt fuer den Baustein nichts hergibt (dann ist er hier gesperrt)."""
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    ws = [w for w in (s.get("words") or []) if von - 0.25 <= float(w.get("start") or 0) <= bis + 0.1]
+    worte = [str(w.get("word", "")).strip() for w in ws if str(w.get("word", "")).strip()]
+    if len(worte) < 3:
+        return None
+    zahlen = stil.zahlen_aus(worte)
+
+    def einheit(j):
+        n = worte[j + 1].strip(" ,.;:!?") if j + 1 < len(worte) else ""
+        return n if n[:1].isupper() and n.isalpha() else ""
+
+    satz = stil.kernsatz(worte)
+    if baustein == "grosse_zahl" and zahlen:
+        j, anzeige, _w = max(zahlen, key=lambda z: z[2])
+        stuetze = stil.kernsatz([w for w in worte if w.strip(" ,.;:!?") != anzeige])
+        return {"zahl": anzeige, "einheit": einheit(j), "stuetze": stuetze}
+    if baustein == "daten_chart" and len(zahlen) >= 2:
+        werte = []
+        for j, anzeige, wert in zahlen[:6]:
+            e = einheit(j)
+            vor = [x.strip(" ,.;:!?") for x in worte[max(0, j - 2):j]]
+            label = e or " ".join(v for v in vor if v)
+            werte.append({"label": label, "wert": wert, "text": (anzeige + (" " + e if e else ""))})
+        if len({w["wert"] for w in werte}) < 2:
+            return None
+        return {"titel": satz, "werte": werte}
+    if baustein == "typo_minimal" and satz:
+        return {"satz": satz}
+    if baustein == "vox_dokument":
+        text = " ".join(worte[:32])
+        return {"text": text, "markierung": satz if satz and satz in text else ""}
+    if baustein == "ui_karte" and satz:
+        art = "chat" if (satz.endswith("?") or re.search(r"\bhey\b", satz.lower())) else "notiz"
+        return {"text": satz, "art": art}
+    return None
+
+
+def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
+    """Jedes angezeigte Wort und jede Zahl muss gesprochen sein. Rueckgabe: fremde Woerter."""
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    worte = [str(w.get("word", "")) for w in (s.get("words") or [])
+             if von - 0.25 <= float(w.get("start") or 0) <= bis + 0.1]
+    anzeigen = [inhalt.get(k) for k in ("satz", "zahl", "einheit", "stuetze", "titel", "text", "markierung")]
+    for w in inhalt.get("werte") or []:
+        anzeigen += [w.get("label"), w.get("text")]
+    fremd = []
+    for x in anzeigen:
+        if x:
+            fremd += stil.nur_gesprochen(x, worte)
+    return fremd
+
+
+async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
+    """Ein Stil-Baustein aus der erlaubten Liste. Zuerst der, den der Inhalt verlangt
+    (zwei Zahlen: Chart, eine Zahl: grosse Zahl), sonst der am seltensten benutzte
+    Text-Baustein. bildschirm_beweis nur mit hochgeladenem Material."""
+    liste = s.get("stil_liste") or []
+    if not liste:
+        return None
+    b = a.get("braucht") or {}
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    dauer = max(1.2, min(HTML_TOOL_MAX_S, bis - von))
+    zaehler = s.setdefault("stil_zaehler", {})
+    # bildschirm_beweis: nur wenn eine Aufnahme hochgeladen ist
+    if "bildschirm_beweis" in liste:
+        vids = [m for m in (s.get("material") or []) if str(m.get("url", "")).lower().endswith((".mp4", ".mov", ".webm"))]
+        if vids and zaehler.get("bildschirm_beweis", 0) < len(vids):
+            m = vids[zaehler.get("bildschirm_beweis", 0)]
+            zaehler["bildschirm_beweis"] = zaehler.get("bildschirm_beweis", 0) + 1
+            return {"quelle_art": "stil", "stil": "bildschirm_beweis", "kosten": 0.0,
+                    "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+                    "stil_zoom": True,
+                    "layer_source": {"kind": "video", "url": m["url"]}}
+    reihe = []
+    wunsch = str(b.get("art_element") or b.get("stil") or "").strip()
+    if wunsch in liste:
+        reihe.append(wunsch)
+    for kand in ("daten_chart", "grosse_zahl"):
+        if kand in liste and kand not in reihe:
+            reihe.append(kand)
+    textarten = sorted([x for x in liste if x in ("typo_minimal", "vox_dokument", "ui_karte")],
+                       key=lambda x: (zaehler.get(x, 0), liste.index(x)))
+    reihe += [x for x in textarten if x not in reihe]
+    for baustein in reihe:
+        inhalt = _stil_inhalt(s, a, baustein)
+        if not inhalt:
+            continue
+        fremd = _stil_pruefen(inhalt, s, a)
+        if fremd:
+            log.warning("[STIL] %d %s verworfen, nicht gesprochen: %s", i, baustein, fremd[:6])
+            continue
+        if baustein == "ui_karte":
+            face = s.get("face") or {}
+            oben = float(face.get("top", 0.15))
+            h = round(min(0.26, oben - 0.08), 3)
+            if h < 0.12:
+                continue   # kein Platz ueber dem Gesicht: die Karte darf nicht darueber liegen
+            tf = {"x": 0.05, "y": 0.05, "w": 0.9, "h": h}
+        else:
+            tf = {"x": 0, "y": 0, "w": 1, "h": 1}
+        w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
+        variante = (_client_feld(s.get("client_id"), "stil").get("varianten") or {}).get(baustein)
+        markup = stil.baue(baustein, inhalt, s.get("client_id"), w_px, h_px,
+                           _client_brand_colors(s.get("client_id")), dauer, variante)
+        if not markup:
+            continue
+        erg = await asyncio.to_thread(_kit_direkt, markup, w_px, h_px, dauer)
+        if not erg.get("url"):
+            log.warning("[STIL] %d %s: %s", i, baustein, erg.get("hinweis"))
+            continue
+        zaehler[baustein] = zaehler.get(baustein, 0) + 1
+        log.info("[STIL] %d %s: %s", i, baustein, json.dumps(inhalt, ensure_ascii=False)[:200])
+        return {"quelle_art": "stil", "stil": baustein, "kosten": 0.0, "sekunden_material": dauer,
+                "transform": tf, "ohne_flaeche": baustein == "ui_karte", "stil_inhalt": inhalt,
+                "layer_source": {"kind": "video", "url": erg["url"], "transparent": baustein == "ui_karte"}}
     return None
 
 
@@ -13056,12 +13247,12 @@ async def _beschaffen(s: dict, a: dict, i: int) -> dict:
       4 nichts: lieber keine Einblendung als eine falsche
     Omni und fal-Bild nur, wenn clients.einblendung es erlaubt (Standard: aus)."""
     k_ = _komposition(a)
-    if k_ in ("metapher", "metapher_full"):
+    if k_ in ("metapher", "metapher_full") or _stil_weg(s, a):
         b_ = a.get("braucht") or {}
         idee = str(b_.get("zeigt") or b_.get("was") or b_.get("bild_prompt") or "").strip()
         res = await _beschaffen_bild(s, a, i)
         return _einblendung_merken(s, a, i, idee, res, stock=res.pop("_stock", None),
-                                   pruefung=res.pop("_pruefung", None))
+                                   pruefung=res.pop("_pruefung", None) or res.get("stil"))
     return await _beschaffen_alt(s, a, i)
 
 
@@ -13070,6 +13261,7 @@ async def _beschaffen_bild(s: dict, a: dict, i: int) -> dict:
     k = _komposition(a)
     was = str(b.get("zeigt") or b.get("was") or "").strip()
     cfg = _client_feld(s.get("client_id"), "einblendung")
+    s["omni_an"] = cfg.get("omni") is True
     # 1 Beweis
     m = _material_treffer(s, b)
     if m:
@@ -13085,7 +13277,7 @@ async def _beschaffen_bild(s: dict, a: dict, i: int) -> dict:
         except Exception as exc:
             log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
     # 2 Stil-Baustein
-    sb = _stil_baustein(s, a, i)
+    sb = await _stil_baustein(s, a, i)
     if sb:
         sb["_pruefung"] = "stil"
         return sb
@@ -13835,8 +14027,9 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
     src = res.get("layer_source") or {}
     # motiv: ER bleibt sichtbar - ein Backdrop wuerde ihn zudecken. Genau
     # das hat im Volltest vom 11.08. die milchigen Vollbild-Fenster erzeugt.
-    if (k in BRAUCHT_FLAECHE
-            or (src.get("transparent") and k not in ("flaeche_kippt", "motiv"))):
+    if ((k in BRAUCHT_FLAECHE
+            or (src.get("transparent") and k not in ("flaeche_kippt", "motiv")))
+            and not res.get("ohne_flaeche")):
         neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
 
     if k == "durchforsten" and res.get("uebersicht", {}).get("url"):
@@ -13882,7 +14075,7 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
         }, frames))
         neu.insert(0, _backdrop_layer(a, von_f, bis_f, frames, i))
     elif src:
-        tf = dict(el_box or {"x": 0, "y": 0, "w": 1, "h": 1})
+        tf = dict(res.get("transform") or el_box or {"x": 0, "y": 0, "w": 1, "h": 1})
         if (res.get("quelle_px") and src.get("kind") == "image"
                 and not (tf["w"] >= 0.99 and tf["h"] >= 0.99)):
             # Nicht formatfuellend: das Bild wird auf den Kasten ZUGESCHNITTEN,
@@ -13900,6 +14093,11 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
                 neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
         randlos = tf["w"] >= 0.99 and tf["h"] >= 0.99
         anim = list(el_anim)
+        if res.get("stil_zoom"):
+            # bildschirm_beweis: langsamer Zoom in die Aufnahme (Screen-Studio-Art). Ein
+            # Cursor-Highlight braucht Cursor-Koordinaten, die eine Aufnahme nicht mitliefert.
+            anim = [{"property": "scale", "from": 1.0, "to": 1.28, "start": von_f,
+                     "end": el_bis, "easing": "easeInOut"}]
         # Minimal-Regel (11.08.): kein Ken-Burns-Dauerzoom mehr auf Bildern.
         # Das Element landet mit dem Spring und STEHT — Bewegung ist der
         # Auftritt, nicht der Zustand.
@@ -14040,7 +14238,11 @@ def _schaetzungen(s: dict, plan: dict) -> dict:
     for i, a in enumerate(plan.get("abschnitte") or []):
         if not _kostet_modell(s, a):
             aus[i] = 0.0
-        elif _omni_faehig(a) and clips < OMNI_MAX:
+        elif s.get("stil_liste") and _stil_weg(s, a):
+            # 25.09.: Stil-Bausteine kommen aus Code und kosten nichts. Vorher stufte der
+            # Deckel hier Abschnitte herunter, die gar kein Geld gekostet haetten.
+            aus[i] = 0.0
+        elif _omni_faehig(a) and clips < OMNI_MAX and s.get("omni_an"):
             aus[i] = OMNI_USD
             clips += 1
         else:
@@ -14210,6 +14412,13 @@ async def _build_impl(req: BuildRequest):
     # Vor dem ersten Aufruf entscheiden, was nicht mehr hineinpasst. Waehrend
     # des Baus zu merken, dass das Geld alle ist, hiesse: die spaeten Abschnitte
     # fallen aus, egal wie wichtig sie sind.
+    # 25.09.: Stil-Liste und Omni-Schalter VOR dem Deckel, sonst schaetzt er Kosten fuer
+    # Abschnitte, die aus Code gebaut werden und nichts kosten.
+    s["stil_liste"] = _stil_liste(s)
+    s["omni_an"] = _client_feld(s.get("client_id"), "einblendung").get("omni") is True
+    if s["stil_liste"]:
+        log.info("[STIL] %s: Schicht %s, erlaubt %s", s.get("id"),
+                 (s.get("briefing") or {}).get("schicht") or "unbekannt", s["stil_liste"])
     zurueckgestuft = _deckel_plan(s, plan, float(s.get("kosten_plan") or 0.0))
     if zurueckgestuft:
         log.warning("[BAU] Kostendeckel: %d Abschnitte werden vollbild (%s)",

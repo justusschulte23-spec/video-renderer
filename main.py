@@ -1704,6 +1704,85 @@ def _silence_keep_segments(silences: list, duration: float, pad: float = 0.09,
     return [(s, e) for s, e in keeps if e - s > 0.05]
 
 
+# 25.09.: Stille-Schnitt nur, wo Tonsignal UND Wortgrenze uebereinstimmen. Vorher schnitt
+# Phase 3 allein nach silencedetect (ab 0,35 s, -30 dB, 0,20 s vorn / 0,09 s hinten):
+# leise Wortenden und Zischlaute liegen unter -30 dB, galten als Stille, und der Schnitt
+# landete im Wort. Die drei Werte stehen in clients.schnitt, nicht hier.
+SCHNITT_RUECKFALL = {"min_stille_ms": 600, "puffer_vor_ms": 150, "puffer_nach_ms": 200}
+STILLE_NOISE_DB = -30
+# Hinter dem letzten Wort setzt Whisper das Ende regelmaessig zu frueh, und kein
+# folgendes Wort rettet den Schnitt. Dort bleibt mindestens so viel stehen.
+STILLE_TAIL_S = 0.35
+
+
+def _schnitt_cfg(client_id: str) -> dict:
+    """clients.schnitt des Kunden. Jedes Mal frisch gelesen: eine Aenderung in der
+    Konfiguration gilt beim naechsten Render, ohne Neustart."""
+    cid = (client_id or AKTIVER_CLIENT.get() or "").lower()
+    cfg = {}
+    if cid and SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        try:
+            hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/clients",
+                             params={"client_id": f"eq.{cid}", "select": "schnitt"},
+                             headers=hdr, timeout=15).json()
+            cfg = (r[0].get("schnitt") if r else None) or {}
+        except Exception as exc:
+            log.warning("[TRIM] clients.schnitt fuer %s nicht geladen: %s", cid, exc)
+    fehlt = [k for k in SCHNITT_RUECKFALL if not isinstance(cfg.get(k), (int, float))]
+    if fehlt:
+        log.warning("[TRIM] clients.schnitt fuer %s unvollstaendig (%s), Rueckfall greift",
+                    cid or "?", ", ".join(fehlt))
+    out = {k: float(cfg[k]) if k not in fehlt else float(v) for k, v in SCHNITT_RUECKFALL.items()}
+    out["client_id"] = cid
+    return out
+
+
+def _stille_keep_segments(words: list, silences: list, duration: float, cfg: dict,
+                          betonung: Optional[list] = None) -> tuple:
+    """Die Stellen, die BLEIBEN. Geschnitten wird nur die Ueberlappung aus echter Stille
+    (silencedetect) und Wortluecke (Whisper), und nur wenn sie mindestens min_stille lang
+    ist. Davon bleiben puffer_vor hinter dem letzten Wort und puffer_nach vor dem
+    naechsten stehen. Vor einem betonten Wort bleibt die Pause (PAUSE_HALTEN_S).
+
+    Rueckgabe: (keeps, schnitte) mit schnitte = [{von, bis, stille, luecke}] fuer das Protokoll."""
+    min_s = cfg["min_stille_ms"] / 1000.0
+    vor, nach = cfg["puffer_vor_ms"] / 1000.0, cfg["puffer_nach_ms"] / 1000.0
+    if not words or not silences:
+        return [(0.0, duration)], []
+    luecken = [(0.0, float(words[0]["start"]), 0)]
+    for i in range(len(words) - 1):
+        luecken.append((float(words[i]["end"]), float(words[i + 1]["start"]), i + 1))
+    luecken.append((float(words[-1]["end"]), duration, None))
+    removes, schnitte = [], []
+    for g0, g1, naechstes in luecken:
+        if g1 - g0 < min_s:
+            continue
+        for s0, s1 in silences:
+            o0, o1 = max(g0, s0), min(g1, s1)
+            if o1 - o0 < min_s:
+                continue
+            v = 0.0 if g0 <= 0.0 else (max(vor, STILLE_TAIL_S) if naechstes is None else vor)
+            n = 0.0 if naechstes is None else nach
+            if naechstes is not None and betonung and naechstes < len(betonung) and betonung[naechstes]:
+                n = max(n, PAUSE_HALTEN_S)
+            a, b = o0 + v, o1 - n
+            if b - a > 0.05:
+                removes.append((a, b))
+                schnitte.append({"von": round(a, 3), "bis": round(b, 3),
+                                 "stille": [round(s0, 3), round(s1, 3)],
+                                 "luecke": [round(g0, 3), round(g1, 3)]})
+    removes.sort()
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    return [(x, y) for x, y in keeps if y - x > 0.02], schnitte
+
+
 def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08) -> bool:
     """Smooth pro joins: each keep-segment cross-faded into the next (video xfade +
     audio acrossfade, SAME duration each join -> A and V shrink equally -> stays in sync).
@@ -8976,7 +9055,7 @@ def tool_session_open(req: OpenSessionRequest):
         shutil.rmtree(job, ignore_errors=True)
         raise HTTPException(status_code=400, detail="facecam nicht ladbar")
     if req.trim:
-        trimmed, _ = _trim_pipeline(cam, job)
+        trimmed, _ = _trim_pipeline(cam, job, client_id=req.client_id)
         if trimmed != cam:
             cam = trimmed
     # Der Paper Edit laeuft NACH dem Saeubern und VOR allem anderen: Face-Track,
@@ -16576,7 +16655,7 @@ async def enrich_image_prompt(req: EnrichImageRequest):
             result["error"] = str(exc)
     return result
 
-def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False) -> tuple:
+def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id: str = "") -> tuple:
     """3-phase auto-cut. Returns (path, n_fillers); path is `src` if nothing was cut.
 
     Phase 0 drops repeated takes and false starts (LLM over a disfluency-preserving
@@ -16607,37 +16686,33 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False) -> tuple:
     else:
         log.warning("[TRIM] phase1: no transcript — skipping filler cut")
 
+    # ── PHASE 2: Stille, wo Tonsignal UND Wortgrenze uebereinstimmen (25.09.) ────
+    # Ersetzt den Wortluecken-Schnitt und den reinen silencedetect-Schnitt. Ohne
+    # Transkript wird nicht geschnitten: allein das Tonsignal schnitt ins Wort.
+    cfg = _schnitt_cfg(client_id)
     w2 = transcribe_audio(current)
-    if w2:
-        keeps2 = _compute_keep_segments(w2, probe_duration(current), max_gap=0.6,
-                                        pad=0.12, betonung=_betont(w2))
-        if len(keeps2) > 1:
+    if not w2:
+        log.warning("[TRIM] phase2: kein Transkript, kein Stille-Schnitt (nur Tonsignal schneidet ins Wort)")
+        return current, n_fillers
+    try:
+        a2 = job_dir / "audio2.mp3"
+        subprocess.run(["ffmpeg", "-y", "-i", str(current), "-vn", "-ar", "16000",
+                        "-ac", "1", str(a2)], check=True, capture_output=True)
+        sil = _silence_intervals(a2, noise_db=STILLE_NOISE_DB,
+                                 min_silence=cfg["min_stille_ms"] / 1000.0)
+        dur2 = probe_duration(current)
+        keeps2, schnitte = _stille_keep_segments(w2, sil, dur2, cfg, betonung=_betont(w2))
+        kept = sum(e - s_ for s_, e in keeps2)
+        log.info("[TRIM] phase2 %s: %d Stillen, %d Schnitte (min %.0f ms, vor %.0f, nach %.0f): %s",
+                 cfg["client_id"], len(sil), len(schnitte), cfg["min_stille_ms"],
+                 cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
+                 ", ".join("%.2f-%.2f" % (x["von"], x["bis"]) for x in schnitte[:20]))
+        if len(keeps2) > 1 and kept > dur2 * 0.5:
             p2 = job_dir / "phase2.mp4"
             if _trim_dead_air(current, keeps2, p2):
                 current = p2
-                log.info("[TRIM] phase2: word-based dead-air trim, %d keep-segments", len(keeps2))
-    else:
-        log.warning("[TRIM] phase2: no transcript — skipping dead-air trim")
-
-    # ── PHASE 3: real-silence tightening (ffmpeg silencedetect) ───────────────
-    # catches the "dumb pauses" that word-gaps miss — the actual audio silence.
-    try:
-        a3 = job_dir / "audio3.mp3"
-        subprocess.run(["ffmpeg", "-y", "-i", str(current), "-vn", "-ar", "16000",
-                        "-ac", "1", str(a3)], check=True, capture_output=True)
-        sil = _silence_intervals(a3)
-        if sil:
-            dur3 = probe_duration(current)
-            keeps3 = _silence_keep_segments(sil, dur3)
-            # guard: don't nuke the clip if detection is pathological
-            kept = sum(e - s for s, e in keeps3)
-            if len(keeps3) > 1 and kept > dur3 * 0.5:
-                p3 = job_dir / "phase3.mp4"
-                if _trim_dead_air(current, keeps3, p3):
-                    current = p3
-                    log.info("[TRIM] phase3: removed %d real-silence gaps", len(sil))
     except Exception as exc:
-        log.warning("[TRIM] phase3 skipped: %s", exc)
+        log.warning("[TRIM] phase2 skipped: %s", exc)
 
     return current, n_fillers
 

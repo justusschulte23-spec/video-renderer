@@ -181,7 +181,7 @@ def vox_dokument(text, markierung, k, breit, hoch, sekunden=3.0):
     marker = k["akzent"]
     css = f"""
     .blatt{{position:absolute;left:{int(breit*.07)}px;right:{int(breit*.07)}px;top:{int(hoch*.07)}px;height:{int(hoch*.56)}px;
-            background:{papier};border-radius:6px;box-shadow:0 30px 80px rgba(0,0,0,.18);padding:{int(breit*.08)}px;
+            background:{papier};border-radius:6px;box-shadow:0 30px 80px rgba(0,0,0,.18);overflow:hidden;padding:{int(breit*.08)}px;
             transform-origin:50% 55%;animation:zoom {max(1.6, sekunden):.1f}s 1.1s cubic-bezier(.4,0,.2,1) both;
             background-image:repeating-linear-gradient(to bottom, transparent 0, transparent {int(breit*.074)}px, {k['linie']} {int(breit*.074)}px, {k['linie']} {int(breit*.074)+1}px);}}
     .kopfz{{height:10px;width:30%;background:{k['raised']};margin-bottom:{int(breit*.05)}px;border-radius:3px;}}

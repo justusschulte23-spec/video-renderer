@@ -52,7 +52,7 @@ OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 # WhisperX via Replicate — precise word-level timestamps (wav2vec2 align) for cut+captions
 REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN", "")   # set in Railway env
 
-FAL_API_KEY           = os.environ.get("FAL_API_KEY", "")
+FAL_API_KEY           = ""   # 25.09.: fal entfernt, Schluessel in Railway geloescht
 FAL_THUMBNAIL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro"
 FAL_FLUX_ENDPOINT      = "https://fal.run/fal-ai/flux-2/flash"   # Flux 2 [fast]
 
@@ -2680,88 +2680,10 @@ def upload_cloudinary(path: Path, public_id: str) -> str:
 
 
 # ── fal.ai thumbnail generator ───────────────────────────────────────────────
-def _call_fal_thumbnail(concept: str, accent: str, bg: str = "#12101a",
-                        glow_word: str = "amethyst purple", vibe: str = None) -> str:
-    """Generate a thumbnail via fal.ai nano-banana-pro. Returns image URL.
-    bg/glow_word/vibe are per-client (template); defaults = Justus tech look."""
-    if not FAL_API_KEY:
-        raise RuntimeError("FAL_API_KEY not set")
+def _call_fal_thumbnail(*args, **kwargs) -> str:
+    """Entfernt am 25.09. Frueher: nano-banana-pro fuer Thumbnails und Metapher-Bilder."""
+    raise RuntimeError('fal ist seit dem 25.09. entfernt (Auftrag: Einblendungen, fal raus, Stil-System). Thumbnails kommen aus stil.thumbnail, Einblendungen aus stil.py.')
 
-    vibe = vibe or (
-        "Premium minimal tech thumbnail for a social media video. "
-        "Cinematic studio lighting, premium 3D render aesthetic, ultra clean, sharp focus, "
-        "high-end product photography style like an Apple keynote reveal. "
-        "Sophisticated, minimalist, expensive-looking."
-    )
-    negative = (
-        "cluttered, busy, multiple objects, text, letters, words, watermark, "
-        "logo, oversaturated, neon overload, rainbow colors, cartoonish, anime, "
-        "low quality, blurry, generic stock photo, chaotic background, messy, "
-        "people, faces, hands, distorted, ugly, amateur"
-    )
-    prompt = (
-        f"{vibe} "
-        f"Hero subject: {concept}. "
-        "Single hero object, centered composition, lots of empty negative space around it. "
-        f"Deep dark background ({bg}). "
-        f"The ONLY light source is a soft {glow_word} glow ({accent}) rimming the object. "
-        f"Subtle, not oversaturated. "
-        f"Avoid: {negative}"
-    )
-
-    headers = {
-        "Authorization": f"Key {FAL_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "prompt": prompt,
-        "negative_prompt": negative,
-        "aspect_ratio": "9:16",
-        "num_images": 1,
-    }
-
-    log.info("[THUMB] calling fal.ai nano-banana-pro")
-    _t0 = time.time()
-    resp = requests.post(FAL_THUMBNAIL_ENDPOINT, headers=headers, json=payload, timeout=90)
-    resp.raise_for_status()
-    data = resp.json()
-    # Ein Bild, egal ob direkt oder ueber die Warteschlange. Gezaehlt wird der
-    # abgeschickte Auftrag — fal rechnet ab da ab, auch wenn das Polling scheitert.
-    _log_einheit("bild-thumbnail", "fal-nano-banana-pro", 1,
-                 int((time.time() - _t0) * 1000))
-
-    # Direct result (synchronous endpoint)
-    if data.get("images"):
-        return data["images"][0]["url"]
-
-    # Queued result — poll status_url / response_url
-    request_id = data.get("request_id")
-    status_url  = data.get("status_url") or data.get("response_url")
-    if not status_url and request_id:
-        status_url = f"https://queue.fal.run/fal-ai/nano-banana-pro/requests/{request_id}"
-    if not status_url:
-        raise RuntimeError(f"fal.ai unexpected response: {data}")
-
-    poll_headers = {"Authorization": f"Key {FAL_API_KEY}"}
-    for _ in range(60):
-        time.sleep(1)
-        poll = requests.get(status_url, headers=poll_headers, timeout=30)
-        poll.raise_for_status()
-        result = poll.json()
-        status = result.get("status", "")
-        if status == "COMPLETED":
-            images = (result.get("output") or result).get("images", [])
-            if images:
-                return images[0]["url"]
-            raise RuntimeError(f"fal.ai completed but no images in response")
-        if status in ("FAILED", "ERROR"):
-            raise RuntimeError(f"fal.ai generation failed: {result}")
-
-    raise RuntimeError("fal.ai polling timed out after 60s")
-
-
-# ── Image prompt enrichment (3-layer brand pipeline) ──────────────────────────
-# Global, script-aware visual enricher — drives photorealistic hardware cutaways.
 GLOBAL_VISUAL_ENRICHER_PROMPT = """You are the Lead Visual Designer for an elite tech channel. Read the ENTIRE script below, digest its global narrative atmosphere ("Deep-Tech Thriller / Silicon Valley Industrial Espionage / High-End Medical Pivot"), and generate hyper-realistic, concrete image prompts for the requested keyword moments.
 
 CRITICAL VISUAL RULES:
@@ -2836,53 +2758,10 @@ def _enrich_image_prompts(script: str, cuts: list, accent: str = "#8B5CF6",
     return out
 
 
-def _call_fal_flux(prompt: str, negative: str = "", endpoint: str = None) -> str:
-    """Generate a 9:16 image via fal.ai Flux 2 [flash] (or a per-template endpoint)."""
-    if not FAL_API_KEY:
-        raise RuntimeError("FAL_API_KEY not set")
-    endpoint = endpoint or FAL_FLUX_ENDPOINT
-    headers = {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "prompt": prompt,
-        "image_size": "portrait_16_9",
-        "num_images": 1,
-        "guidance_scale": 2.5,
-        "output_format": "jpeg",
-    }
-    _t0 = time.time()
-    resp = requests.post(endpoint, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    _log_einheit("bild-cutaway",
-                 "fal-flux-2-flash" if "flux-2/flash" in endpoint else "fal-sonstige",
-                 1, int((time.time() - _t0) * 1000), extra={"endpunkt": endpoint})
-    if data.get("images"):
-        return data["images"][0]["url"]
+def _call_fal_flux(*args, **kwargs) -> str:
+    """Entfernt am 25.09. Frueher: Flux fuer Bildschnitte der alten Render-Wege."""
+    raise RuntimeError('fal ist seit dem 25.09. entfernt (Auftrag: Einblendungen, fal raus, Stil-System). Thumbnails kommen aus stil.thumbnail, Einblendungen aus stil.py.')
 
-    request_id = data.get("request_id")
-    status_url = data.get("status_url") or data.get("response_url")
-    if not status_url and request_id:
-        status_url = f"https://queue.fal.run/fal-ai/flux-2/requests/{request_id}"
-    if not status_url:
-        raise RuntimeError(f"fal.ai flux unexpected response: {data}")
-    poll_headers = {"Authorization": f"Key {FAL_API_KEY}"}
-    for _ in range(60):
-        time.sleep(1)
-        poll = requests.get(status_url, headers=poll_headers, timeout=30)
-        poll.raise_for_status()
-        result = poll.json()
-        status = result.get("status", "")
-        if status == "COMPLETED":
-            images = (result.get("output") or result).get("images", [])
-            if images:
-                return images[0]["url"]
-            raise RuntimeError("fal.ai flux completed but no images")
-        if status in ("FAILED", "ERROR"):
-            raise RuntimeError(f"fal.ai flux failed: {result}")
-    raise RuntimeError("fal.ai flux polling timed out after 60s")
-
-
-# ── Full-frame image cutaways ─────────────────────────────────────────────────
 IMAGE_CUT_DUR  = 2.0    # seconds on screen
 HOOK_SECONDS   = 2.0    # hook zone: face fullcam + hook image, no broll/cutaways before this
 IMAGE_CUT_FADE = 0.15   # crossfade in/out — snappy short-form, minimal UI bleed-through
@@ -7570,6 +7449,14 @@ def _hook_standbild(s: dict, job_dir: Path) -> Optional[Path]:
         if len(hook) >= 12:
             break
     text = re.sub(r"[,;:]$", "", " ".join(hook)).strip()
+    # Der erste Skriptsatz, wenn er gesprochen wurde: mit Satzzeichen und vollstaendig.
+    # Test Video 95: aus den Whisper-Woertern wurde "...zu wechseln Das ganze".
+    saetze = [str(x).strip() for x in ((s.get("briefing") or {}).get("saetze") or []) if str(x).strip()]
+    if saetze and len(saetze[0].split()) <= 16:
+        gesagt = {_norm_wort(w) for w in worte}
+        erster = [_norm_wort(x) for x in saetze[0].split() if _norm_wort(x)]
+        if erster and sum(1 for x in erster if x in gesagt) / float(len(erster)) >= 0.8:
+            text = saetze[0]
     try:
         markup = stil.thumbnail(text, s.get("client_id"), W, H, _client_brand_colors(s.get("client_id")))
         out = job_dir / "hook_standbild.png"
@@ -13179,9 +13066,16 @@ def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
         return {"satz": satz}
     if baustein == "vox_dokument":
         # Das Blatt zeigt den Satz und seinen Nachbarn aus dem Skript; markiert ist der Satz.
+        # Hoechstens 28 Woerter: mehr passt nicht aufs Blatt, ohne in die Untertitel zu
+        # laufen (Testvideo 91, 45 Woerter, unten abgeschnitten). Der Nachbarsatz davor
+        # kommt nur mit, wenn er noch passt.
         saetze = [str(x).strip() for x in ((s.get("briefing") or {}).get("saetze") or [])]
         i = saetze.index(satz) if satz in saetze else -1
-        text = " ".join(saetze[max(0, i - 1):i + 2]) if i >= 0 else satz
+        text = satz
+        if i > 0 and len((saetze[i - 1] + " " + satz).split()) <= 28:
+            text = saetze[i - 1] + " " + satz
+        if i >= 0 and i + 1 < len(saetze) and len((text + " " + saetze[i + 1]).split()) <= 28:
+            text = text + " " + saetze[i + 1]
         return {"text": text, "markierung": satz}
     if baustein == "ui_karte":
         art = "chat" if (satz.endswith("?") or re.search(r"\bhey\b", satz.lower())) else "notiz"
@@ -14153,7 +14047,9 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             "herkunft": f"plan:{res.get('quelle_art')}",
             "konzept": str(b.get("zeigt") or "")[:80],
         }, frames))
-        if k == "metapher_full":
+        if k == "metapher_full" and res.get("quelle_art") != "stil":
+            # 25.09.: NICHT bei Stil-Bausteinen. Freigestellt stand er VOR dem Text, der
+            # Text lag hinter seinem Gesicht (Testvideos 95 und 91, jeweils bei 0,0 s).
             # Die Illustration ist der HINTERGRUND, er bleibt freigestellt
             # davor (Justus, 10.08.). Nur fuer kurze Abschnitte — rembg auf
             # CPU mattet ~2-4 Frames/s, ein spaeter 40s-Abschnitt wuerde den

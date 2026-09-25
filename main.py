@@ -13118,58 +13118,96 @@ def _stil_weg(s: dict, a: dict) -> bool:
     return bool(s.get("stil_liste")) and _komposition(a) not in STIL_WEG_AUS
 
 
-def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
-    """Inhalt NUR aus den gesprochenen Woertern des Abschnitts. Gibt None, wenn der
-    Abschnitt fuer den Baustein nichts hergibt (dann ist er hier gesperrt)."""
-    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
-    ws = [w for w in (s.get("words") or []) if von - 0.25 <= float(w.get("start") or 0) <= bis + 0.1]
-    worte = [str(w.get("word", "")).strip() for w in ws if str(w.get("word", "")).strip()]
-    if len(worte) < 3:
+STIL_MAX_JE_VIDEO = 6     # 25.09.: sonst wurde jeder Element-Abschnitt eine Karte (16 in Video 95)
+STIL_ABSTAND_S = 7.0       # dazwischen gehoert das Bild ihm
+
+
+def _norm_wort(w: str) -> str:
+    return re.sub(r"[^\wäöüß]", "", str(w).lower())
+
+
+def _skriptsatz(s: dict, a: dict) -> Optional[str]:
+    """Der Satz aus dem SKRIPT (Spickzettel 'saetze', mit Satzzeichen), der in diesem
+    Abschnitt gesprochen wird. Whisper liefert die Woerter ohne Satzzeichen; daraus
+    geschnittene Stuecke waren Bruchstuecke ("brauchen werden heisst fang einmal so").
+    Gewaehlt wird der Satz mit dem hoechsten Anteil gesprochener Woerter, mindestens 80 %."""
+    saetze = [str(x).strip() for x in ((s.get("briefing") or {}).get("saetze") or []) if str(x).strip()]
+    if not saetze:
         return None
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    gesagt = [_norm_wort(w.get("word", "")) for w in (s.get("words") or [])
+              if von - 1.0 <= float(w.get("start") or 0) <= bis + 1.0]
+    gesagt_set = set(x for x in gesagt if x)
+    bester, wert = None, 0.0
+    for satz in saetze:
+        ws = [_norm_wort(x) for x in satz.split() if _norm_wort(x)]
+        if not 3 <= len(ws) <= 16:
+            continue
+        anteil = sum(1 for x in ws if x in gesagt_set) / float(len(ws))
+        if anteil > wert:
+            bester, wert = satz, anteil
+    return bester if wert >= 0.8 else None
+
+
+def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
+    """Inhalt aus dem Skriptsatz, der in diesem Abschnitt gesprochen wird. Zahlen nur,
+    wenn sie im Satz stehen UND gesprochen werden (die Pruefung macht _stil_pruefen)."""
+    satz = _skriptsatz(s, a)
+    if not satz:
+        return None
+    worte = satz.split()
     zahlen = stil.zahlen_aus(worte)
 
     def einheit(j):
         n = worte[j + 1].strip(" ,.;:!?") if j + 1 < len(worte) else ""
         return n if n[:1].isupper() and n.isalpha() else ""
 
-    satz = stil.kernsatz(worte)
     if baustein == "grosse_zahl" and zahlen:
         j, anzeige, _w = max(zahlen, key=lambda z: z[2])
-        stuetze = stil.kernsatz([w for w in worte if w.strip(" ,.;:!?") != anzeige])
-        return {"zahl": anzeige, "einheit": einheit(j), "stuetze": stuetze}
+        return {"zahl": anzeige, "einheit": einheit(j), "stuetze": satz}
     if baustein == "daten_chart" and len(zahlen) >= 2:
         werte = []
         for j, anzeige, wert in zahlen[:6]:
             e = einheit(j)
             vor = [x.strip(" ,.;:!?") for x in worte[max(0, j - 2):j]]
-            label = e or " ".join(v for v in vor if v)
-            werte.append({"label": label, "wert": wert, "text": (anzeige + (" " + e if e else ""))})
+            werte.append({"label": e or " ".join(v for v in vor if v), "wert": wert,
+                          "text": anzeige + (" " + e if e else "")})
         if len({w["wert"] for w in werte}) < 2:
             return None
         return {"titel": satz, "werte": werte}
-    if baustein == "typo_minimal" and satz:
+    if baustein == "typo_minimal":
         return {"satz": satz}
     if baustein == "vox_dokument":
-        text = " ".join(worte[:32])
-        return {"text": text, "markierung": satz if satz and satz in text else ""}
-    if baustein == "ui_karte" and satz:
+        # Das Blatt zeigt den Satz und seinen Nachbarn aus dem Skript; markiert ist der Satz.
+        saetze = [str(x).strip() for x in ((s.get("briefing") or {}).get("saetze") or [])]
+        i = saetze.index(satz) if satz in saetze else -1
+        text = " ".join(saetze[max(0, i - 1):i + 2]) if i >= 0 else satz
+        return {"text": text, "markierung": satz}
+    if baustein == "ui_karte":
         art = "chat" if (satz.endswith("?") or re.search(r"\bhey\b", satz.lower())) else "notiz"
         return {"text": satz, "art": art}
     return None
 
 
 def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
-    """Jedes angezeigte Wort und jede Zahl muss gesprochen sein. Rueckgabe: fremde Woerter."""
+    """Jedes angezeigte Wort muss im Skript stehen, jede angezeigte Zahl muss im Abschnitt
+    gesprochen werden. Rueckgabe: was nicht belegt ist."""
+    skript = " ".join(str(x) for x in ((s.get("briefing") or {}).get("saetze") or []))
     von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
-    worte = [str(w.get("word", "")) for w in (s.get("words") or [])
-             if von - 0.25 <= float(w.get("start") or 0) <= bis + 0.1]
+    gesprochen = [str(w.get("word", "")) for w in (s.get("words") or [])
+                  if von - 1.0 <= float(w.get("start") or 0) <= bis + 1.0]
     anzeigen = [inhalt.get(k) for k in ("satz", "zahl", "einheit", "stuetze", "titel", "text", "markierung")]
     for w in inhalt.get("werte") or []:
         anzeigen += [w.get("label"), w.get("text")]
     fremd = []
     for x in anzeigen:
         if x:
-            fremd += stil.nur_gesprochen(x, worte)
+            fremd += stil.nur_gesprochen(x, skript.split())
+    gesagte_zahlen = {z[1] for z in stil.zahlen_aus(gesprochen)}
+    for x in anzeigen:
+        for z in stil.zahlen_aus(str(x or "").split()):
+            if z[1] not in gesagte_zahlen:
+                fremd.append("Zahl nicht gesprochen: " + z[1])
     return fremd
 
 
@@ -13182,6 +13220,11 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
         return None
     b = a.get("braucht") or {}
     von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    gezeigt = s.setdefault("stil_gezeigt", [])
+    if len(gezeigt) >= STIL_MAX_JE_VIDEO:
+        return None
+    if gezeigt and von - gezeigt[-1]["bis"] < STIL_ABSTAND_S:
+        return None
     dauer = max(1.2, min(HTML_TOOL_MAX_S, bis - von))
     zaehler = s.setdefault("stil_zaehler", {})
     # bildschirm_beweis: nur wenn eine Aufnahme hochgeladen ist
@@ -13208,6 +13251,8 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
         inhalt = _stil_inhalt(s, a, baustein)
         if not inhalt:
             continue
+        if any(g["satz"] == json.dumps(inhalt, ensure_ascii=False) for g in gezeigt):
+            continue
         fremd = _stil_pruefen(inhalt, s, a)
         if fremd:
             log.warning("[STIL] %d %s verworfen, nicht gesprochen: %s", i, baustein, fremd[:6])
@@ -13232,6 +13277,7 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
             log.warning("[STIL] %d %s: %s", i, baustein, erg.get("hinweis"))
             continue
         zaehler[baustein] = zaehler.get(baustein, 0) + 1
+        gezeigt.append({"bis": bis, "satz": json.dumps(inhalt, ensure_ascii=False)})
         log.info("[STIL] %d %s: %s", i, baustein, json.dumps(inhalt, ensure_ascii=False)[:200])
         return {"quelle_art": "stil", "stil": baustein, "kosten": 0.0, "sekunden_material": dauer,
                 "transform": tf, "ohne_flaeche": baustein == "ui_karte", "stil_inhalt": inhalt,

@@ -1937,7 +1937,12 @@ def _hook_guard_end(words: list) -> float:
 # Wichtiger Unterschied zur Kohaerenz-Stufe: die entfernt, was MISSLUNGEN ist.
 # Der Paper Edit entfernt, was GELUNGEN, aber entbehrlich ist. Deshalb eine
 # eigene Stufe und kein groesserer Prompt.
-PAPER_MAX_WEG = 0.40        # mehr als 40% weg heisst: er hat den Take nicht verstanden
+PAPER_MAX_WEG = 0.40        # (alt) Reissleine; seit 25.09. greift vorher PAPER_DECKEL
+# 25.09.: hoechstens 15 % der Laufzeit. Darueber wird NICHTS gestrichen, das Video geht auf
+# 'pruefen' mit Grund. Ein Lauf strich 1,5 s, der naechste die letzten 9 s: der Lauf meldete
+# Erfolg, das Video war kaputt.
+PAPER_DECKEL = 0.15
+PAPER_SCHLUSS_MIN_S = 5.0   # mindestens so viel vom Ende ist geschuetzt, auch ohne Blocktext
 PAPER_MIN_REST_S = 15.0     # was darunter uebrig bleibt, ist kein Video mehr
 PAPER_MIN_STUECK_S = 0.9    # Schnipsel darunter sind ein Zucken, kein Satz
 PAPER_PAUSE_S = 0.18        # nur an echten Pausen, sonst hoert man den Schnitt
@@ -1982,7 +1987,30 @@ von/bis sind WORT-INDIZES, einschliesslich, aufsteigend, ohne Ueberlappung.
 Nichts zu kuerzen: {"weg": []}"""
 
 
-def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
+def _paper_schluss(words: list, duration: float, briefing: Optional[dict] = None) -> float:
+    """Ab wann der letzte Block (Ausfahrt und CTA) laeuft. Er wird nie gestrichen.
+    Erst der Ausfahrt-Text aus dem Briefing, auf die echte Zeitachse gelegt; dann der
+    Beginn des letzten Satzes; hoechstens aber duration - PAPER_SCHLUSS_MIN_S."""
+    kand = [duration - PAPER_SCHLUSS_MIN_S]
+    b = briefing or {}
+    bloecke = ((b.get("regie") or {}).get("bloecke") or b.get("bloecke") or [])
+    texte = [{"rolle": x.get("block") or x.get("rolle"), "text": x.get("text") or ""}
+             for x in bloecke if isinstance(x, dict)]
+    if not texte:
+        texte = [{"rolle": x.get("rolle") or x.get("block"), "text": x.get("text") or ""}
+                 for x in (b.get("segments") or []) if isinstance(x, dict)]
+    if texte and any(t["rolle"] in ("ramp", "cta") for t in texte):
+        g = _block_grenzen({"blocks": texte}, words, duration)
+        for rolle in ("ramp", "cta"):
+            if g.get(rolle):
+                kand.append(g[rolle][0])
+    ende = [i for i, w in enumerate(words[:-1]) if re.search(r"[.!?]$", str(w.get("word", "")).strip())]
+    if ende:
+        kand.append(float(words[ende[-1] + 1]["start"]))
+    return max(0.0, min(kand))
+
+
+def _paper_edit(words: list, duration: float, pad: float = 0.10, briefing: Optional[dict] = None) -> tuple:
     """Selects auf dem Transkript. Gibt (keeps, protokoll) zurueck.
 
     Faellt IMMER sicher auf 'alles behalten' zurueck — und sagt im Protokoll,
@@ -2007,6 +2035,8 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
 
     n = len(words)
     guard = _hook_guard_end(words)
+    schluss = _paper_schluss(words, duration, briefing)
+    prot["schluss_ab"] = round(schluss, 2)
     entfernt, worte_weg = [], 0
     for e in weg:
         try:
@@ -2020,6 +2050,9 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
         if float(words[a]["start"]) < guard:
             log.info("[PAPER] %d-%d verworfen — Hook laeuft bis %.2fs", a, b, guard)
             continue
+        if float(words[b]["end"]) + pad > schluss:
+            log.info("[PAPER] %d-%d verworfen — beruehrt den geschuetzten Schluss ab %.2fs", a, b, schluss)
+            continue
         vor = float(words[a]["start"]) - float(words[a - 1]["end"]) if a > 0 else 99.0
         nach = float(words[b + 1]["start"]) - float(words[b]["end"]) if b < n - 1 else 99.0
         if vor < PAPER_PAUSE_S or nach < PAPER_PAUSE_S:
@@ -2032,7 +2065,9 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
             entfernt.append((von, bis))
             worte_weg += (b - a + 1)
             prot["schnitte"].append({"von": round(von, 2), "bis": round(bis, 2),
-                                     "grund": grund})
+                                     "dauer": round(bis - von, 2), "grund": grund,
+                                     "satz": " ".join(str(w.get("word", "")).strip()
+                                                      for w in words[a:b + 1])[:300]})
 
     if not entfernt:
         prot["verworfen"] = prot["verworfen"] or "nichts Entbehrliches gefunden"
@@ -2046,10 +2081,21 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
         cursor = max(cursor, b)
     if cursor < duration:
         keeps.append((round(cursor, 3), round(duration, 3)))
-    keeps = [(a, b) for a, b in keeps if b - a >= PAPER_MIN_STUECK_S]
+    # Das LETZTE Stueck bleibt immer, auch wenn es kurz ist: darin liegt das Ende.
+    keeps = [(a, b) for j, (a, b) in enumerate(keeps)
+             if b - a >= PAPER_MIN_STUECK_S or j == len(keeps) - 1]
 
     rest = sum(b - a for a, b in keeps)
     weg_s = duration - rest
+    if weg_s > duration * PAPER_DECKEL:
+        grund = ("Paper-Edit wollte %.1f s streichen (%.0f %% der Laufzeit, Deckel %.0f %%): "
+                 "nichts gestrichen, bitte pruefen" % (weg_s, 100 * weg_s / max(duration, 1e-6), 100 * PAPER_DECKEL))
+        log.warning("[PAPER] %s", grund)
+        prot["verworfen"] = grund
+        prot["pruefen"] = grund
+        prot["vorschlag"] = prot["schnitte"]
+        prot["schnitte"] = []
+        return [(0.0, duration)], prot
     # Zwei Reissleinen. Beide sind schon einmal noetig gewesen, an der
     # Kohaerenz-Stufe: ein Modell, das den Take nicht versteht, wirft nicht
     # ein bisschen zu viel weg, sondern fast alles.
@@ -2066,8 +2112,11 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10) -> tuple:
         return [(0.0, duration)], prot
 
     prot["weg_s"] = round(weg_s, 2)
-    log.info("[PAPER] %d Selects, %.1fs von %.1fs entfernt (%d Woerter)",
-             len(prot["schnitte"]), weg_s, duration, worte_weg)
+    log.info("[PAPER] %d Selects, %.1fs von %.1fs entfernt (%d Woerter), Schluss ab %.2fs geschuetzt",
+             len(prot["schnitte"]), weg_s, duration, worte_weg, schluss)
+    for x in prot["schnitte"]:
+        log.info("[PAPER] gestrichen %.2f-%.2f (%.2fs): \"%s\" | %s", x["von"], x["bis"], x["dauer"],
+                 x["satz"][:120], x["grund"][:100])
     return (keeps or [(0.0, duration)]), prot
 
 
@@ -6042,8 +6091,21 @@ Für "stock" baust du DREI englische Pexels-Suchanfragen:
 
 Keine Adjektive, keine Stimmung, keine Marken. Nur was zu sehen ist.
 
+PEXELS NUR FÜR KONKRETE GEGENSTÄNDE (25.09.): etwas, das man fotografieren kann und
+das im Satz wörtlich gemeint ist (Haus, Schlüssel, Laptop, Hand unterschreibt).
+Ein abstrakter Begriff oder ein Sinnbild dafür (Vertrauen, Hebel, Rendite, Fluss,
+Wachstum, Stein im Bach für "Beständigkeit") ist "abstrakt", NIE "stock".
+
 AUSGABE — nur JSON:
-{ "asset_typ":"stock|prozedural", "anfragen":["...","...","..."] }"""
+{ "asset_typ":"stock|prozedural|abstrakt", "gegenstand":"der konkrete Gegenstand oder leer",
+  "anfragen":["...","...","..."] }"""
+
+# Abstrakte Begriffe, die nie an Pexels gehen, egal was der Router meint. Der Code
+# entscheidet zuerst, das Modell nur fuer das, was die Liste nicht kennt.
+ABSTRAKT_NIE_STOCK = ("vertrauen", "hebel", "rendite", "fluss", "wachstum", "erfolg", "freiheit",
+                      "sicherheit", "angst", "zukunft", "potenzial", "chance", "wert", "energie",
+                      "fokus", "klarheit", "strategie", "system", "sichtbarkeit", "reichweite",
+                      "konstanz", "disziplin", "mut", "motivation", "balance", "harmonie")
 
 
 def _pexels(query: str, n: int = 15) -> list:
@@ -6195,9 +6257,12 @@ def _stock_fuer(bild: str) -> dict:
     typ = str(o.get("asset_typ", "prozedural")).lower()
     anfragen = [str(q) for q in (o.get("anfragen") or [])][:3]
     if typ != "stock":
-        return {"asset_typ": "prozedural", "anfragen": anfragen}
+        return {"asset_typ": typ if typ in ("abstrakt", "prozedural") else "prozedural",
+                "anfragen": anfragen, "grund": "Router: %s, kein konkreter Gegenstand" % typ}
     spuren, cache = [], {}
-    for streng in (True, False):
+    # 25.09.: nur noch streng (Gegenstand UND Handlung). Die lockere Pruefung liess
+    # in Video 83 drei von vier Clips durch, die nur den Gegenstand zeigten.
+    for streng in (True,):
         for q in anfragen:
             if q not in cache:
                 cache[q] = _pexels(q)
@@ -6214,7 +6279,7 @@ def _stock_fuer(bild: str) -> dict:
                         "streng": streng, "vision": treffer["begruendung"]}
     gefunden = sum(x["kandidaten"] for x in spuren)
     grund = ("Pexels lieferte 0 Kandidaten" if gefunden == 0
-             else "Vision-Check: kein Clip zeigt den Vorgang (streng UND locker)")
+             else "Vision-Check streng: kein Clip zeigt Gegenstand und Vorgang")
     if not PEXELS_API_KEY:
         grund = "PEXELS_API_KEY fehlt im Renderer"
     _log_run("", "stock-router", "warn", {"grund": grund, "anfragen": anfragen,
@@ -9097,7 +9162,7 @@ def tool_session_open(req: OpenSessionRequest):
     transkript_gueltig = None
     if req.paper_edit:
         pw = transcribe_audio(cam) or []
-        keeps, paper = _paper_edit(pw, probe_duration(cam))
+        keeps, paper = _paper_edit(pw, probe_duration(cam), briefing=req.briefing)
         geschnitten_worden = False
         if len(keeps) > 1 or paper.get("weg_s"):
             geschnitten = job / "paper.mp4"
@@ -12928,7 +12993,138 @@ async def _durchforsten(s: dict, a: dict, i: int) -> dict:
             "layer_source": {"kind": "image", "url": bild}}
 
 
+def _client_feld(client_id: str, feld: str) -> dict:
+    """Ein jsonb-Feld aus clients, frisch gelesen (Aenderungen gelten beim naechsten Lauf)."""
+    cid = (client_id or AKTIVER_CLIENT.get() or "").lower()
+    if not (cid and SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return {}
+    try:
+        hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/clients", params={"client_id": f"eq.{cid}", "select": feld},
+                         headers=hdr, timeout=15).json()
+        v = (r[0].get(feld) if r else None) or {}
+        return v if isinstance(v, dict) else {}
+    except Exception as exc:
+        log.warning("[CFG] clients.%s fuer %s nicht geladen: %s", feld, cid, exc)
+        return {}
+
+
+def _satz_bei(s: dict, von: float, bis: float) -> str:
+    return " ".join(str(w.get("word", "")).strip() for w in (s.get("words") or [])
+                    if von - 0.3 <= float(w.get("start") or 0) <= bis).strip()
+
+
+def _einblendung_merken(s: dict, a: dict, i: int, idee: str, res: dict, **extra) -> dict:
+    """Jede Beschaffungsentscheidung in die Tabelle einblendungen (25.09.). Vorher stand
+    Suchbegriff und Clip nur im Railway-Log und war nicht auswertbar."""
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    stock = extra.get("stock") or {}
+    clip = stock.get("clip") or {}
+    zeile = {"session_id": s.get("id"), "client_id": s.get("client_id"),
+             "vorrat_id": ((s.get("briefing") or {}).get("regie") or {}).get("vorrat_id")
+                          or (s.get("briefing") or {}).get("vorrat_id"),
+             "abschnitt": i, "von": von, "bis": bis, "komposition": _komposition(a),
+             "satz": _satz_bei(s, von, bis)[:500], "idee": (idee or "")[:300],
+             "suchbegriffe": stock.get("anfragen") or None,
+             "suchbegriff_treffer": stock.get("anfrage_treffer"),
+             "quelle": res.get("quelle_art") or "keine",
+             "clip_id": str(clip.get("id")) if clip.get("id") else None,
+             "clip_url": ((res.get("layer_source") or {}).get("url") or None),
+             "pruefung": extra.get("pruefung"), "ergebnis": "gezeigt" if res.get("quelle_art") else "keine Einblendung",
+             "grund": (res.get("grund") or extra.get("grund") or "")[:300]}
+    s.setdefault("einblendungen", []).append(zeile)
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        try:
+            requests.post(f"{SUPABASE_URL}/rest/v1/einblendungen", timeout=15, json=[zeile],
+                          headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                   "Content-Type": "application/json"})
+        except Exception as exc:
+            log.warning("[EINBLENDUNG] Protokoll nicht geschrieben: %s", exc)
+    return res
+
+
+def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
+    """Platzhalter fuer Teil 3 (Stil-Bausteine aus Code). Bis dahin: keiner."""
+    return None
+
+
 async def _beschaffen(s: dict, a: dict, i: int) -> dict:
+    """25.09.: Reihenfolge der Quellen fuer Bild-Kompositionen
+      1 eigenes Material, Screenshot (Beweis)
+      2 Stil-Baustein aus Code
+      3 Pexels, nur konkreter Gegenstand, nur strenge Pruefung
+      4 nichts: lieber keine Einblendung als eine falsche
+    Omni und fal-Bild nur, wenn clients.einblendung es erlaubt (Standard: aus)."""
+    k_ = _komposition(a)
+    if k_ in ("metapher", "metapher_full"):
+        b_ = a.get("braucht") or {}
+        idee = str(b_.get("zeigt") or b_.get("was") or b_.get("bild_prompt") or "").strip()
+        res = await _beschaffen_bild(s, a, i)
+        return _einblendung_merken(s, a, i, idee, res, stock=res.pop("_stock", None),
+                                   pruefung=res.pop("_pruefung", None))
+    return await _beschaffen_alt(s, a, i)
+
+
+async def _beschaffen_bild(s: dict, a: dict, i: int) -> dict:
+    b = a.get("braucht") or {}
+    k = _komposition(a)
+    was = str(b.get("zeigt") or b.get("was") or "").strip()
+    cfg = _client_feld(s.get("client_id"), "einblendung")
+    # 1 Beweis
+    m = _material_treffer(s, b)
+    if m:
+        kind = "video" if str(m.get("url", "")).lower().endswith((".mp4", ".webm", ".mov")) else "image"
+        return {"quelle_art": "material", "kosten": 0.0, "quelle_px": m.get("quelle_px"),
+                "layer_source": {"kind": kind, "url": m["url"]}, "_pruefung": "material"}
+    if b.get("url"):
+        try:
+            shot = await tool_screenshot_url(ScreenshotRequest(session_id=s["id"], url=str(b["url"])))
+            if shot.get("url"):
+                return {"quelle_art": "screenshot", "kosten": 0.0,
+                        "layer_source": {"kind": "image", "url": shot["url"]}, "_pruefung": "screenshot"}
+        except Exception as exc:
+            log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
+    # 2 Stil-Baustein
+    sb = _stil_baustein(s, a, i)
+    if sb:
+        sb["_pruefung"] = "stil"
+        return sb
+    # Omni nur mit Schalter (Standard aus: generierte Videos wirken unecht)
+    if cfg.get("omni") is True and str(b.get("bild_prompt") or "").strip() \
+            and int(s.get("omni_clips", 0)) < OMNI_MAX and not a.get("_kein_omni"):
+        try:
+            omni_url = await asyncio.to_thread(_omni_clip, str(b.get("bild_prompt"))[:400], k, s["dir"],
+                                               s.get("brand") or None)
+            if omni_url:
+                s["omni_clips"] = int(s.get("omni_clips", 0)) + 1
+                return {"quelle_art": "omni", "kosten": OMNI_USD, "sekunden_material": 8.0,
+                        "layer_source": {"kind": "video", "url": omni_url}, "_pruefung": "omni"}
+        except Exception as exc:
+            log.warning("[BAU] %d omni: %s", i, str(exc)[:160])
+    # 3 Pexels: nur konkret, nur streng. Die Idee des Plans bleibt, wie sie ist:
+    # "zu naheliegend ersetzen" ist gestrichen (Video 83: Bachstein, Spinnennetz, Bergquelle).
+    if k == "metapher" and was:
+        abstrakt = [w for w in ABSTRAKT_NIE_STOCK if re.search(r"\b" + w, was.lower())]
+        if abstrakt:
+            return {"quelle_art": "", "grund": "abstrakter Begriff (%s), nie Pexels" % ", ".join(abstrakt),
+                    "_pruefung": "abstrakt (Code)"}
+        try:
+            res = await asyncio.to_thread(_stock_fuer, was)
+        except Exception as exc:
+            return {"quelle_art": "", "grund": "stock: %s" % str(exc)[:160], "_pruefung": "fehler"}
+        clip = (res or {}).get("clip") or {}
+        if clip.get("url"):
+            return {"quelle_art": "stock", "kosten": 0.0, "_stock": res, "_pruefung": "streng",
+                    "layer_source": {"kind": "video", "url": clip["url"]}}
+        return {"quelle_art": "", "grund": res.get("grund") or "kein Treffer", "_stock": res,
+                "_pruefung": ("fehler" if str(res.get("grund") or "").startswith("router:")
+                              else "abstrakt (Router)" if res.get("asset_typ") == "abstrakt"
+                              else "streng abgelehnt")}
+    # 4 nichts
+    return {"quelle_art": "", "grund": "keine passende Quelle", "_pruefung": "keine"}
+
+
+async def _beschaffen_alt(s: dict, a: dict, i: int) -> dict:
     """Ein Auftrag, ein Ergebnis. Kein Ermessen darueber, OB etwas gebraucht
     wird — das hat der Plan entschieden."""
     b = a.get("braucht") or {}
@@ -14548,6 +14744,9 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     # Die Endkarte haengt hinten dran, deshalb darf es laenger sein.
     p("Laufzeit", dauer >= soll - 0.6, True,
       "%.1fs gerendert, %.1fs geplant" % (dauer, soll))
+    # 25.09.: Paper-Edit ueber dem Deckel hat nichts gestrichen, das Video muss jemand ansehen.
+    _pap = s.get("paper") or {}
+    p("Paper-Edit im Deckel", not _pap.get("pruefen"), True, _pap.get("pruefen") or "")
 
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
@@ -14698,6 +14897,7 @@ def _video_job(job_id: str, req: "VideoRequest"):
         VIDEO_JOBS[job_id] = {
             "status": "done", "schritt": "fertig", "session_id": sid,
             "cover_ms": cover_ms,
+            "paper": (_s or {}).get("paper"),
             "regie": (_s or {}).get("regie_sperren"),
             "bilanz": bau.get("bilanz"),
             "url": (bau.get("render") or {}).get("url"),

@@ -279,3 +279,55 @@ def hinter_platz(bild_w, bild_h, gesicht, st_w, st_h, unten_max=0.72, anteil=(1.
     py = max(oben_min, min(unten - sh, py))
     return {"x": int(px), "y": int(py), "w": int(sw), "h": int(sh), "seite": seite,
             "sichtbar": round(sichtbar, 2), "art": "hinter"}
+
+
+def hinter_platz_maske(bild_w, bild_h, gesicht, st_w, st_h, anteil, maske, unten_max=0.72):
+    """26.09., Lauf 2: nach der Gesichtsbox gesetzt verschwand der Kompass zu drei Vierteln
+    hinter der Schulter; die Box kennt die Schulterbreite nicht. Jetzt entscheidet seine
+    echte Silhouette (maske: L-Bild, beliebige Groesse, hell = er). Gesucht wird die
+    groesste Lage, in der der GEGENSTAND zu 60 bis 85 % sichtbar ist (etwas steckt hinter
+    ihm, das meiste ist zu sehen), Unterkante ueber 0,72, Oberkante unter 0,05; bei
+    gleicher Groesse gewinnt die Lage naeher an Kopfhoehe."""
+    import numpy as np
+    x, y, w, h = gesicht
+    aw, ah = anteil
+    asp = st_w / float(st_h)
+    m = np.asarray(maske.convert("L").resize((bild_w // 8, bild_h // 8)), dtype=np.float32) > 127
+    ii = np.pad(m.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+
+    def bedeckt(x0, y0, x1, y1):
+        a, b, c, d = int(x0 // 8), int(y0 // 8), int(x1 // 8), int(y1 // 8)
+        a, b = max(0, a), max(0, b)
+        c, d = min(m.shape[1], max(a + 1, c)), min(m.shape[0], max(b + 1, d))
+        s = ii[d, c] - ii[b, c] - ii[d, a] + ii[b, a]
+        return s / float((c - a) * (d - b))
+
+    oben, unten = 0.05 * bild_h, unten_max * bild_h
+    kopf_y = y + h * 0.5
+    best = None
+    for faktor in (2.6, 2.3, 2.0, 1.7, 1.4):
+        oh = faktor * h
+        ow = oh * (st_w * aw) / (st_h * ah)
+        if ow > 0.60 * bild_w:
+            oh *= 0.60 * bild_w / ow
+            ow = 0.60 * bild_w
+        if ow < 0.25 * bild_w or oh > unten - oben:
+            continue
+        for ox in np.linspace(0.02 * bild_w, 0.98 * bild_w - ow, 24):
+            for oy in np.linspace(oben, unten - oh, 20):
+                sicht = 1.0 - bedeckt(ox, oy, ox + ow, oy + oh)
+                if not 0.60 <= sicht <= 0.85:
+                    continue
+                wert = (oh, -abs(oy + oh / 2 - kopf_y), -abs(sicht - 0.75))
+                if best is None or wert > best[0]:
+                    best = (wert, ox, oy, ow, oh, sicht)
+        if best:
+            break
+    if not best:
+        return None
+    _, ox, oy, ow, oh, sicht = best
+    sw, sh = ow / aw, oh / ah
+    px, py = ox - (sw - ow) / 2, oy - (sh - oh) / 2
+    return {"x": int(px), "y": int(py), "w": int(sw), "h": int(sh),
+            "seite": "rechts" if ox + ow / 2 > x + w / 2 else "links",
+            "sichtbar": round(float(sicht), 2), "art": "hinter"}

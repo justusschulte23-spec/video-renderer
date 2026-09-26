@@ -13359,8 +13359,8 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
     platz_hinter = aus.hinter_platz(W, H, g, st.width, st.height, anteil=anteil)
     platz_neben = aus.sticker_platz(W, H, tuple(int(v) for v in g), st.width, st.height)
     if not (platz_hinter or platz_neben):
-        log.info("[AUSSCHNITT] %d kein Platz, weder hinter noch neben dem Gesicht", i)
-        return None
+        # Die Silhouette kann noch Platz finden, den die Gesichtsbox nicht sieht.
+        log.info("[AUSSCHNITT] %d nach Gesichtsbox kein Platz, Silhouette entscheidet", i)
     # Er davor: das Bildstueck der Facecam freistellen.
     von_f = int(round(von * FPS))
     vorne_von = max(0, von_f - 1)
@@ -13378,16 +13378,30 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
         raise
     except Exception as exc:
         _MATTE_GRUND["text"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
-    if vorne and not platz_hinter:
-        vorne = ""
-        meta["freisteller_grund"] = "hinter ihm kein Platz"
     if vorne:
-        platz = platz_hinter
-    else:
-        meta["freisteller_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
+        # 26.09., Lauf 2: nach der Gesichtsbox verschwand der Kompass zu drei Vierteln
+        # hinter der Schulter. Seine echte Silhouette (mittleres Freisteller-Bild)
+        # entscheidet; die Gesichtsbox bleibt nur Rueckfall, falls das Bild fehlt.
+        platz = None
+        try:
+            bilder = sorted((d / "matte_frames").glob("*.png"))
+            if bilder:
+                maske = _Img.open(bilder[len(bilder) // 2]).getchannel("A")
+                platz = aus.hinter_platz_maske(W, H, g, st.width, st.height, anteil, maske)
+                meta["platz_nach"] = "silhouette"
+        except Exception as exc:
+            log.warning("[AUSSCHNITT] %d Silhouette nicht lesbar: %s", i, str(exc)[:120])
+        if not platz:
+            platz = platz_hinter
+            meta["platz_nach"] = "gesichtsbox"
+        if not platz:
+            vorne = ""
+            meta["freisteller_grund"] = "hinter ihm kein Platz"
+    if not vorne:
+        meta.setdefault("freisteller_grund", _MATTE_GRUND.get("text") or "unbekannt")
         _warnung(s, "ausschnitt_ohne_freisteller",
-                 "Sticker %d (%s): Freisteller ausgefallen (%s), Sticker steht neben dem Gesicht "
-                 "statt hinter ihm." % (i, gegenstand, meta["freisteller_grund"]), melden=False)
+                 "Sticker %d (%s): nicht hinter ihm (%s), Sticker steht neben dem Gesicht."
+                 % (i, gegenstand, meta["freisteller_grund"]), melden=False)
         platz = dict(platz_neben, art="neben") if platz_neben else None
     if not platz:
         log.info("[AUSSCHNITT] %d kein Platz (%s)", i, "hinter" if vorne else "neben")

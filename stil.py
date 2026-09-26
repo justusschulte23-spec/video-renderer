@@ -276,9 +276,26 @@ def vox_zeile(satz, markierung, k, breit, hoch, sekunden=3.0, seed=0):
     rnd = _r.Random(seed)
     winkel = rnd.choice([-1, 1]) * rnd.uniform(1.2, 2.6)
     worte = str(satz).split()
-    # Skript 86: einzeilig gesetzt fiel "Ein Berater postet wochenlang." auf die Mindestschrift.
-    n = len(str(satz))
-    fs = _px_fuer(satz, int(breit * .86), int(breit * .11), min_px=44, zeilen=1 if n <= 14 else 2 if n <= 34 else 3)
+    # Skript 86: einzeilig gesetzt fiel der Text auf die Mindestschrift; nach Laenge gesetzt
+    # lief er bei 30 s und 58 s oben und unten aus dem Streifen. Jetzt wird die groesste
+    # Schrift gesucht, bei der Breite UND Hoehe passen (Zeichenbreite 0,58 em, grob, mit Luft).
+    import math as _m
+    innen_b = breit * .94 - 2 * 0.8 * 40
+    fs = 40
+    for px in range(int(breit * .11), 39, -2):
+        zeichen_je_zeile = max(1, int((breit * .94 - 1.6 * px) / (px * 0.58)))
+        if max(len(w) for w in worte) > zeichen_je_zeile:
+            continue
+        zeilen, laenge = 1, 0
+        for w in worte:
+            neu = laenge + (1 if laenge else 0) + len(w)
+            if neu > zeichen_je_zeile:
+                zeilen, laenge = zeilen + 1, len(w)
+            else:
+                laenge = neu
+        if zeilen * px * 1.14 + px * 1.32 <= hoch * 0.86:
+            fs = px
+            break
     spans = []
     for j, w in enumerate(worte):
         roh = w.strip(" ,.;:!?\"'„“()")

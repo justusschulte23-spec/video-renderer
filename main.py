@@ -1799,11 +1799,13 @@ def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08
         parts.append(f"[0:v]trim={s:.3f}:{e:.3f},setpts=PTS-STARTPTS,fps={FPS},setsar=1,format=yuv420p[v{i}];")
         parts.append(f"[0:a]atrim={s:.3f}:{e:.3f},asetpts=PTS-STARTPTS[a{i}];")
     cur_v, cur_a, cum = "v0", "a0", lengths[0]
+    starts = [0.0]
     for i in range(1, n):
         dd = min(d, lengths[i] * 0.45, lengths[i - 1] * 0.45, max(0.02, cum * 0.45))
         if dd < 0.02:
             return False
         off = max(0.0, cum - dd)
+        starts.append(off)
         parts.append(f"[{cur_v}][v{i}]xfade=transition=fade:duration={dd:.3f}:offset={off:.3f}[vx{i}];")
         parts.append(f"[{cur_a}][a{i}]acrossfade=d={dd:.3f}:c1=tri:c2=tri[ax{i}];")
         cur_v, cur_a = f"vx{i}", f"ax{i}"
@@ -1820,6 +1822,7 @@ def _trim_with_crossfade(src: Path, keeps: list, out_path: Path, d: float = 0.08
     if r.returncode != 0 or not out_path.exists():
         log.warning("[TRIM] crossfade failed, falling back to hard cut: %s", (r.stderr or "")[-500:])
         return False
+    _FUGEN_LAUF[str(out_path)] = {"keeps": list(keeps), "starts": starts, "blende": d}
     return True
 
 
@@ -1880,7 +1883,40 @@ def _trim_dead_air(src: Path, keeps: list, out_path: Path, edge_fade: float = 0.
         return False
     log.info("[SPUREN] %s -> %s (hart, %d Stuecke): vorher %s | nachher %s", src.name, out_path.name,
              len(keeps), _spuren(src), _spuren(out_path))
+    starts, cum = [], 0.0
+    for s_, e_ in keeps:
+        starts.append(cum)
+        cum += e_ - s_
+    _FUGEN_LAUF[str(out_path)] = {"keeps": list(keeps), "starts": starts, "blende": 0.0}
     return True
+
+
+# 26.09.: Wo im fertigen Material geschnitten wurde. Justus: "man sieht, hier wird
+# geschnitten". Gemessen an Lauf 1 von Video 95: 7 von 11 Stille-Schnitten lagen ohne
+# Zoomwechsel im Bild (der Kopf springt in derselben Einstellung), die Zoom-Spruenge
+# sassen an Pausen, an denen gar nicht geschnitten war. Der Trick der Cutter: der
+# Zoomwechsel gehoert GENAU auf den Schnitt, dann liest das Auge ihn als neue
+# Einstellung. Dafuer muss jede Fuge durch alle spaeteren Schnitte mitgerechnet werden.
+_FUGEN_LAUF: dict = {}
+
+
+def _fugen_fortschreiben(alte: list, out_path: Path) -> list:
+    """Fugen (Sekunden) nach dem Schnitt, der out_path erzeugt hat: alte Fugen auf die
+    neue Zeitachse abgebildet (in einem gestrichenen Stueck: weg), dazu die neuen
+    Fugen (Mitte jeder Blende)."""
+    lauf = _FUGEN_LAUF.get(str(out_path))
+    if not lauf:
+        return list(alte)
+    keeps, starts, bl = lauf["keeps"], lauf["starts"], lauf["blende"]
+    neu = []
+    for f in alte:
+        for (s_, e_), st in zip(keeps, starts):
+            if s_ <= f < e_:
+                neu.append(st + (f - s_))
+                break
+    for st in starts[1:]:
+        neu.append(st + bl / 2.0)
+    return sorted(round(x, 3) for x in neu)
 
 
 # ── Smart coherence cut: remove duplicate takes / false starts via LLM ────────
@@ -8974,7 +9010,7 @@ def _layer_defaults(raw: dict, frames: int) -> dict:
     }
 
 
-def _schnitte_vorgeben(layers: list, words: list, frames: int) -> int:
+def _schnitte_vorgeben(layers: list, words: list, frames: int, fugen: list = None) -> int:
     """Schnitte an allen Pausen setzen, bevor der Agent startet.
 
     Die Stellen stehen fest, sobald das Transkript da ist — das ist eine
@@ -8991,9 +9027,21 @@ def _schnitte_vorgeben(layers: list, words: list, frames: int) -> int:
                  "base": 1.04}
         cam.setdefault("modifiers", {})["punch"] = punch
     vorhanden = set(punch.get("frames") or [])
+    # 26.09.: Fugen zuerst und exakt. Ein Zoomwechsel auf der Fuge macht aus dem
+    # Sprung eine neue Einstellung; dort ohne Wackeln (ruhig), sonst wirkt es rabiat.
+    ruhig = set(punch.get("ruhig") or [])
+    for t_ in fugen or []:
+        f = int(round(float(t_) * FPS))
+        if 0 < f < frames:
+            vorhanden.add(f)
+            ruhig.add(f)
+    punch["ruhig"] = sorted(ruhig)
+    # Pausen und Satzgrenzen fuellen nur noch auf: nahe an einer Fuge wuerde ein
+    # zweiter Sprung kurz nach dem ersten folgen.
+    fugen_f = sorted(ruhig)
     for p in _pausen(words, frames / FPS):
         f = int(round(p * FPS))
-        if 0 <= f < frames:
+        if 0 <= f < frames and all(abs(f - g) >= int(1.5 * FPS) for g in fugen_f):
             vorhanden.add(f)
     # Pausen allein reichen nicht: wer durchspricht, bekam einen einzigen
     # Schnitt auf 50 Sekunden (Lauf vom 10.08.). Die Referenz schneidet auf
@@ -9104,10 +9152,12 @@ def tool_session_open(req: OpenSessionRequest):
     if not download_file(req.facecam, cam):
         shutil.rmtree(job, ignore_errors=True)
         raise HTTPException(status_code=400, detail="facecam nicht ladbar")
+    fugen = []
     if req.trim:
         trimmed, _ = _trim_pipeline(cam, job, client_id=req.client_id)
         if trimmed != cam:
             cam = trimmed
+            fugen = _FUGEN_LAUF.pop("pipeline:" + str(trimmed), [])
     # Der Paper Edit laeuft NACH dem Saeubern und VOR allem anderen: Face-Track,
     # Transienten, Kontaktblatt und der ganze Plan beziehen sich auf die
     # Zeitachse, die hier entsteht. Liefe er spaeter, zeigte jeder Zeitstempel
@@ -9125,6 +9175,7 @@ def tool_session_open(req: OpenSessionRequest):
             geschnitten = job / "paper.mp4"
             if _trim_dead_air(cam, keeps, geschnitten):
                 cam = geschnitten
+                fugen = _fugen_fortschreiben(fugen, geschnitten)
                 geschnitten_worden = True
             else:
                 paper["verworfen"] = "Schnitt technisch fehlgeschlagen"
@@ -9216,7 +9267,10 @@ def tool_session_open(req: OpenSessionRequest):
     # staerksten Betonungen. Beides steht fest, sobald Transkript und Peaks
     # da sind — das ist Ableitung, keine Entscheidung. Am 05.08. hat der
     # Agent vier Turns mit cut verbracht und null Schnitte erzeugt.
-    n_cuts = _schnitte_vorgeben(s["layers"], words, frames)
+    s["fugen"] = fugen
+    n_cuts = _schnitte_vorgeben(s["layers"], words, frames, fugen)
+    log.info("[SESSION] %s %d Fugen im Material, Zoomwechsel darauf: %s", sid, len(fugen),
+             ", ".join("%.2f" % f for f in fugen[:40]))
     s["sfx"] = _impacts_vorgeben(onsets, duration)
     log.info("[SESSION] %s vorgegeben: %d Schnitte an Pausen, %d Impacts",
              sid, n_cuts, len(s["sfx"]))
@@ -13280,7 +13334,9 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
                 raise RuntimeError("Icon nicht gerendert")
             return ziel.read_bytes()
         try:
-            motiv = aus.icon_bild(icon, k.get("akzent") or k.get("text") or "#111111", 600,
+            # 26.09.: icons.txt fuehrt die Namen ohne Praefix, das SVG mit "ic-". Ohne
+            # die Umsetzung fiel JEDES Icon als unbekannt durch (Papierflieger, Lauf 2).
+            motiv = aus.icon_bild("ic-" + icon, k.get("akzent") or k.get("text") or "#111111", 600,
                                   render=_render, papier_ton=papier)
             meta["quelle"] = "icon"
         except Exception as exc:
@@ -13299,6 +13355,12 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
     g = (face["left"] * W, face["top"] * H, (face["right"] - face["left"]) * W,
          (face["bottom"] - face["top"]) * H)
 
+    # Erst Platz pruefen, dann freistellen (Lauf 2: 17 s Freisteller fuer "kein Platz").
+    platz_hinter = aus.hinter_platz(W, H, g, st.width, st.height, anteil=anteil)
+    platz_neben = aus.sticker_platz(W, H, tuple(int(v) for v in g), st.width, st.height)
+    if not (platz_hinter or platz_neben):
+        log.info("[AUSSCHNITT] %d kein Platz, weder hinter noch neben dem Gesicht", i)
+        return None
     # Er davor: das Bildstueck der Facecam freistellen.
     von_f = int(round(von * FPS))
     vorne_von = max(0, von_f - 1)
@@ -13316,15 +13378,17 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
         raise
     except Exception as exc:
         _MATTE_GRUND["text"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    if vorne and not platz_hinter:
+        vorne = ""
+        meta["freisteller_grund"] = "hinter ihm kein Platz"
     if vorne:
-        platz = aus.hinter_platz(W, H, g, st.width, st.height, anteil=anteil)
+        platz = platz_hinter
     else:
         meta["freisteller_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
         _warnung(s, "ausschnitt_ohne_freisteller",
                  "Sticker %d (%s): Freisteller ausgefallen (%s), Sticker steht neben dem Gesicht "
                  "statt hinter ihm." % (i, gegenstand, meta["freisteller_grund"]), melden=False)
-        p_ = aus.sticker_platz(W, H, tuple(int(v) for v in g), st.width, st.height)
-        platz = dict(p_, art="neben") if p_ else None
+        platz = dict(platz_neben, art="neben") if platz_neben else None
     if not platz:
         log.info("[AUSSCHNITT] %d kein Platz (%s)", i, "hinter" if vorne else "neben")
         return None
@@ -17241,6 +17305,7 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
     transcript). Phase 1 kills acoustic filler words. Phase 2 removes the remaining
     dead air, cutting only in the pauses between words so no word is halved."""
     current = src
+    fugen = []
 
     n_coherence = 0
     if smart_cut:
@@ -17251,6 +17316,7 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
                 p0 = job_dir / "phase0.mp4"
                 if _trim_dead_air(current, ckeeps, p0):
                     current = p0
+                    fugen = _fugen_fortschreiben(fugen, p0)
                     log.info("[TRIM] phase0: smart cut removed %d words (takes/false-starts)", n_coherence)
 
     n_fillers = 0
@@ -17261,6 +17327,7 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
             p1 = job_dir / "phase1.mp4"
             if _trim_dead_air(current, keeps, p1):   # video hard-cut + 15ms edge declick
                 current = p1
+                fugen = _fugen_fortschreiben(fugen, p1)
                 log.info("[TRIM] phase1: cut %d filler word(s)", n_fillers)
     else:
         log.warning("[TRIM] phase1: no transcript — skipping filler cut")
@@ -17272,6 +17339,7 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
     w2 = transcribe_audio(current)
     if not w2:
         log.warning("[TRIM] phase2: kein Transkript, kein Stille-Schnitt (nur Tonsignal schneidet ins Wort)")
+        _FUGEN_LAUF["pipeline:" + str(current)] = fugen
         return current, n_fillers
     try:
         a2 = job_dir / "audio2.mp3"
@@ -17290,9 +17358,11 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
             p2 = job_dir / "phase2.mp4"
             if _trim_dead_air(current, keeps2, p2):
                 current = p2
+                fugen = _fugen_fortschreiben(fugen, p2)
     except Exception as exc:
         log.warning("[TRIM] phase2 skipped: %s", exc)
 
+    _FUGEN_LAUF["pipeline:" + str(current)] = fugen
     return current, n_fillers
 
 

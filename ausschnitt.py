@@ -265,6 +265,14 @@ def hinter_platz(bild_w, bild_h, gesicht, st_w, st_h, unten_max=0.72, anteil=(1.
     rand = 0.02 * bild_w
     px = max(rand, min(bild_w - rand - sw, px))
     sichtbar = ((px + sw) - (x + w)) / sw if seite == "rechts" else (x - px) / sw
+    # 26.09., Lauf 2: breite Gegenstaende verschwanden ganz ("kein Platz"). Erst
+    # verkleinern (bis 25 % Bildbreite fuer den Gegenstand), dann aufgeben.
+    while sichtbar < 0.5 and sw * aw * 0.9 >= 0.25 * bild_w:
+        sw *= 0.9
+        sh = sw / asp
+        px = innen if seite == "rechts" else innen - sw
+        px = max(rand, min(bild_w - rand - sw, px))
+        sichtbar = ((px + sw) - (x + w)) / sw if seite == "rechts" else (x - px) / sw
     if sichtbar < 0.5:
         return None
     py = (y + h) - 0.45 * sh

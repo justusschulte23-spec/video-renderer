@@ -14808,6 +14808,24 @@ async def _build_impl(req: BuildRequest):
 
     # ── QC: die mechanische Liste, immer, ganz zum Schluss ───────────────────
     aus["qc"] = _qc(pfad, s, plan)
+    # ── NACHBESSERUNG (26.09.): ein harter QC-Punkt, den der Bau beheben kann, wird
+    # am fertigen Stand behoben: kein neuer Plan, kein neuer Bau, nur die fehlende
+    # Ebene dazu und neu gerendert. Uebernommen wird nur, was besser ist.
+    nach = await _nachbessern(s, plan, aus["qc"])
+    if nach:
+        dritter = tool_session_render(SessionRef(session_id=s["id"]))
+        qc2 = _qc(Path(dritter.get("pfad") or ""), s, plan)
+        if qc2["hart_offen"] < aus["qc"]["hart_offen"]:
+            log.info("[NACHBESSERUNG] %d Ebenen, harte QC-Punkte %d -> %d", len(nach),
+                     aus["qc"]["hart_offen"], qc2["hart_offen"])
+            aus["render"], aus["qc"] = dritter, qc2
+            pfad = Path(dritter.get("pfad") or "")
+            aus["nachbesserung"] = nach
+        else:
+            s["layers"] = [l for l in s["layers"] if l["id"] not in {n["ebene"] for n in nach}]
+            aus["nachbesserung"] = {"verworfen": "nicht besser (%d -> %d harte Punkte)"
+                                    % (aus["qc"]["hart_offen"], qc2["hart_offen"]), "versucht": nach}
+            log.warning("[NACHBESSERUNG] verworfen: %s", aus["nachbesserung"]["verworfen"])
     offen = [x["punkt"] for x in aus["qc"]["punkte"] if x["hart"] and not x["ok"]]
     if offen:
         # Nicht blockieren — melden. Ob ein Video mit einem harten Punkt
@@ -14820,6 +14838,58 @@ async def _build_impl(req: BuildRequest):
               "qc_hart_offen": aus["qc"]["hart_offen"],
               "qc_offen": offen})
     return aus
+
+
+async def _nachbessern(s: dict, plan: dict, qc: dict) -> list:
+    """Tote Strecke: in der laengsten Luecke einen Stil-Baustein aus dem gesprochenen
+    Skriptsatz bauen (Regeln wie immer: nur gesagter Text, Kundenfarben). Hoechstzahl
+    und Abstand gelten hier nicht, weil die QC genau das Fehlen bemaengelt. Hoechstens
+    drei Fuellungen. Gibt die gebauten Ebenen zurueck."""
+    offen = {x["punkt"] for x in qc.get("punkte") or [] if x["hart"] and not x["ok"]}
+    if "Keine tote Strecke" not in offen:
+        return []
+    grenze = min(20.0, max(6.0, (s["frames"] / FPS) / 4))
+    gebaut = []
+    probiert = set()
+    for _ in range(3):
+        luecke_f, ab_f = _max_gap(s["layers"], s["frames"])
+        if luecke_f / FPS <= grenze:
+            break
+        von_s, bis_s = ab_f / FPS, (ab_f + luecke_f) / FPS
+        kand = [(i, a) for i, a in enumerate(plan.get("abschnitte") or [])
+                if i not in probiert and von_s + 1.0 <= float(a.get("von") or 0)
+                and float(a.get("bis") or 0) <= bis_s - 1.0]
+        # die Mitte der Luecke zuerst: sie teilt die Strecke am wirksamsten
+        mitte = (von_s + bis_s) / 2.0
+        kand.sort(key=lambda x: abs((float(x[1]["von"]) + float(x[1]["bis"])) / 2.0 - mitte))
+        treffer = None
+        for i, a in kand[:6]:
+            probiert.add(i)
+            gez = s.get("stil_gezeigt")
+            s["stil_gezeigt"] = []            # Hoechstzahl und Abstand hier aus
+            try:
+                res = await _stil_baustein(s, a, 900 + i)
+            finally:
+                s["stil_gezeigt"] = (gez or []) + (s.get("stil_gezeigt") or [])
+            if res and res.get("layer_source"):
+                treffer = (i, a, res)
+                break
+        if not treffer:
+            break
+        i, a, res = treffer
+        von_f = int(round(float(a["von"]) * FPS))
+        bis_f = min(s["frames"], von_f + int(round(float(res.get("sekunden_material")
+                                                          or (float(a["bis"]) - float(a["von"]))) * FPS)))
+        lid = f"nach_{i}"
+        s["layers"].append(_layer_defaults({
+            "id": lid, "z": Z_ELEMENT, "source": res["layer_source"],
+            "from": von_f, "to": bis_f,
+            "transform": res.get("transform") or {"x": 0, "y": 0, "w": 1, "h": 1},
+            "herkunft": "nachbesserung:" + str(res.get("stil")),
+            "konzept": "tote Strecke %.1f-%.1fs" % (von_s, bis_s)}, s["frames"]))
+        gebaut.append({"ebene": lid, "stil": res.get("stil"), "von": a["von"], "bis": a["bis"],
+                       "grund": "tote Strecke %.1f s ab %.1f s" % (luecke_f / FPS, von_s)})
+    return gebaut
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -14842,7 +14912,8 @@ ABNAHME_MAENGEL = ("text_abgeschnitten", "element_ausserhalb", "gesicht_verdeckt
 # bleibt stehen — eine Reparatur, die raet, ist schlimmer als ein bekannter
 # Mangel.
 ABNAHME_REPARIERBAR = ("text_abgeschnitten", "element_ausserhalb",
-                       "gesicht_verdeckt", "leer", "unlesbar", "doppelter_text")
+                       "gesicht_verdeckt", "leer", "unlesbar", "doppelter_text",
+                       "falscher_text")
 
 ABNAHME_SYS = """Texte und Grafiken bauen sich in den ersten 1 bis 2 Sekunden eines Abschnitts auf (Tippen, Einfliegen). Beurteile Text und Vollstaendigkeit am ENDE des Abschnitts, nie an seinem Anfang. Du bist die ABNAHME. Du siehst das fertige Video und den Plan,
 nach dem es gebaut wurde. Du pruefst, ob das Video den Plan einloest.
@@ -15063,8 +15134,11 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         # Die oberste: die sieht man.
         l = sorted(treffer, key=lambda x: -x["z"])[0]
         art = m.get("art")
-        if art in ("leer", "unlesbar") or (art == "doppelter_text"
-                                           and not _ist_uebernahme(l)):
+        # 26.09., Justus: "abgelehnt heisst neuer Versuch, der das Gerenderte anhand der
+        # Maengel verbessert". Falscher Text war bisher nur gemeldet und blieb stehen;
+        # jetzt geht die Ebene, dahinter steht er selbst.
+        if art in ("leer", "unlesbar", "falscher_text") or (art == "doppelter_text"
+                                                            and not _ist_uebernahme(l)):
             s["layers"] = [x for x in s["layers"] if x is not l]
             getan.append({"bei": bei, "art": art, "ebene": l["id"],
                           "tat": "Ebene entfernt — dahinter steht er selbst"})
@@ -15343,6 +15417,7 @@ def _video_job(job_id: str, req: "VideoRequest"):
             # kein Befund.
             "abnahme": bau.get("abnahme"),
             "qc": bau.get("qc"),
+            "nachbesserung": bau.get("nachbesserung"),
             "auslieferbar": bool((bau.get("qc") or {}).get("ok", True)),
             # 22.09.: Der Aufrufer nannte bisher das Urteil der ABNAHME als
             # Grund, obwohl ueber auslieferbar die mechanische QC entscheidet.

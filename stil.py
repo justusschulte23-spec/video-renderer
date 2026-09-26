@@ -27,7 +27,7 @@ import kit
 
 # ausschnitt (26.09.): Collage-Sticker hinter ihm, gebaut in main._ausschnitt_bauen (ausschnitt.py)
 BAUSTEINE = ("typo_minimal", "grosse_zahl", "daten_chart", "vox_dokument", "ui_karte", "bildschirm_beweis",
-             "ausschnitt")
+             "ausschnitt", "vox_zeile")
 VOLLBILD = ("typo_minimal", "grosse_zahl", "daten_chart", "vox_dokument")
 
 
@@ -231,6 +231,87 @@ def ui_karte(text, art, k, breit, hoch, sekunden=3.0, absender=""):
     return _seite(k, breit, hoch, body, css, transparent=True)
 
 
+# ─────────────────────────────────────────────── vox_zeile
+def schluesselwort(satz):
+    """Das Wort, ueber das der Marker zieht: das laengste grossgeschriebene Wort, das nicht
+    am Satzanfang steht (im Deutschen fast immer ein Nomen), sonst das laengste Wort."""
+    worte = [w.strip(" ,.;:!?\"'„“()") for w in str(satz).split()]
+    nomen = [w for j, w in enumerate(worte) if j > 0 and w[:1].isupper() and len(w) > 3]
+    kand = nomen or [w for w in worte if len(w) > 3] or worte
+    return max(kand, key=len) if kand else ""
+
+
+def phrase(satz, max_worte=7):
+    """Hoechstens max_worte am Stueck, woertlich aus dem Satz: das Fenster mit den meisten
+    Nomen, bei Gleichstand das spaetere (die Pointe steht im Deutschen hinten)."""
+    worte = str(satz).split()
+    if len(worte) <= max_worte:
+        return str(satz).strip()
+    # Erst ganze Satzteile (an Komma, Doppelpunkt, Gedankenstrich), die hineinpassen: ein
+    # Fenster mitten durch den Satz liest sich als Bruchstueck ("weil niemand ihren Namen").
+    teile = [x.strip() for x in re.split(r"(?<=[,;:])\s+|\s+[-–]\s+", str(satz)) if x.strip()]
+    anschluss = ("weil", "dass", "wenn", "aber", "und", "oder", "denn", "sondern", "obwohl", "damit")
+    gut = [x for x in teile if 3 <= len(x.split()) <= max_worte]
+    if gut:
+        def wert_(x):
+            w = x.split()
+            return (sum(1 for i, y in enumerate(w) if i > 0 and y[:1].isupper()),
+                    0 if w[0].lower() in anschluss else 1, len(w))
+        return re.sub(r"[,;:]$", "", max(gut, key=wert_)).strip()
+    bestes, wert = worte[-max_worte:], -1
+    for j in range(0, len(worte) - max_worte + 1):
+        f = worte[j:j + max_worte]
+        w = sum(1 for i, x in enumerate(f) if (j + i) > 0 and x[:1].isupper())
+        if w >= wert:
+            bestes, wert = f, w
+    return re.sub(r"[,;:]$", "", " ".join(bestes)).strip()
+
+
+def vox_zeile(satz, markierung, k, breit, hoch, sekunden=3.0, seed=0):
+    """26.09., Justus: "schoene Einblendungen, Vox-Style, die entstehen und da sind".
+    Transparent: ein gerissener Papierstreifen mit Korn und Klebeband, leicht gedreht; die
+    Woerter stempeln einzeln hinein, dann zieht ein Textmarker ueber das Schluesselwort.
+    Text und Marker kommen woertlich aus dem gesprochenen Skriptsatz."""
+    import random as _r
+    rnd = _r.Random(seed)
+    winkel = rnd.choice([-1, 1]) * rnd.uniform(1.2, 2.6)
+    worte = str(satz).split()
+    fs = _px_fuer(satz, int(breit * .86), int(breit * .105), min_px=44, zeilen=2 if len(worte) > 4 else 1)
+    spans = []
+    for j, w in enumerate(worte):
+        roh = w.strip(" ,.;:!?\"'„“()")
+        inner = _e(w)
+        if markierung and roh == markierung:
+            inner = f"<span class='mk'>{_e(w)}</span>"
+        spans.append(f"<span class='w' style='animation-delay:{0.18 + j * 0.09:.2f}s'>{inner}</span>")
+    mk_start = 0.18 + len(worte) * 0.09 + 0.1
+    # gerissene Kanten: Zacken oben und unten
+    zo = " ".join(f"{x}% {rnd.uniform(0, 9):.1f}%" for x in range(0, 101, 3))
+    zu = " ".join(f"{x}% {100 - rnd.uniform(0, 9):.1f}%" for x in range(100, -1, -3))
+    papier = k.get("surface") or "#FFFFFF"
+    css = f"""
+    .wrap{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}}
+    .streifen{{position:relative;max-width:{int(breit*.94)}px;padding:{int(fs*.62)}px {int(fs*.8)}px {int(fs*.7)}px;
+               transform:rotate({winkel:.2f}deg);animation:rein .45s cubic-bezier(.2,1.3,.4,1) both;
+               filter:drop-shadow(0 14px 22px rgba(0,0,0,.28));}}
+    .papier{{position:absolute;inset:0;background:{papier};clip-path:polygon({zo}, {zu});}}
+    .papier::after{{content:'';position:absolute;inset:0;opacity:.35;mix-blend-mode:multiply;
+                    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .45  0 0 0 0 .42  0 0 0 0 .38  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");}}
+    .band{{position:absolute;top:-{int(fs*.28)}px;left:{int(fs*.5)}px;width:{int(fs*1.9)}px;height:{int(fs*.62)}px;
+           background:rgba(255,255,255,.55);transform:rotate({-winkel*3:.1f}deg);box-shadow:0 2px 6px rgba(0,0,0,.08);}}
+    .txt{{position:relative;font-size:{fs}px;line-height:1.14;font-weight:800;letter-spacing:-0.02em;color:{k['text']};
+          text-transform:none;}}
+    .w{{display:inline-block;margin-right:.26em;opacity:0;animation:stempel .22s cubic-bezier(.2,1.6,.4,1) forwards;}}
+    .mk{{background:linear-gradient(transparent 12%, {k['akzent']}88 12%, {k['akzent']}88 92%, transparent 92%) no-repeat left / 0% 100%;
+         padding:0 .08em;animation:marker .55s {mk_start:.2f}s cubic-bezier(.2,.8,.2,1) forwards;}}
+    @keyframes stempel{{from{{opacity:0;transform:scale(1.5)}}to{{opacity:1;transform:none}}}}
+    @keyframes marker{{to{{background-size:100% 100%}}}}
+    @keyframes rein{{from{{opacity:0;transform:rotate({winkel:.2f}deg) translateY(30px) scale(.92)}}to{{opacity:1;transform:rotate({winkel:.2f}deg)}}}}"""
+    body = (f"<div class='wrap'><div class='streifen'><div class='papier'></div><div class='band'></div>"
+            f"<div class='txt'>{''.join(spans)}</div></div></div>")
+    return _seite(k, breit, hoch, body, css, transparent=True)
+
+
 def baue(baustein, inhalt, client_id, breit, hoch, farben=None, sekunden=3.0, variante=None):
     """Markup fuer einen Baustein oder None, wenn der Inhalt fehlt."""
     k = _k(client_id, farben)
@@ -242,6 +323,8 @@ def baue(baustein, inhalt, client_id, breit, hoch, farben=None, sekunden=3.0, va
         return daten_chart(inhalt["werte"], inhalt.get("titel"), k, breit, hoch, sekunden, variante or "klar")
     if baustein == "vox_dokument" and inhalt.get("text"):
         return vox_dokument(inhalt["text"], inhalt.get("markierung"), k, breit, hoch, sekunden)
+    if baustein == "vox_zeile" and inhalt.get("satz"):
+        return vox_zeile(inhalt["satz"], inhalt.get("markierung"), k, breit, hoch, sekunden, inhalt.get("seed", 0))
     if baustein == "ui_karte" and inhalt.get("text"):
         return ui_karte(inhalt["text"], inhalt.get("art") or "notiz", k, breit, hoch, sekunden, inhalt.get("absender"))
     return None

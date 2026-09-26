@@ -13086,8 +13086,11 @@ def _stil_weg(s: dict, a: dict) -> bool:
     return bool(s.get("stil_liste")) and _komposition(a) not in STIL_WEG_AUS
 
 
-STIL_MAX_JE_VIDEO = 6     # 25.09.: sonst wurde jeder Element-Abschnitt eine Karte (16 in Video 95)
-STIL_ABSTAND_S = 7.0       # dazwischen gehoert das Bild ihm
+# 26.09., Justus: "wir wollen schoene Einblendungen, die entstehen und da sind". Skript 84
+# hatte 23 geplante Einblendungen und 16 leere Abschnitte; die Grenzen 6 und 7 s waren der
+# groesste Teil davon. vox_zeile deckt ihn nicht zu, deshalb darf es dichter werden.
+STIL_MAX_JE_VIDEO = 12
+STIL_ABSTAND_S = 3.5
 
 
 def _norm_wort(w: str) -> str:
@@ -13158,6 +13161,9 @@ def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
         if i >= 0 and i + 1 < len(saetze) and len((text + " " + saetze[i + 1]).split()) <= 28:
             text = text + " " + saetze[i + 1]
         return {"text": text, "markierung": satz}
+    if baustein == "vox_zeile":
+        ph = stil.phrase(satz)
+        return {"satz": ph, "markierung": stil.schluesselwort(ph), "seed": len(satz)}
     if baustein == "ui_karte":
         art = "chat" if (satz.endswith("?") or re.search(r"\bhey\b", satz.lower())) else "notiz"
         return {"text": satz, "art": art}
@@ -13219,8 +13225,9 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
     for kand in ("daten_chart", "grosse_zahl"):
         if kand in liste and kand not in reihe:
             reihe.append(kand)
-    textarten = sorted([x for x in liste if x in ("typo_minimal", "vox_dokument", "ui_karte")],
-                       key=lambda x: (zaehler.get(x, 0), liste.index(x)))
+    # vox_zeile vorn (Justus' Stil), aber im Wechsel: bei gleicher Nutzung zuerst.
+    textarten = sorted([x for x in liste if x in ("vox_zeile", "typo_minimal", "vox_dokument", "ui_karte")],
+                       key=lambda x: (zaehler.get(x, 0) - (1 if x == "vox_zeile" else 0), liste.index(x)))
     reihe += [x for x in textarten if x not in reihe]
     for baustein in reihe:
         inhalt = _stil_inhalt(s, a, baustein)
@@ -13239,6 +13246,17 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
             if h < 0.12:
                 continue   # kein Platz ueber dem Gesicht: die Karte darf nicht darueber liegen
             tf = {"x": 0.05, "y": 0.05, "w": 0.9, "h": h}
+        elif baustein == "vox_zeile":
+            # Ueber dem Kopf, sonst auf Brusthoehe ueber den Untertiteln; nie ueber dem Gesicht.
+            face = s.get("face") or {}
+            oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))
+            hz = 0.19
+            if oben - 0.015 - hz >= 0.035:
+                tf = {"x": 0.05, "y": round(oben - 0.015 - hz, 3), "w": 0.9, "h": hz}
+            elif unten + 0.02 + hz <= 0.63:
+                tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
+            else:
+                continue
         else:
             tf = {"x": 0, "y": 0, "w": 1, "h": 1}
         w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
@@ -13255,8 +13273,9 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
         gezeigt.append({"bis": bis, "satz": json.dumps(inhalt, ensure_ascii=False)})
         log.info("[STIL] %d %s: %s", i, baustein, json.dumps(inhalt, ensure_ascii=False)[:200])
         return {"quelle_art": "stil", "stil": baustein, "kosten": 0.0, "sekunden_material": dauer,
-                "transform": tf, "ohne_flaeche": baustein == "ui_karte", "stil_inhalt": inhalt,
-                "layer_source": {"kind": "video", "url": erg["url"], "transparent": baustein == "ui_karte"}}
+                "transform": tf, "ohne_flaeche": baustein in ("ui_karte", "vox_zeile"), "stil_inhalt": inhalt,
+                "layer_source": {"kind": "video", "url": erg["url"],
+                                 "transparent": baustein in ("ui_karte", "vox_zeile")}}
     return None
 
 

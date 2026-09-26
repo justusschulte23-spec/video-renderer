@@ -227,3 +227,38 @@ def foto_freigestellt(gegenstand, suche, versuche=2, laden=None):
         gruende.append("Foto %s: Freisteller durchgefallen %s" % (wahl["id"], g))
         kand = [k for k in kand if k["id"] != wahl["id"]]
     return {"grund": "; ".join(gruende)}
+
+
+def hinter_platz(bild_w, bild_h, gesicht, st_w, st_h, unten_max=0.62):
+    """26.09., Justus: groesser als das Gesicht, ueber die Schulter, HINTER ihm. Er steht
+    freigestellt davor (eigene Ebene), deshalb darf der Sticker in seine Silhouette ragen.
+    gesicht = (x, y, w, h) in Pixeln. Hoehe etwa 1,7 Gesichtshoehen, Breite 40 bis 60 %
+    des Bildes. Die innere Kante sitzt knapp im Kopf, die Mitte auf Kinnhoehe: oben steht
+    er neben dem Kopf, unten verschwindet er hinter der Schulter. Unterkante ueber den
+    Untertiteln. Mindestens die Haelfte der Breite liegt ausserhalb des Gesichts."""
+    x, y, w, h = gesicht
+    asp = st_w / float(st_h)
+    sh = 1.7 * h
+    sw = sh * asp
+    if sw > 0.60 * bild_w:
+        sw = 0.60 * bild_w
+    if sw < 0.40 * bild_w:
+        sw = 0.40 * bild_w
+    sh = sw / asp
+    oben_min, unten = int(bild_h * 0.05), int(bild_h * unten_max)
+    if sh > unten - oben_min:
+        sh = unten - oben_min
+        sw = sh * asp
+    mitte = x + w / 2.0
+    seite = "rechts" if (bild_w - mitte) >= mitte else "links"
+    innen = (x + w - 0.10 * w) if seite == "rechts" else (x + 0.10 * w)
+    px = innen if seite == "rechts" else innen - sw
+    rand = 0.02 * bild_w
+    px = max(rand, min(bild_w - rand - sw, px))
+    sichtbar = ((px + sw) - (x + w)) / sw if seite == "rechts" else (x - px) / sw
+    if sichtbar < 0.5:
+        return None
+    py = (y + h) - 0.45 * sh
+    py = max(oben_min, min(unten - sh, py))
+    return {"x": int(px), "y": int(py), "w": int(sw), "h": int(sh), "seite": seite,
+            "sichtbar": round(sichtbar, 2), "art": "hinter"}

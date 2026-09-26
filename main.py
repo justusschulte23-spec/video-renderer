@@ -7412,7 +7412,8 @@ def _make_thumbnail_image(concept: str, client_id: str, out_path: Path) -> bool:
     return True
 
 
-async def _html_png_async(markup: str, width: int, height: int, out: Path) -> bool:
+async def _html_png_async(markup: str, width: int, height: int, out: Path,
+                          transparent: bool = False) -> bool:
     from playwright.async_api import async_playwright
     src = out.with_suffix(".html")
     src.write_text(markup, encoding="utf-8")
@@ -7422,17 +7423,18 @@ async def _html_png_async(markup: str, width: int, height: int, out: Path) -> bo
         ctx = await browser.new_context(viewport={"width": width, "height": height})
         page = await ctx.new_page()
         await page.goto(f"file://{src.absolute()}", wait_until="load", timeout=20000)
-        await page.screenshot(path=str(out))
+        await page.screenshot(path=str(out), omit_background=transparent)
         await browser.close()
     return out.exists()
 
 
-def _html_png(markup: str, width: int, height: int, out: Path) -> bool:
+def _html_png(markup: str, width: int, height: int, out: Path, transparent: bool = False) -> bool:
     """Ein Standbild aus Markup. Laeuft in einem eigenen Thread mit eigener Schleife,
     weil der Aufrufer (tool_session_render) selbst in einer laufenden Schleife steckt."""
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(lambda: asyncio.run(_html_png_async(markup, width, height, out))).result(timeout=90)
+        return ex.submit(lambda: asyncio.run(_html_png_async(markup, width, height, out,
+                                                             transparent))).result(timeout=90)
 
 
 def _hook_standbild(s: dict, job_dir: Path) -> Optional[Path]:
@@ -8902,6 +8904,27 @@ def _clean_animate(raw_list, frames: int) -> tuple:
                       "start": max(0, st), "end": min(frames, en),
                       "easing": e if e in ANIM_EASE else "easeOut"})
     return clean, fehler
+
+
+def _zeit_und_punch(layers: list, face_url: str) -> None:
+    """26.09.: Remotion liest ein Video ohne Angabe nach der Bildnummer des ganzen Videos.
+    Jeder Clip, der nicht die Facecam ist, beginnt aber bei seiner Ebene: Stil-Clips und
+    Pexels standen mitten im Video als eingefrorenes Endbild (Testvideo 95, 117,5 s und
+    83,5 s). Die Facecam, ihre Kopien (cam_*) und der Hook-Freisteller (ab Bild 0
+    gemattet) bleiben global. Dazu bekommt der Freisteller vor einem Sticker denselben
+    Punch wie die Facecam."""
+    punch = next(((l.get("modifiers") or {}).get("punch") for l in layers
+                  if (l.get("source") or {}).get("kind") == "facecam"
+                  and (l.get("modifiers") or {}).get("punch")), None)
+    for l in layers:
+        src = l.get("source") or {}
+        if src.get("kind") != "video":
+            continue
+        if not src.get("zeit"):
+            global_ = src.get("url") == face_url or str(l.get("id", "")).startswith("cam_")
+            src["zeit"] = "global" if global_ else "ebene"
+        if str(l.get("id", "")).startswith("ausschnitt_vorne_") and punch:
+            l.setdefault("modifiers", {})["punch"] = punch
 
 
 def _layer_defaults(raw: dict, frames: int) -> dict:
@@ -10979,6 +11002,7 @@ def tool_session_render(req: SessionRef):
         if layers is s["layers"]:
             s["layers"][:] = gefiltert   # Telemetrie und Abnahme sehen, was gerendert wird
         layers = gefiltert
+        _zeit_und_punch(layers, s.get("face_url") or "")
         props = {"layers": layers, "legacy": None, "face_url": s["face_url"],
                  "durationInSeconds": round(dauer, 3),
                  # OHNE das rendert jeder Kunde in Justus' Amethyst — die
@@ -13179,6 +13203,150 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
     return None
 
 
+AUSSCHNITT_MAX_S = 4.0     # laenger steht kein Sticker; jede Sekunde kostet Freisteller-Rechenzeit
+AUSSCHNITT_SYS = """Du bekommst die Bildidee zu einem Satz aus einem Video. Entscheide, ob sie
+EINEN konkreten, fotografierbaren Gegenstand zeigt (Haus, Laptop, Handy, Schluessel, Vertrag,
+Kaffeetasse). Abstraktes (Vertrauen, Wachstum), Personen, Handlungen ohne Gegenstand und
+Szenen mit mehreren Dingen sind NICHT konkret.
+Ist sie konkret: gib den Gegenstand auf Deutsch, eine kurze englische Pexels-Suche
+(2 bis 4 Woerter, Gegenstand freigestellt, z.B. "house model white background") und aus der
+Icon-Liste die EINE id, die denselben Gegenstand zeigt (sonst leer).
+Nur JSON: {"konkret":true,"gegenstand":"...","suche":"...","icon":"..."}"""
+
+
+def _icon_liste() -> list:
+    pfad = Path(__file__).parent / "vendor" / "motion-anything" / "icons.txt"
+    try:
+        return [z.split("\t")[-1].strip() for z in pfad.read_text(encoding="utf-8").splitlines() if z.strip()]
+    except Exception:
+        return []
+
+
+def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
+    """26.09., Justus: der Collage-Sticker (ausschnitt.py) im Video. Groesser als sein
+    Gesicht, ueber die Schulter, HINTER ihm: Facecam (z 10), Sticker (z 12), er selbst
+    freigestellt davor (z 13, dasselbe Bildstueck mit Alpha, derselbe Punch wie die
+    Facecam). Faellt der Freisteller aus, steht der Sticker NEBEN dem Gesicht (nie
+    darueber); ist dort kein Platz, gibt es keinen Sticker. Quelle: Pexels-Foto mit
+    gemessener Freisteller-Guete, sonst Icon auf Papierkarte."""
+    import ausschnitt as aus
+    from PIL import Image as _Img
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    dauer = round(min(AUSSCHNITT_MAX_S, bis - von), 2)
+    if dauer < 1.2:
+        return None
+    icons = _icon_liste()
+    try:
+        raw = call_openrouter(AUSSCHNITT_SYS, "Bildidee: %s\n\nIcon-Liste:\n%s" % (was, " ".join(icons)),
+                              model="anthropic/claude-haiku-4.5", max_tokens=300, tool="ausschnitt-gegenstand",
+                              client_id=s.get("client_id") or "")
+        m = re.search(r"\{[\s\S]*\}", raw or "")
+        o = json.loads(m.group()) if m else None
+    except Exception as exc:
+        log.warning("[AUSSCHNITT] %d Einordnung: %s", i, str(exc)[:160])
+        return None
+    if not o:
+        # Eine Antwort ohne Urteil ist ein Ausfall, keine Ablehnung (18.09.).
+        log.warning("[AUSSCHNITT] %d Einordnung ohne JSON: Ausfall", i)
+        return None
+    if not o.get("konkret") or not str(o.get("gegenstand") or "").strip():
+        log.info("[AUSSCHNITT] %d '%s' nicht konkret", i, was[:60])
+        return None
+    gegenstand = str(o["gegenstand"]).strip()
+    icon = str(o.get("icon") or "").strip()
+    icon = icon if icon in icons else ""
+    k = kit.kit_fuer(s.get("client_id"), False, _client_brand_colors(s.get("client_id")))
+    papier = k.get("surface") or "#FFFFFF"
+    d = Path(s["dir"]) / f"ausschnitt_{i}"
+    d.mkdir(parents=True, exist_ok=True)
+    meta = {"gegenstand": gegenstand, "suche": o.get("suche"), "icon": icon}
+    motiv = None
+    try:
+        f = aus.foto_freigestellt(gegenstand, str(o.get("suche") or gegenstand))
+        if f.get("rgba") is not None:
+            motiv = f["rgba"]
+            meta.update(quelle="foto", guete=f["guete"], foto_id=(f["foto"] or {}).get("id"),
+                        fotograf=(f["foto"] or {}).get("fotograf"), seite=(f["foto"] or {}).get("seite"))
+        else:
+            meta["foto_grund"] = f.get("grund")
+    except Exception as exc:
+        meta["foto_grund"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    if motiv is None and icon:
+        def _render(svg, w_, h_):
+            ziel = d / "icon.png"
+            seite_ = ('<!doctype html><html><head><style>html,body{margin:0;background:transparent;'
+                      'width:%dpx;height:%dpx;overflow:hidden}</style></head><body>%s</body></html>' % (w_, h_, svg))
+            if not _html_png(seite_, w_, h_, ziel, transparent=True):
+                raise RuntimeError("Icon nicht gerendert")
+            return ziel.read_bytes()
+        try:
+            motiv = aus.icon_bild(icon, k.get("akzent") or k.get("text") or "#111111", 600,
+                                  render=_render, papier_ton=papier)
+            meta["quelle"] = "icon"
+        except Exception as exc:
+            meta["icon_grund"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    if motiv is None:
+        log.info("[AUSSCHNITT] %d kein Motiv: %s", i, json.dumps(meta, ensure_ascii=False)[:300])
+        return None
+    st = aus.sticker(motiv, papier, seed=i + 7)
+
+    face = s.get("face") or {}
+    if not face.get("right"):
+        log.info("[AUSSCHNITT] %d ohne Gesichtsbox, kein Platz berechenbar", i)
+        return None
+    g = (face["left"] * W, face["top"] * H, (face["right"] - face["left"]) * W,
+         (face["bottom"] - face["top"]) * H)
+
+    # Er davor: das Bildstueck der Facecam freistellen.
+    von_f = int(round(von * FPS))
+    vorne_von = max(0, von_f - 1)
+    n = int(round(dauer * FPS)) + 3
+    seg = d / "cam.mp4"
+    vorne = ""
+    try:
+        subprocess.run(["ffmpeg", "-y", "-ss", "%.3f" % (vorne_von / FPS), "-i", str(s["facecam_path"]),
+                        "-frames:v", str(n), "-an", "-c:v", "libx264", "-crf", "14", "-preset", "veryfast",
+                        "-pix_fmt", "yuv420p", str(seg)], check=True, capture_output=True, timeout=120)
+        _MATTE_GRUND.clear()
+        _MATTE_GRUND["text"] = ""
+        vorne = _matte_video(seg, d, W=MATTE_W)
+    except JobAbbruch:
+        raise
+    except Exception as exc:
+        _MATTE_GRUND["text"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
+    if vorne:
+        platz = aus.hinter_platz(W, H, g, st.width, st.height)
+    else:
+        meta["freisteller_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
+        _warnung(s, "ausschnitt_ohne_freisteller",
+                 "Sticker %d (%s): Freisteller ausgefallen (%s), Sticker steht neben dem Gesicht "
+                 "statt hinter ihm." % (i, gegenstand, meta["freisteller_grund"]), melden=False)
+        p_ = aus.sticker_platz(W, H, tuple(int(v) for v in g), st.width, st.height)
+        platz = dict(p_, art="neben") if p_ else None
+    if not platz:
+        log.info("[AUSSCHNITT] %d kein Platz (%s)", i, "hinter" if vorne else "neben")
+        return None
+    bild = st.resize((platz["w"], platz["h"]), _Img.LANCZOS)
+    png = d / "sticker.png"
+    bild.save(png)
+    url = upload_supabase(png, f"ausschnitt_{s['id']}_{i}", folder="ausschnitt", content_type="image/png")
+    if not url:
+        return None
+    meta.update(platz=platz, freisteller=bool(vorne))
+    log.info("[AUSSCHNITT] %d %s", i, json.dumps(meta, ensure_ascii=False, default=str)[:400])
+    tf = {"x": round(platz["x"] / W, 4), "y": round(platz["y"] / H, 4),
+          "w": round(platz["w"] / W, 4), "h": round(platz["h"] / H, 4)}
+    bis_f = von_f + int(round(dauer * FPS))
+    anim = [{"property": "scale", "from": 0.6, "to": 1.0, "start": von_f,
+             "end": min(bis_f, von_f + 9), "easing": "spring"},
+            {"property": "opacity", "from": 1.0, "to": 0.0, "start": max(von_f, bis_f - 4),
+             "end": bis_f, "easing": "easeOut"}]
+    return {"quelle_art": "stil", "stil": "ausschnitt", "kosten": 0.0, "sekunden_material": dauer,
+            "transform": tf, "ohne_flaeche": True, "anim": anim, "ausschnitt": meta,
+            "vorne_matte": vorne, "vorne_von": vorne_von,
+            "layer_source": {"kind": "image", "url": url}}
+
+
 async def _beschaffen(s: dict, a: dict, i: int) -> dict:
     """25.09.: Reihenfolge der Quellen fuer Bild-Kompositionen
       1 eigenes Material, Screenshot (Beweis)
@@ -13216,6 +13384,24 @@ async def _beschaffen_bild(s: dict, a: dict, i: int) -> dict:
                         "layer_source": {"kind": "image", "url": shot["url"]}, "_pruefung": "screenshot"}
         except Exception as exc:
             log.warning("[BAU] %d screenshot_url: %s", i, str(exc)[:160])
+    # 2a ausschnitt (26.09.): konkreter Gegenstand als Sticker hinter ihm. Zaehlt wie ein
+    # Stil-Baustein (Hoechstzahl je Video, Abstand), abstrakte Begriffe nie.
+    if k == "metapher" and was and "ausschnitt" in (s.get("stil_liste") or []) \
+            and not [w for w in ABSTRAKT_NIE_STOCK if re.search(r"\b" + w, was.lower())]:
+        gezeigt = s.setdefault("stil_gezeigt", [])
+        von_ = float(a.get("von") or 0)
+        if len(gezeigt) < STIL_MAX_JE_VIDEO and not (gezeigt and von_ - gezeigt[-1]["bis"] < STIL_ABSTAND_S):
+            try:
+                au = await asyncio.to_thread(_ausschnitt_bauen, s, a, i, was)
+            except JobAbbruch:
+                raise
+            except Exception as exc:
+                log.warning("[AUSSCHNITT] %d: %s", i, str(exc)[:200])
+                au = None
+            if au:
+                gezeigt.append({"bis": float(a.get("bis") or 0), "satz": "ausschnitt:" + was})
+                au["_pruefung"] = "ausschnitt:" + str(au["ausschnitt"].get("quelle"))
+                return au
     # 2 Stil-Baustein
     sb = await _stil_baustein(s, a, i)
     if sb:
@@ -14032,7 +14218,7 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             if tf["w"] < 0.99 or tf["h"] < 0.99:
                 neu.append(_backdrop_layer(a, von_f, bis_f, frames, i))
         randlos = tf["w"] >= 0.99 and tf["h"] >= 0.99
-        anim = list(el_anim)
+        anim = list(res.get("anim") or el_anim)
         if res.get("stil_zoom"):
             # bildschirm_beweis: langsamer Zoom in die Aufnahme (Screen-Studio-Art). Ein
             # Cursor-Highlight braucht Cursor-Koordinaten, die eine Aufnahme nicht mitliefert.
@@ -14047,6 +14233,18 @@ async def _abschnitt_bauen(s: dict, a: dict, i: int) -> dict:
             "herkunft": f"plan:{res.get('quelle_art')}",
             "konzept": str(b.get("zeigt") or "")[:80],
         }, frames))
+        if res.get("vorne_matte"):
+            # ausschnitt (26.09.): er freigestellt VOR dem Sticker. Der Punch der
+            # Facecam wird beim Rendern uebernommen (_zeit_und_punch), sonst stuende
+            # er bei jedem Schnitt-Zoom doppelt im Bild.
+            neu.append(_layer_defaults({
+                "id": f"ausschnitt_vorne_{i}", "z": Z_ELEMENT + 1,
+                "source": {"kind": "video", "url": res["vorne_matte"], "transparent": True,
+                           "zeit": "ebene"},
+                "from": res.get("vorne_von", von_f), "to": min(frames, el_bis + 1),
+                "transform": {"x": 0, "y": 0, "w": 1, "h": 1},
+                "herkunft": "plan:ausschnitt", "konzept": "er freigestellt vor dem Sticker",
+            }, frames))
         if k == "metapher_full" and res.get("quelle_art") != "stil":
             # 25.09.: NICHT bei Stil-Bausteinen. Freigestellt stand er VOR dem Text, der
             # Text lag hinter seinem Gesicht (Testvideos 95 und 91, jeweils bei 0,0 s).

@@ -25,7 +25,9 @@ import re
 
 import kit
 
-BAUSTEINE = ("typo_minimal", "grosse_zahl", "daten_chart", "vox_dokument", "ui_karte", "bildschirm_beweis")
+# ausschnitt (26.09.): Collage-Sticker hinter ihm, gebaut in main._ausschnitt_bauen (ausschnitt.py)
+BAUSTEINE = ("typo_minimal", "grosse_zahl", "daten_chart", "vox_dokument", "ui_karte", "bildschirm_beweis",
+             "ausschnitt")
 VOLLBILD = ("typo_minimal", "grosse_zahl", "daten_chart", "vox_dokument")
 
 

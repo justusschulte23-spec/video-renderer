@@ -9032,6 +9032,9 @@ def _schnitte_vorgeben(layers: list, words: list, frames: int, fugen: list = Non
     ruhig = set(punch.get("ruhig") or [])
     for t_ in fugen or []:
         f = int(round(float(t_) * FPS))
+        # Skript 84: Fugen bei 37,01 und 37,02 s gaben zwei Zoomspruenge in Folge.
+        if any(abs(f - g) < int(0.3 * FPS) for g in ruhig):
+            continue
         if 0 < f < frames:
             vorhanden.add(f)
             ruhig.add(f)

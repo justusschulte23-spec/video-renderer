@@ -13289,6 +13289,8 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
         log.info("[AUSSCHNITT] %d kein Motiv: %s", i, json.dumps(meta, ensure_ascii=False)[:300])
         return None
     st = aus.sticker(motiv, papier, seed=i + 7)
+    obj = aus.zuschneiden(motiv)
+    anteil = (min(1.0, obj.width / float(st.width)), min(1.0, obj.height / float(st.height)))
 
     face = s.get("face") or {}
     if not face.get("right"):
@@ -13315,7 +13317,7 @@ def _ausschnitt_bauen(s: dict, a: dict, i: int, was: str) -> Optional[dict]:
     except Exception as exc:
         _MATTE_GRUND["text"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
     if vorne:
-        platz = aus.hinter_platz(W, H, g, st.width, st.height)
+        platz = aus.hinter_platz(W, H, g, st.width, st.height, anteil=anteil)
     else:
         meta["freisteller_grund"] = _MATTE_GRUND.get("text") or "unbekannt"
         _warnung(s, "ausschnitt_ohne_freisteller",

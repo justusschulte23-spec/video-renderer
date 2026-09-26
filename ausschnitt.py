@@ -229,22 +229,31 @@ def foto_freigestellt(gegenstand, suche, versuche=2, laden=None):
     return {"grund": "; ".join(gruende)}
 
 
-def hinter_platz(bild_w, bild_h, gesicht, st_w, st_h, unten_max=0.62):
+def hinter_platz(bild_w, bild_h, gesicht, st_w, st_h, unten_max=0.72, anteil=(1.0, 1.0)):
     """26.09., Justus: groesser als das Gesicht, ueber die Schulter, HINTER ihm. Er steht
     freigestellt davor (eigene Ebene), deshalb darf der Sticker in seine Silhouette ragen.
     gesicht = (x, y, w, h) in Pixeln. Hoehe etwa 1,7 Gesichtshoehen, Breite 40 bis 60 %
     des Bildes. Die innere Kante sitzt knapp im Kopf, die Mitte auf Kinnhoehe: oben steht
-    er neben dem Kopf, unten verschwindet er hinter der Schulter. Unterkante ueber den
-    Untertiteln. Mindestens die Haelfte der Breite liegt ausserhalb des Gesichts."""
+    er neben dem Kopf, unten verschwindet er hinter der Schulter. Die Unterkante darf bis
+    0,72 reichen: die Untertitel liegen obenauf (z 29), der Rest steckt hinter ihm.
+    Mindestens die Haelfte der Breite liegt ausserhalb des Gesichts."""
+    # 26.09., Test Video 95: gerechnet am Sticker MIT Rand und Schatten stand das Handy
+    # nur so gross wie das Gesicht. Gemessen wird jetzt der sichtbare Gegenstand
+    # (anteil = Gegenstand / Stickerflaeche je Achse): Hoehe 2,2 Gesichtsboxen (die Box
+    # reicht nur von den Brauen zum Kinn), Breite 32 bis 55 % des Bildes.
     x, y, w, h = gesicht
+    aw, ah = anteil
     asp = st_w / float(st_h)
-    sh = 1.7 * h
+    oh = 2.2 * h
+    ow = oh * (st_w * aw) / (st_h * ah)
+    if ow > 0.55 * bild_w:
+        oh *= 0.55 * bild_w / ow
+        ow = 0.55 * bild_w
+    if ow < 0.32 * bild_w:
+        oh *= 0.32 * bild_w / ow
+        ow = 0.32 * bild_w
+    sh = oh / ah
     sw = sh * asp
-    if sw > 0.60 * bild_w:
-        sw = 0.60 * bild_w
-    if sw < 0.40 * bild_w:
-        sw = 0.40 * bild_w
-    sh = sw / asp
     oben_min, unten = int(bild_h * 0.05), int(bild_h * unten_max)
     if sh > unten - oben_min:
         sh = unten - oben_min

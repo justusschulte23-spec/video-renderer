@@ -13130,9 +13130,38 @@ def _skriptsatz(s: dict, a: dict) -> Optional[str]:
     return bester if wert >= 0.8 else None
 
 
+def _gesprochener_satzteil(s: dict, a: dict) -> Optional[str]:
+    """26.09., Skript 86: 7 von 10 Abschnitten blieben leer, weil kein GANZER Skriptsatz zu
+    80 % im Abschnitt lag. Fuer vox_zeile reicht ein Satzteil (3 bis 7 Woerter, woertlich
+    aus dem Skript), der vollstaendig im Abschnitt gesprochen wird."""
+    saetze = [str(x).strip() for x in ((s.get("briefing") or {}).get("saetze") or []) if str(x).strip()]
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    gesagt = {_norm_wort(w.get("word", "")) for w in (s.get("words") or [])
+              if von - 0.3 <= float(w.get("start") or 0) <= bis + 0.3}
+    gesagt.discard("")
+    bester = None
+    for satz in saetze:
+        teile = [x.strip() for x in re.split(r"(?<=[,;:.!?])\s+|\s+[-–]\s+", satz) if x.strip()]
+        for teil in teile + ([satz] if len(satz.split()) <= 7 else []):
+            ws = [_norm_wort(x) for x in teil.split() if _norm_wort(x)]
+            if not 3 <= len(ws) <= 9:
+                continue
+            if all(x in gesagt for x in ws):
+                ph = stil.phrase(teil)
+                if bester is None or len(ph.split()) > len(bester.split()):
+                    bester = ph
+    return bester
+
+
 def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
     """Inhalt aus dem Skriptsatz, der in diesem Abschnitt gesprochen wird. Zahlen nur,
     wenn sie im Satz stehen UND gesprochen werden (die Pruefung macht _stil_pruefen)."""
+    if baustein == "vox_zeile":
+        teil = _gesprochener_satzteil(s, a) or (lambda x: stil.phrase(x) if x else None)(_skriptsatz(s, a))
+        if not teil:
+            return None
+        teil = re.sub(r"[,;:]$", "", teil).strip()
+        return {"satz": teil, "markierung": stil.schluesselwort(teil), "seed": len(teil)}
     satz = _skriptsatz(s, a)
     if not satz:
         return None
@@ -15168,6 +15197,14 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         # Die oberste: die sieht man.
         l = sorted(treffer, key=lambda x: -x["z"])[0]
         art = m.get("art")
+        # 26.09., Skript 86: die Abnahme vergleicht mit den PLANtexten; Stil-Bausteine zeigen
+        # aber woertlich, was er GESAGT hat (im Code geprueft). Sie hielt alle drei
+        # Vox-Streifen fuer "falschen Text", die Reparatur loeschte sie, das Video war leer.
+        # Solche Ebenen gehen nur, wenn sie wirklich leer sind.
+        if str(l.get("herkunft", "")).startswith(("plan:stil", "nachbesserung:")) and art != "leer":
+            getan.append({"bei": bei, "art": art, "ebene": l["id"],
+                          "tat": "Text ist gesprochen und im Code geprueft - bleibt, nur gemeldet"})
+            continue
         # 26.09., Justus: "abgelehnt heisst neuer Versuch, der das Gerenderte anhand der
         # Maengel verbessert". Falscher Text war bisher nur gemeldet und blieb stehen;
         # jetzt geht die Ebene, dahinter steht er selbst.

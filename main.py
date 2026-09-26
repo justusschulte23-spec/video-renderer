@@ -13291,8 +13291,11 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
             face = s.get("face") or {}
             oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))
             hz = 0.19
-            if oben - 0.015 - hz >= 0.035:
-                tf = {"x": 0.05, "y": round(oben - 0.015 - hz, 3), "w": 0.9, "h": hz}
+            # Die Gesichtsbox beginnt an der Stirn; darueber liegen noch die Haare (Skript 86).
+            if oben - 0.07 - hz >= 0.03:
+                tf = {"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz}
+            elif oben - 0.07 - 0.15 >= 0.03:
+                tf = {"x": 0.05, "y": 0.03, "w": 0.9, "h": round(oben - 0.07 - 0.03, 3)}
             elif unten + 0.02 + hz <= 0.63:
                 tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
             else:
@@ -15202,7 +15205,7 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         # Vox-Streifen fuer "falschen Text", die Reparatur loeschte sie, das Video war leer.
         # Solche Ebenen gehen nur, wenn sie wirklich leer sind.
         if str(l.get("herkunft", "")).startswith(("plan:stil", "nachbesserung:")) and art != "leer":
-            getan.append({"bei": bei, "art": art, "ebene": l["id"],
+            getan.append({"bei": bei, "art": art, "gemeldet": l["id"],
                           "tat": "Text ist gesprochen und im Code geprueft - bleibt, nur gemeldet"})
             continue
         # 26.09., Justus: "abgelehnt heisst neuer Versuch, der das Gerenderte anhand der

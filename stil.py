@@ -276,7 +276,9 @@ def vox_zeile(satz, markierung, k, breit, hoch, sekunden=3.0, seed=0):
     rnd = _r.Random(seed)
     winkel = rnd.choice([-1, 1]) * rnd.uniform(1.2, 2.6)
     worte = str(satz).split()
-    fs = _px_fuer(satz, int(breit * .86), int(breit * .105), min_px=44, zeilen=2 if len(worte) > 4 else 1)
+    # Skript 86: einzeilig gesetzt fiel "Ein Berater postet wochenlang." auf die Mindestschrift.
+    n = len(str(satz))
+    fs = _px_fuer(satz, int(breit * .86), int(breit * .11), min_px=44, zeilen=1 if n <= 14 else 2 if n <= 34 else 3)
     spans = []
     for j, w in enumerate(worte):
         roh = w.strip(" ,.;:!?\"'„“()")

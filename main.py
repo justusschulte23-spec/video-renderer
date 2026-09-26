@@ -13086,11 +13086,21 @@ def _stil_weg(s: dict, a: dict) -> bool:
     return bool(s.get("stil_liste")) and _komposition(a) not in STIL_WEG_AUS
 
 
-# 26.09., Justus: "wir wollen schoene Einblendungen, die entstehen und da sind". Skript 84
-# hatte 23 geplante Einblendungen und 16 leere Abschnitte; die Grenzen 6 und 7 s waren der
-# groesste Teil davon. vox_zeile deckt ihn nicht zu, deshalb darf es dichter werden.
-STIL_MAX_JE_VIDEO = 12
-STIL_ABSTAND_S = 3.5
+# Vorgabe fuer alle Kunden. 26.09.: je Kunde ueberschreibbar in clients.stil
+# ("max_je_video", "abstand_s"). Justus: "schoene Einblendungen, die entstehen und da sind";
+# Skript 84 hatte 16 von 23 Abschnitten leer, 6 und 7 s waren der groesste Teil davon.
+# Tim behaelt seinen Stil (Justus, 26.09.: "Vox nur fuer mich").
+STIL_MAX_JE_VIDEO = 6
+STIL_ABSTAND_S = 7.0
+
+
+def _stil_grenzen(s: dict) -> tuple:
+    cfg = _client_feld(s.get("client_id"), "stil") or {}
+    try:
+        return (int(cfg.get("max_je_video") or STIL_MAX_JE_VIDEO),
+                float(cfg.get("abstand_s") or STIL_ABSTAND_S))
+    except (TypeError, ValueError):
+        return STIL_MAX_JE_VIDEO, STIL_ABSTAND_S
 
 
 def _norm_wort(w: str) -> str:
@@ -13202,9 +13212,10 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
     b = a.get("braucht") or {}
     von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
     gezeigt = s.setdefault("stil_gezeigt", [])
-    if len(gezeigt) >= STIL_MAX_JE_VIDEO:
+    max_n, abstand = _stil_grenzen(s)
+    if len(gezeigt) >= max_n:
         return None
-    if gezeigt and von - gezeigt[-1]["bis"] < STIL_ABSTAND_S:
+    if gezeigt and von - gezeigt[-1]["bis"] < abstand:
         return None
     dauer = max(1.2, min(HTML_TOOL_MAX_S, bis - von))
     zaehler = s.setdefault("stil_zaehler", {})
@@ -13492,7 +13503,8 @@ async def _beschaffen_bild(s: dict, a: dict, i: int) -> dict:
             and not [w for w in ABSTRAKT_NIE_STOCK if re.search(r"\b" + w, was.lower())]:
         gezeigt = s.setdefault("stil_gezeigt", [])
         von_ = float(a.get("von") or 0)
-        if len(gezeigt) < STIL_MAX_JE_VIDEO and not (gezeigt and von_ - gezeigt[-1]["bis"] < STIL_ABSTAND_S):
+        max_n, abstand = _stil_grenzen(s)
+        if len(gezeigt) < max_n and not (gezeigt and von_ - gezeigt[-1]["bis"] < abstand):
             try:
                 au = await asyncio.to_thread(_ausschnitt_bauen, s, a, i, was)
             except JobAbbruch:

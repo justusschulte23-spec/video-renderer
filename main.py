@@ -11555,9 +11555,35 @@ BEISPIEL_LAUF_B = json.dumps({"momente": [
     {"von": 35.6, "bis": 39.5, "zustand": "motiv", "braucht": {"art_element": "titel", "text": ["Kommentier PROBLEM"], "motion": "typewriter", "zeigt": "Karte oben rechts", "bewegung": "tippt sich ein"}, "grund": "Ausfahrt bis zum letzten Frame"}
 ]}, ensure_ascii=False)
 
-def _ad_sys() -> str:
+AD_OHNE_GENERIERUNG = """
+
+WICHTIG FUER DIESES VIDEO, VORRANG VOR ALLEM OBEN: ES GIBT KEINE GENERIERTEN BILDER.
+Die Bildgenerierung ist aus. "szene" und "er_szene" sind GESPERRT, ebenso jede Bildidee
+als Fantasie oder Metapher (Tresor, Sanduhr, Glasbruecke, Foerderband, Labyrinth). Die
+Beispiele oben mit Szenen gelten hier nicht.
+Einblendungen sind SCHLICHTE, SMARTE HTML-OVERLAYS aus SEINEN GESPROCHENEN WORTEN:
+- motiv / uebernahme / hell_dunkel mit braucht.art_element:
+    zitat    der Kernsatz, woertlich wie er ihn an der Stelle sagt, hoechstens 7 Woerter
+    titel    ein Schlagwort-Satz aus seinen Worten
+    stat     EINE Zahl, die er an der Stelle ausspricht
+    befund / vergleich / ablauf   kurze Zeilen, woertlich aus dem Gesagten
+  braucht.text steht IMMER woertlich im Transkript an dieser Stelle.
+- Nennt er einen KONKRETEN GEGENSTAND (Handy, Kalender, Vertrag, Laptop, Haus):
+  zustand "metapher" mit braucht.zeigt = genau dieser Gegenstand. Er wird als echtes,
+  freigestelltes Foto hinter ihm gebaut. Keine Szene drumherum.
+Das Tempo bleibt: jede Aussage, die traegt, bekommt ein Overlay."""
+
+
+def _generierung_an(client_id: str) -> bool:
+    return (_client_feld(client_id, "einblendung") or {}).get("omni") is True
+
+
+def _ad_sys(client_id: str = "") -> str:
     """Der Editor-Prompt mit dem aktuellen Vokabular: Listen werden beim Aufruf
-    eingesetzt, damit eine Freigabe in MINIMAL_VERBOTEN sofort im Prompt steht."""
+    eingesetzt, damit eine Freigabe in MINIMAL_VERBOTEN sofort im Prompt steht.
+    26.09.: ohne Generierung (clients.einblendung.omni) plante er weiter Fantasie-Szenen,
+    die niemand bauen kann (Skript 84: 16 von 23 Abschnitten leer). Dann gilt der Zusatz."""
+    zusatz = "" if _generierung_an(client_id) else AD_OHNE_GENERIERUNG
     return (AD_SYS
             .replace("{{KOMPOSITIONEN_FREI}}", ", ".join(k for k in KOMPOSITIONEN if k not in MINIMAL_VERBOTEN))
             .replace("{{ZOOM_ARTEN}}", " | ".join(ZOOM_ARTEN))
@@ -11566,7 +11592,7 @@ def _ad_sys() -> str:
             .replace("{{EFFEKTE}}", " | ".join(EFFEKTE_ERLAUBT))
             .replace("{{RHYTHMUS_ZIEL}}", "%.1f" % RHYTHMUS_ZIEL_S)
             .replace("{{RHYTHMUS_MAX}}", "%.1f" % RHYTHMUS_MAX_S)
-            .replace("{{BEISPIEL_LAUF_B}}", BEISPIEL_LAUF_B))
+            .replace("{{BEISPIEL_LAUF_B}}", BEISPIEL_LAUF_B)) + zusatz
 
 
 def _ad_kontext(s: dict) -> str:
@@ -12560,7 +12586,7 @@ def tool_plan(req: PlanRequest):
         s["belege"] = _belege_sammeln(s)
     uri = _gemini_upload(s["facecam_path"])
     kontext = _ad_kontext(s)
-    plan, modell, tok = _gemini_plan_call(uri, _ad_sys() + "\n\n" + kontext, modelle)
+    plan, modell, tok = _gemini_plan_call(uri, _ad_sys(s.get("client_id")) + "\n\n" + kontext, modelle)
     # Das Modell liefert den Plan gelegentlich als nacktes Array statt als
     # {"abschnitte": [...]} — am 10.08. starb daran der ganze Job.
     if isinstance(plan, list):
@@ -12575,7 +12601,7 @@ def tool_plan(req: PlanRequest):
         # Plan schreibt, schreibt auch nach fuenf keinen, und jede Runde kostet
         # den vollen Video-Kontext.
         log.info("[AD] Plan verletzt %d Regeln, geht einmal zurueck", len(fehler))
-        nach = (_ad_sys() + "\n\n" + kontext
+        nach = (_ad_sys(s.get("client_id")) + "\n\n" + kontext
                 + "\n\nDEIN ERSTER PLAN VERLETZT DIESE REGELN:\n- "
                 + "\n- ".join(fehler)
                 + "\n\nHier ist er:\n" + json.dumps(plan, ensure_ascii=False)[:6000]
@@ -13260,6 +13286,11 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
                     "layer_source": {"kind": "video", "url": m["url"]}}
     reihe = []
     wunsch = str(b.get("art_element") or b.get("stil") or "").strip()
+    # 26.09.: der Plan spricht in art_element (zitat, stat, ...), die Bausteine heissen anders.
+    wunsch = {"zitat": "vox_zeile", "titel": "vox_zeile", "befund": "vox_zeile",
+              "stat": "grosse_zahl", "vergleich": "vox_dokument", "ablauf": "vox_dokument"}.get(wunsch, wunsch)
+    if wunsch not in liste and wunsch in ("vox_zeile", "vox_dokument"):
+        wunsch = next((x for x in ("vox_zeile", "typo_minimal", "ui_karte", "vox_dokument") if x in liste), wunsch)
     if wunsch in liste:
         reihe.append(wunsch)
     for kand in ("daten_chart", "grosse_zahl"):

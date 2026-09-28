@@ -2110,6 +2110,31 @@ def _paper_edit(words: list, duration: float, pad: float = 0.10, briefing: Optio
         prot["verworfen"] = prot["verworfen"] or "nichts Entbehrliches gefunden"
         return [(0.0, duration)], prot
 
+    # 28.09., Justus: "es darf nicht sein, dass etwas abgelehnt wird und nichts passiert".
+    # Wollte der Paper Edit mehr als den Deckel streichen, strich er NICHTS und das Video
+    # blieb auf 'pruefen' liegen. Jetzt werden die Schnitte bis zum Deckel umgesetzt, die
+    # kuerzesten zuerst (Anlauf, Ausklingen, Fuellsaetze); die langen Inhaltsstuecke, bei
+    # denen sich das Modell am ehesten irrt, bleiben stehen und stehen im Protokoll.
+    if sum(b - a for a, b in entfernt) > duration * PAPER_DECKEL:
+        budget = duration * PAPER_DECKEL
+        paare = sorted(zip(entfernt, prot["schnitte"]), key=lambda x: x[0][1] - x[0][0])
+        nimm, zurueck = [], []
+        for (a, b), sch in paare:
+            if b - a <= budget:
+                nimm.append(((a, b), sch))
+                budget -= (b - a)
+            else:
+                zurueck.append(sch)
+        log.warning("[PAPER] Deckel: %d von %d Schnitten umgesetzt, %d zu lang gelassen",
+                    len(nimm), len(paare), len(zurueck))
+        prot["gelassen"] = zurueck
+        if not nimm:
+            prot["verworfen"] = "jeder Schnitt allein ueber dem Deckel"
+            prot["schnitte"] = []
+            return [(0.0, duration)], prot
+        entfernt = [x[0] for x in nimm]
+        prot["schnitte"] = sorted((x[1] for x in nimm), key=lambda s_: s_["von"])
+
     entfernt.sort()
     keeps, cursor = [], 0.0
     for a, b in entfernt:

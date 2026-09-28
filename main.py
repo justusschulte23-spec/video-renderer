@@ -17548,7 +17548,19 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
                  cfg["client_id"], len(sil), len(schnitte), cfg["min_stille_ms"],
                  cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
                  ", ".join("%.2f-%.2f" % (x["von"], x["bis"]) for x in schnitte[:20]))
-        if len(keeps2) > 1 and kept > dur2 * 0.5:
+        # 28.09. (Skript 99: 262 s Roh, 170 s Stille, gepostet mit 243 s): hier stand
+        # `kept > dur2 * 0.5`. Wer lange Pausen macht, hat mehr als die Haelfte Stille, und
+        # dann fiel der GANZE Stille-Schnitt still weg. Die Sicherung ist jetzt die, um die es
+        # geht: kein gesprochenes Wort darf in einem Schnitt liegen.
+        def _drin(w):
+            m = (float(w["start"]) + float(w["end"])) / 2.0
+            return any(s_ - 0.05 <= m <= e + 0.05 for s_, e in keeps2)
+        wort_weg = [w for w in w2 if not _drin(w)]
+        if wort_weg and len(wort_weg) > max(2, len(w2) // 50):
+            log.warning("[TRIM] phase2 NICHT geschnitten: %d von %d Woertern laegen im Schnitt (%s)",
+                        len(wort_weg), len(w2), " ".join(str(w.get("word", "")) for w in wort_weg[:8]))
+        elif len(keeps2) > 1:
+            log.info("[TRIM] phase2: %.1fs von %.1fs bleiben (%d Woerter alle drin)", kept, dur2, len(w2))
             p2 = job_dir / "phase2.mp4"
             if _trim_dead_air(current, keeps2, p2):
                 current = p2

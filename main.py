@@ -1739,6 +1739,85 @@ def _schnitt_cfg(client_id: str) -> dict:
     return out
 
 
+def _lautheit_fenster(audio_path: Path, fenster_s: float = 0.05) -> dict:
+    """Pegel in dB je 50-ms-Fenster aus der 16-kHz-Monospur. {"t": [...], "db": [...]}."""
+    try:
+        import numpy as np
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(audio_path), "-f", "s16le", "-ac", "1",
+                              "-ar", "16000", "-"], capture_output=True, check=True).stdout
+        x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        n = int(16000 * fenster_s)
+        if n <= 0 or len(x) < n:
+            return {"t": [], "db": []}
+        m = len(x) // n
+        rms = np.sqrt(np.mean(x[: m * n].reshape(m, n) ** 2, axis=1) + 1e-12)
+        db = 20.0 * np.log10(rms + 1e-9)
+        return {"t": [round(i * fenster_s, 3) for i in range(m)], "db": [float(v) for v in db], "fenster": fenster_s}
+    except Exception as exc:
+        log.warning("[TRIM] Lautheit nicht messbar: %s", str(exc)[:120])
+        return {"t": [], "db": []}
+
+
+SPRACHE_ABSTAND_DB = 15.0   # Luecke lauter als Sprechpegel minus das: da spricht er noch
+
+
+def _wort_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
+                        betonung: Optional[list] = None) -> tuple:
+    """29.09.: Geschnitten wird jede Wortluecke ab min_stille, unabhaengig vom Tonsignal.
+    Der Ton entscheidet nur EINE Sache: liegt der Median-Pegel der Luecke nahe an seinem
+    Sprechpegel, hat Whisper dort ein Wort verschluckt, und die Luecke bleibt.
+    Rueckgabe: (keeps, schnitte, behalten)."""
+    import statistics
+    min_s = cfg["min_stille_ms"] / 1000.0
+    vor, nach = cfg["puffer_vor_ms"] / 1000.0, cfg["puffer_nach_ms"] / 1000.0
+    if not words:
+        return [(0.0, duration)], [], []
+    ts, dbs = laut.get("t") or [], laut.get("db") or []
+    fenster = float(laut.get("fenster") or 0.05)
+
+    def pegel(a, b):
+        if not ts:
+            return None
+        i0, i1 = int(a / fenster), int(b / fenster)
+        werte = dbs[max(0, i0):max(0, min(len(dbs), i1))]
+        return statistics.median(werte) if werte else None
+
+    sprech = [v for w in words for v in [pegel(float(w.get("start") or 0), float(w.get("end") or 0))] if v is not None]
+    sprech_db = statistics.median(sprech) if sprech else None
+    laut["sprech_db"] = sprech_db if sprech_db is not None else 0.0
+    luecken = [(0.0, float(words[0]["start"]), 0)]
+    for i in range(len(words) - 1):
+        luecken.append((float(words[i]["end"]), float(words[i + 1]["start"]), i + 1))
+    luecken.append((float(words[-1]["end"]), duration, None))
+    removes, schnitte, behalten = [], [], []
+    for g0, g1, naechstes in luecken:
+        if g1 - g0 < min_s:
+            continue
+        v = 0.0 if g0 <= 0.0 else (max(vor, STILLE_TAIL_S) if naechstes is None else vor)
+        n = 0.0 if naechstes is None else nach
+        if naechstes is not None and betonung and naechstes < len(betonung) and betonung[naechstes]:
+            n = max(n, PAUSE_HALTEN_S)
+        a, b = g0 + v, g1 - n
+        if b - a <= 0.05:
+            continue
+        p = pegel(a, b)
+        if sprech_db is not None and p is not None and p > sprech_db - SPRACHE_ABSTAND_DB:
+            behalten.append({"von": round(a, 3), "bis": round(b, 3), "db": round(p, 1)})
+            continue
+        removes.append((a, b))
+        schnitte.append({"von": round(a, 3), "bis": round(b, 3), "db": round(p, 1) if p is not None else None,
+                         "luecke": [round(g0, 3), round(g1, 3)]})
+    removes.sort()
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    return [(x, y) for x, y in keeps if y - x > 0.02], schnitte, behalten
+
+
 def _stille_keep_segments(words: list, silences: list, duration: float, cfg: dict,
                           betonung: Optional[list] = None) -> tuple:
     """Die Stellen, die BLEIBEN. Geschnitten wird nur die Ueberlappung aus echter Stille
@@ -13208,7 +13287,12 @@ def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
     """Inhalt aus dem Skriptsatz, der in diesem Abschnitt gesprochen wird. Zahlen nur,
     wenn sie im Satz stehen UND gesprochen werden (die Pruefung macht _stil_pruefen)."""
     if baustein == "vox_zeile":
-        teil = _gesprochener_satzteil(s, a) or (lambda x: stil.phrase(x) if x else None)(_skriptsatz(s, a))
+        # 29.09.: Skript 100 hatte 304 gesprochene Woerter zu 150 im Skript, 3 von 20
+        # Abschnitten bekamen etwas. Was ER GESAGT hat, ist die Wahrheit: erst der Text,
+        # den der Plan aus dem Transkript nennt, dann der Skriptsatz, dann das gesprochene
+        # Fenster selbst.
+        teil = (_plan_text_gesprochen(s, a) or _gesprochener_satzteil(s, a)
+                or (lambda x: stil.phrase(x) if x else None)(_skriptsatz(s, a)) or _gesprochenes_fenster(s, a))
         if not teil:
             return None
         teil = re.sub(r"[,;:]$", "", teil).strip()
@@ -13260,6 +13344,35 @@ def _stil_inhalt(s: dict, a: dict, baustein: str) -> Optional[dict]:
     return None
 
 
+def _plan_text_gesprochen(s: dict, a: dict) -> Optional[str]:
+    """Der Text, den der Plan fuer diesen Abschnitt nennt (braucht.text), wenn jedes Wort
+    davon im Abschnitt gesprochen wurde. Drei bis neun Woerter."""
+    b = a.get("braucht") or {}
+    kand = b.get("text") if isinstance(b.get("text"), list) else [b.get("text")]
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    gesagt = {_norm_wort(w.get("word", "")) for w in (s.get("words") or [])
+              if von - 0.5 <= float(w.get("start") or 0) <= bis + 0.5}
+    gesagt.discard("")
+    for x in kand:
+        x = re.sub(r"[,;:]$", "", str(x or "").strip())
+        ws = [_norm_wort(y) for y in x.split() if _norm_wort(y)]
+        if 3 <= len(ws) <= 9 and all(y in gesagt for y in ws):
+            return x
+    return None
+
+
+def _gesprochenes_fenster(s: dict, a: dict) -> Optional[str]:
+    """Drei bis sieben gesprochene Woerter am Stueck aus dem Abschnitt, das Fenster mit den
+    meisten Nomen (stil.phrase). Ohne Satzzeichen, dafuer garantiert gesagt."""
+    von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
+    worte = [str(w.get("word", "")).strip() for w in (s.get("words") or [])
+             if von <= float(w.get("start") or 0) <= bis]
+    worte = [w for w in worte if w]
+    if len(worte) < 3:
+        return None
+    return stil.phrase(" ".join(worte[:14]), max_worte=7)
+
+
 def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
     """Jedes angezeigte Wort muss im Skript stehen, jede angezeigte Zahl muss im Abschnitt
     gesprochen werden. Rueckgabe: was nicht belegt ist."""
@@ -13273,7 +13386,8 @@ def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
     fremd = []
     for x in anzeigen:
         if x:
-            fremd += stil.nur_gesprochen(x, skript.split())
+            # 29.09.: gesprochen zaehlt wie geschrieben. Er redet frei, das Skript ist der Plan.
+            fremd += stil.nur_gesprochen(x, skript.split() + gesprochen)
     gesagte_zahlen = {z[1] for z in stil.zahlen_aus(gesprochen)}
     for x in anzeigen:
         for z in stil.zahlen_aus(str(x or "").split()):
@@ -13376,6 +13490,67 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
                 "layer_source": {"kind": "video", "url": erg["url"],
                                  "transparent": baustein in ("ui_karte", "vox_zeile")}}
     return None
+
+
+async def _motion_regie(s: dict) -> dict:
+    """Momente planen, Overlays bauen, als Ebenen anhaengen. Kosten gemessen je Aufruf."""
+    import motion_regie as mr
+    cfg = (_client_feld(s.get("client_id"), "stil") or {}).get("motion") or {}
+    if not isinstance(cfg, dict) or cfg.get("an") is False or not cfg:
+        return {"an": False}
+    words = s.get("words") or []
+    frames = int(s["frames"])
+    dauer = frames / FPS
+    belegt = []
+    for l in s["layers"]:
+        hk = str(l.get("herkunft", ""))
+        if hk.startswith("plan:") and not hk.startswith(("plan:zoom", "plan:effekt", "plan:hintergrund")):
+            belegt.append((float(l.get("from", 0)) / FPS - 0.5, float(l.get("to", 0)) / FPS + 0.5))
+    max_n = int(cfg.get("max") or 6)
+    abstand = float(cfg.get("abstand_s") or 3.0)
+    saetze = [str(x) for x in ((s.get("briefing") or {}).get("saetze") or [])]
+    plan = await asyncio.to_thread(mr.planen, words, dauer, max_n, abstand, belegt, cfg.get("plan_modell"), saetze)
+    kosten = float(plan.get("kosten") or 0)
+    log.info("[MOTION] %s: %d Momente geplant (%d roh), %.4f USD", s["id"], len(plan["momente"]),
+             plan.get("roh", 0), kosten)
+    k = stil._k(s.get("client_id"), _client_brand_colors(s.get("client_id")))
+    face = s.get("face") or {}
+    oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))
+    gebaut, protokoll = 0, []
+    for i, m in enumerate(plan["momente"]):
+        _abbruch_pruefen()
+        hz = 0.26 if m["art"] in ("liste", "vergleich", "pfeil") else 0.19
+        if oben - 0.07 - hz >= 0.03:
+            tf = {"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz}
+        elif unten + 0.02 + hz <= 0.63:
+            tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
+        else:
+            protokoll.append({**m, "ergebnis": "kein Platz neben dem Gesicht"})
+            continue
+        w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
+        erg = await asyncio.to_thread(mr.bauen, m, k, w_px, h_px, m["dauer"], cfg.get("modell"))
+        kosten += float(erg.get("kosten") or 0)
+        vid = await asyncio.to_thread(_kit_direkt, erg["markup"], w_px, h_px, m["dauer"])
+        if not vid.get("url"):
+            protokoll.append({**m, "ergebnis": "Render: " + str(vid.get("hinweis"))[:120], "quelle": erg.get("quelle")})
+            continue
+        von_f = int(round(m["von"] * FPS))
+        bis_f = min(frames, int(round(m["bis"] * FPS)))
+        s["layers"].append(_layer_defaults({
+            "id": f"motion_{i}", "z": Z_ELEMENT,
+            "source": {"kind": "video", "url": vid["url"], "transparent": True, "zeit": "ebene"},
+            "from": von_f, "to": bis_f, "transform": tf,
+            "herkunft": "plan:motion", "konzept": (m["art"] + ": " + m["text"])[:80],
+        }, frames))
+        gebaut += 1
+        protokoll.append({**m, "ergebnis": "gebaut", "quelle": erg.get("quelle"), "hinweis": erg.get("hinweis"),
+                          "kosten": erg.get("kosten"), "url": vid["url"]})
+        log.info("[MOTION] %d %s %.1f-%.1f s (%s): %s", i, m["art"], m["von"], m["bis"], erg.get("quelle"),
+                 (m["text"] + " | " + " / ".join(m.get("teile") or []))[:120])
+    s["motion_kosten"] = round(kosten, 4)
+    log.info("[MOTION] %s: %d/%d gebaut, %.4f USD", s["id"], gebaut, len(plan["momente"]), kosten)
+    return {"an": True, "geplant": len(plan["momente"]), "gebaut": gebaut, "kosten_usd": round(kosten, 4),
+            "momente": protokoll}
 
 
 AUSSCHNITT_MAX_S = 4.0     # laenger steht kein Sticker; jede Sekunde kostet Freisteller-Rechenzeit
@@ -14895,6 +15070,15 @@ async def _build_impl(req: BuildRequest):
         return aus
 
     s["bau_protokoll"] = protokoll
+    # 29.09.: Motion-Overlays im Papier-Stil, aus dem Gesprochenen geplant (Sonnet),
+    # von Opus gebaut. Nur fuer Kunden mit clients.stil.motion.
+    try:
+        aus["motion"] = await _motion_regie(s)
+    except JobAbbruch:
+        raise
+    except Exception as exc:
+        log.warning("[MOTION] %s: %s", s["id"], str(exc)[:200])
+        aus["motion"] = {"fehler": str(exc)[:200]}
     aus["render"] = tool_session_render(SessionRef(session_id=s["id"]))
 
     # ── STUFE 3: ABNAHME, genau eine Reparaturrunde ──────────────────────────
@@ -15260,7 +15444,7 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         # aber woertlich, was er GESAGT hat (im Code geprueft). Sie hielt alle drei
         # Vox-Streifen fuer "falschen Text", die Reparatur loeschte sie, das Video war leer.
         # Solche Ebenen gehen nur, wenn sie wirklich leer sind.
-        if str(l.get("herkunft", "")).startswith(("plan:stil", "nachbesserung:")) and art != "leer":
+        if str(l.get("herkunft", "")).startswith(("plan:stil", "plan:motion", "nachbesserung:")) and art != "leer":
             getan.append({"bei": bei, "art": art, "gemeldet": l["id"],
                           "tat": "Text ist gesprochen und im Code geprueft - bleibt, nur gemeldet"})
             continue
@@ -17564,15 +17748,22 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
         a2 = job_dir / "audio2.mp3"
         subprocess.run(["ffmpeg", "-y", "-i", str(current), "-vn", "-ar", "16000",
                         "-ac", "1", str(a2)], check=True, capture_output=True)
-        sil = _silence_intervals(a2, noise_db=STILLE_NOISE_DB,
-                                 min_silence=cfg["min_stille_ms"] / 1000.0)
+        # 29.09., Justus: "nur wenn ich spreche, darf es existieren". silencedetect hielt
+        # jedes Klacken (Stift, Tafel) fuer Ton und liess die Pause stehen. Jetzt zaehlen die
+        # Woerter: jede Wortluecke ab min_stille wird geschnitten. Einzige Ausnahme: die
+        # Luecke ist im Mittel fast so laut wie seine Sprache (Whisper hat ein Wort
+        # verschluckt), dann bleibt sie. Kurze Transienten fallen im Median heraus.
         dur2 = probe_duration(current)
-        keeps2, schnitte = _stille_keep_segments(w2, sil, dur2, cfg, betonung=_betont(w2))
+        laut = _lautheit_fenster(a2)
+        keeps2, schnitte, behalten = _wort_keep_segments(w2, laut, dur2, cfg, betonung=_betont(w2))
         kept = sum(e - s_ for s_, e in keeps2)
-        log.info("[TRIM] phase2 %s: %d Stillen, %d Schnitte (min %.0f ms, vor %.0f, nach %.0f): %s",
-                 cfg["client_id"], len(sil), len(schnitte), cfg["min_stille_ms"],
-                 cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
+        log.info("[TRIM] phase2 %s: %d Wortluecken geschnitten, %d behalten (Ton wie Sprache), "
+                 "Sprechpegel %.1f dB (min %.0f ms, vor %.0f, nach %.0f): %s",
+                 cfg["client_id"], len(schnitte), len(behalten), laut.get("sprech_db", 0.0),
+                 cfg["min_stille_ms"], cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
                  ", ".join("%.2f-%.2f" % (x["von"], x["bis"]) for x in schnitte[:20]))
+        for x in behalten[:6]:
+            log.info("[TRIM] phase2 behalten %.2f-%.2f: %.1f dB (Sprache %.1f dB)", x["von"], x["bis"], x["db"], laut.get("sprech_db", 0.0))
         # 28.09. (Skript 99: 262 s Roh, 170 s Stille, gepostet mit 243 s): hier stand
         # `kept > dur2 * 0.5`. Wer lange Pausen macht, hat mehr als die Haelfte Stille, und
         # dann fiel der GANZE Stille-Schnitt still weg. Die Sicherung ist jetzt die, um die es

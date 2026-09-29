@@ -1804,6 +1804,39 @@ def _wort_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
         if sprech_db is not None and p is not None and p > sprech_db - SPRACHE_ABSTAND_DB:
             behalten.append({"von": round(a, 3), "bis": round(b, 3), "db": round(p, 1)})
             continue
+        # 29.09., Justus: "Zeichen dringelassen, Wort rausgeschnitten". Ein kurzes Wort, das
+        # Whisper verschluckt hat, hebt den Median der Luecke nicht. Deshalb wird die Luecke
+        # in 150-ms-Stuecken abgetastet: laute Stuecke (Sprechpegel minus 12 dB) bleiben mit
+        # 120 ms Luft stehen, nur die stillen Teile dazwischen gehen raus.
+        stuecke = []
+        if sprech_db is not None and ts:
+            x = a
+            while x < b:
+                y = min(b, x + 0.15)
+                q_ = pegel(x, y)
+                stuecke.append((x, y, q_ is not None and q_ > sprech_db - 12.0))
+                x = y
+        laut_bereiche = []
+        for x, y, ist_laut in stuecke:
+            if ist_laut:
+                if laut_bereiche and x - laut_bereiche[-1][1] < 0.05:
+                    laut_bereiche[-1][1] = y
+                else:
+                    laut_bereiche.append([x, y])
+        if laut_bereiche:
+            teile, cursor_ = [], a
+            for x, y in laut_bereiche:
+                if x - 0.12 - cursor_ >= 0.25:
+                    teile.append((cursor_, x - 0.12))
+                cursor_ = max(cursor_, y + 0.12)
+            if b - cursor_ >= 0.25:
+                teile.append((cursor_, b))
+            behalten.append({"von": round(a, 3), "bis": round(b, 3), "db": round(p, 1) if p is not None else None,
+                             "teilweise": True, "laut": [[round(x, 2), round(y, 2)] for x, y in laut_bereiche]})
+            for x, y in teile:
+                removes.append((x, y))
+                schnitte.append({"von": round(x, 3), "bis": round(y, 3), "db": None, "luecke": [round(g0, 3), round(g1, 3)]})
+            continue
         removes.append((a, b))
         schnitte.append({"von": round(a, 3), "bis": round(b, 3), "db": round(p, 1) if p is not None else None,
                          "luecke": [round(g0, 3), round(g1, 3)]})
@@ -2126,7 +2159,7 @@ def _paper_schluss(words: list, duration: float, briefing: Optional[dict] = None
     return max(0.0, min(kand))
 
 
-def _paper_edit(words: list, duration: float, pad: float = 0.10, briefing: Optional[dict] = None) -> tuple:
+def _paper_edit(words: list, duration: float, pad: float = 0.20, briefing: Optional[dict] = None) -> tuple:
     """Selects auf dem Transkript. Gibt (keeps, protokoll) zurueck.
 
     Faellt IMMER sicher auf 'alles behalten' zurueck — und sagt im Protokoll,
@@ -2332,7 +2365,7 @@ WHISPER_FILLER_PROMPT = "Äh, hallo. Ähm, in diesem Video geht es um Deep-Tech.
 FILLER_WORDS = {"äh", "ähm", "öhm", "öh", "ähem", "uh", "uhm", "hm", "hmm", "äm", "em"}
 
 
-def _filler_keep_segments(words: list, duration: float, pad: float = 0.02) -> list:
+def _filler_keep_segments(words: list, duration: float, pad: float = 0.06) -> list:
     """Keep-segments with pure acoustic filler words ('äh'/'ähm'/...) removed.
     Matching is normalized (lowercase, punctuation/ellipsis stripped)."""
     removes = []
@@ -13601,6 +13634,40 @@ async def _motion_regie(s: dict) -> dict:
                           "kosten": erg.get("kosten"), "url": vid["url"]})
         log.info("[MOTION] %d %s %.1f-%.1f s (%s): %s", i, m["art"], m["von"], m["bis"], erg.get("quelle"),
                  (m["text"] + " | " + " / ".join(m.get("teile") or []))[:120])
+    # 29.09., Skip-Rate 60 bis 86 %: der Planer meldete bei jedem Video "Moment 0 ist 'er' ohne
+    # Element, im Hook passiert ab Sekunde 0 nichts". Jetzt steht der erste gesprochene Satz
+    # ab Bild 6 als Papierstreifen im Bild, wenn dort noch nichts liegt.
+    try:
+        frueh = [l for l in s["layers"] if str(l.get("herkunft", "")).startswith(("plan:motion", "plan:stil", "plan:ausschnitt"))
+                 and int(l.get("from", 0)) < int(2.5 * FPS)]
+        if not frueh and words:
+            hook_w = []
+            for v, n in zip(words, words[1:] + [None]):
+                hook_w.append(str(v.get("word", "")).strip())
+                if n is None or float(n.get("start") or 0) - float(v.get("end") or 0) >= 0.35 or len(hook_w) >= 12:
+                    break
+            hook_txt = " ".join(w for w in hook_w if w)
+            if len(hook_w) >= 3:
+                hz = 0.19
+                tf = ({"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz} if oben - 0.07 - hz >= 0.03
+                      else {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz} if unten + 0.02 + hz <= 0.72 else None)
+                if tf:
+                    w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
+                    hm = {"art": "zitat", "text": hook_txt, "teile": [], "von_idx": 0, "dauer": 3.0}
+                    vid = await asyncio.to_thread(_kit_direkt, mr._streifen(hm, k, w_px, h_px, 3.0), w_px, h_px, 3.0)
+                    if vid.get("url"):
+                        s["layers"].append(_layer_defaults({
+                            "id": "motion_hook", "z": Z_ELEMENT,
+                            "source": {"kind": "video", "url": vid["url"], "transparent": True, "zeit": "ebene"},
+                            "from": 6, "to": min(frames, int(3.2 * FPS)), "transform": tf,
+                            "herkunft": "plan:motion", "konzept": "hook: " + hook_txt[:60],
+                        }, frames))
+                        gebaut += 1
+                        log.info("[MOTION] Hook-Karte ab Bild 6: %s", hook_txt[:80])
+    except JobAbbruch:
+        raise
+    except Exception as exc:
+        log.warning("[MOTION] Hook-Karte: %s", str(exc)[:160])
     s["motion_kosten"] = round(kosten, 4)
     log.info("[MOTION] %s: %d/%d gebaut, %.4f USD", s["id"], gebaut, len(plan["momente"]), kosten)
     return {"an": True, "geplant": len(plan["momente"]), "gebaut": gebaut, "kosten_usd": round(kosten, 4),

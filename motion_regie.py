@@ -107,38 +107,47 @@ def planen(words, dauer, max_n=6, abstand=3.0, belegt=None, modell=None, saetze=
     user += "\n\nNur das JSON."
     txt, kosten, usage = _llm(sysm, user, modell or PLAN_MODELL, max_tokens=1800, temperature=0.2)
     o = _json(txt) or {}
-    aus, letzte_bis = [], -99.0
+    aus, letzte_bis, verworfen = [], -99.0, []
     n = len(words)
     for m in (o.get("momente") or [])[: max_n * 2]:
         try:
             a, b = int(m.get("von_idx")), int(m.get("bis_idx"))
         except Exception:
+            verworfen.append({"m": m, "grund": "keine Indizes"})
             continue
         if not (0 <= a <= b < n):
+            verworfen.append({"m": m, "grund": "Indizes ausserhalb"})
             continue
         art = str(m.get("art") or "").strip().lower()
         if art not in ARTEN:
+            verworfen.append({"m": m, "grund": "art unbekannt"})
             continue
-        fenster = {_norm(words[j].get("word", "")) for j in range(a, b + 1)}
+        # drei Woerter Luft um das Fenster: das Modell zaehlt Indizes nicht immer exakt
+        fenster = {_norm(words[j].get("word", "")) for j in range(max(0, a - 3), min(n, b + 4))}
         fenster.discard("")
         text = str(m.get("text") or "").strip()
         teile = [str(t).strip() for t in (m.get("teile") or []) if str(t).strip()]
         anzeige = " ".join([text] + teile)
         fremd = [w for w in re.findall(r"\S+", anzeige) if _norm(w) and _norm(w) not in fenster]
         if fremd or not anzeige:
+            verworfen.append({"m": m, "grund": "nicht gesprochen: " + ", ".join(fremd[:4])})
             continue
         von = max(0.0, float(words[a].get("start") or 0) - 0.15)
         if von < 2.0:
+            verworfen.append({"m": m, "grund": "im Hook"})
             continue
         ende_wort = float(words[b].get("end") or von)
         dauer_m = max(MOMENT_MIN_S, min(MOMENT_MAX_S, ende_wort + 1.2 - von))
         if von + dauer_m > dauer:
             dauer_m = max(0.0, dauer - von)
             if dauer_m < MOMENT_MIN_S:
+                verworfen.append({"m": m, "grund": "am Ende zu kurz"})
                 continue
         if von - letzte_bis < abstand:
+            verworfen.append({"m": m, "grund": "Abstand zum vorigen"})
             continue
         if any(not (von + dauer_m <= x or von >= y) for x, y in belegt):
+            verworfen.append({"m": m, "grund": "Zeitfenster belegt (%.1f-%.1f)" % (von, von + dauer_m)})
             continue
         aus.append({"von": round(von, 2), "bis": round(von + dauer_m, 2), "dauer": round(dauer_m, 2),
                     "art": art, "text": text, "teile": teile[:4], "grund": str(m.get("grund") or "")[:120],
@@ -146,7 +155,8 @@ def planen(words, dauer, max_n=6, abstand=3.0, belegt=None, modell=None, saetze=
         letzte_bis = von + dauer_m
         if len(aus) >= max_n:
             break
-    return {"momente": aus, "kosten": round(kosten, 4), "usage": usage, "roh": len(o.get("momente") or [])}
+    return {"momente": aus, "kosten": round(kosten, 4), "usage": usage, "roh": len(o.get("momente") or []),
+            "verworfen": verworfen}
 
 
 # ─────────────────────────────────────────────── Stufe 2: Bauen (Papier-Rahmen)

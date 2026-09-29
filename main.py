@@ -13365,12 +13365,24 @@ def _gesprochenes_fenster(s: dict, a: dict) -> Optional[str]:
     """Drei bis sieben gesprochene Woerter am Stueck aus dem Abschnitt, das Fenster mit den
     meisten Nomen (stil.phrase). Ohne Satzzeichen, dafuer garantiert gesagt."""
     von, bis = float(a.get("von") or 0), float(a.get("bis") or 0)
-    worte = [str(w.get("word", "")).strip() for w in (s.get("words") or [])
-             if von <= float(w.get("start") or 0) <= bis]
-    worte = [w for w in worte if w]
-    if len(worte) < 3:
+    ws = [w for w in (s.get("words") or []) if von <= float(w.get("start") or 0) <= bis and str(w.get("word", "")).strip()]
+    if len(ws) < 3:
         return None
-    return stil.phrase(" ".join(worte[:14]), max_worte=7)
+    # Skript 100, erster Lauf: "so ein schönes Team Es ist keine". Whisper kennt keine
+    # Satzzeichen, aber Pausen: eine Luecke ab 0,35 s ist eine Satzgrenze. Genommen wird der
+    # laengste Lauf ohne solche Luecke, daraus die Phrase.
+    laeufe, akt = [], [ws[0]]
+    for v, n in zip(ws, ws[1:]):
+        if float(n.get("start") or 0) - float(v.get("end") or 0) >= 0.35:
+            laeufe.append(akt)
+            akt = [n]
+        else:
+            akt.append(n)
+    laeufe.append(akt)
+    lauf = max(laeufe, key=len)
+    if len(lauf) < 3:
+        return None
+    return stil.phrase(" ".join(str(w.get("word", "")).strip() for w in lauf[:14]), max_worte=7)
 
 
 def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
@@ -13513,6 +13525,8 @@ async def _motion_regie(s: dict) -> dict:
     kosten = float(plan.get("kosten") or 0)
     log.info("[MOTION] %s: %d Momente geplant (%d roh), %.4f USD", s["id"], len(plan["momente"]),
              plan.get("roh", 0), kosten)
+    for v in (plan.get("verworfen") or [])[:8]:
+        log.info("[MOTION] verworfen (%s): %s", v.get("grund"), json.dumps(v.get("m"), ensure_ascii=False)[:160])
     k = stil._k(s.get("client_id"), _client_brand_colors(s.get("client_id")))
     face = s.get("face") or {}
     oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))

@@ -224,6 +224,13 @@ VORHANDENE KLASSEN (nutz sie, statt sie neu zu bauen):
   .leise (kleiner, ruhiger Nebentext)  .stempel (Wort stempelt sich ein; setz animation-delay je Wort)
   Keyframes: stempel, marker, hoch (Element faehrt auf), auf (Balken waechst scaleX), zeichnen (SVG-Linie zeichnet sich, stroke-dasharray:400)
 
+BEWEGUNG (Motion Design, nicht Standbild): jedes sichtbare Element hat seinen eigenen Auftritt,
+zeitlich gestaffelt (animation-delay 0.05 bis 0.9 s): Woerter stempeln oder fahren hoch, Zahlen
+setzen sich mit Ueberschwingen (scale 1.4 -> 1), Linien und Pfeile zeichnen sich (stroke-dashoffset),
+Balken wachsen (scaleX), der Marker zieht 0.4 s nach dem Wort, ein Haken oder Kreuz zeichnet sich
+in 0.35 s. Zwei bis vier gestaffelte Auftritte je Karte, nie alles gleichzeitig, nie laenger als
+1,2 s bis alles steht. Ruhig und praezise, kein Wackeln, kein Blinken.
+
 WAS DU BAUST, je Art:
   zahl: die Zahl gross (Ziffern zaehlen sich NICHT hoch, sie stempeln sich), Einheit/Wort daneben klein
   vergleich: zwei Spalten oder zwei Zeilen, links/oben das eine, rechts/unten das andere, ein duenner Strich dazwischen, der sich zeichnet

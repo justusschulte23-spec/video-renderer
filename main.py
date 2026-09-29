@@ -15484,7 +15484,12 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         # aber woertlich, was er GESAGT hat (im Code geprueft). Sie hielt alle drei
         # Vox-Streifen fuer "falschen Text", die Reparatur loeschte sie, das Video war leer.
         # Solche Ebenen gehen nur, wenn sie wirklich leer sind.
-        if str(l.get("herkunft", "")).startswith(("plan:stil", "plan:motion", "nachbesserung:")) and art != "leer":
+        # 29.09., Lauf 5 von Skript 100: die Abnahme nahm ein Motion-Overlay als "leer"
+        # (Einflug in den ersten Frames) und die Reparatur entfernte es. Motion-Ebenen sind
+        # Code-geprueft und werden NIE entfernt, nur gemeldet; Streifen nur, wenn wirklich leer.
+        if str(l.get("herkunft", "")).startswith("plan:motion") or (
+                str(l.get("herkunft", "")).startswith(("plan:stil", "nachbesserung:")) and art != "leer"):
+            log.info("[ABNAHME] %.1fs %s an %s: bleibt, nur gemeldet", bei, art, l["id"])
             getan.append({"bei": bei, "art": art, "gemeldet": l["id"],
                           "tat": "Text ist gesprochen und im Code geprueft - bleibt, nur gemeldet"})
             continue
@@ -15494,6 +15499,7 @@ def _abnahme_reparieren(s: dict, maengel: list) -> list:
         if art in ("leer", "unlesbar", "falscher_text") or (art == "doppelter_text"
                                                             and not _ist_uebernahme(l)):
             s["layers"] = [x for x in s["layers"] if x is not l]
+            log.info("[ABNAHME] %.1fs %s: Ebene %s (%s) entfernt", bei, art, l["id"], str(l.get("herkunft") or "")[:30])
             getan.append({"bei": bei, "art": art, "ebene": l["id"],
                           "tat": "Ebene entfernt — dahinter steht er selbst"})
             continue

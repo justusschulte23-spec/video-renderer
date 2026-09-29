@@ -33,8 +33,14 @@ def _llm(system, user, modell, max_tokens=2500, temperature=0.3, cache=False):
     sys_inhalt = ([{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
                   if cache else system)
     body = {"model": modell, "temperature": temperature, "max_tokens": max_tokens,
-            "reasoning": {"enabled": False}, "usage": {"include": True},
+            "usage": {"include": True},
             "messages": [{"role": "system", "content": sys_inhalt}, {"role": "user", "content": user}]}
+    # Opus 5.5: "Reasoning is mandatory for this endpoint and cannot be disabled" (400).
+    # Dort bleibt es an, knapp gehalten; bei allen anderen aus.
+    if "opus-5" in str(modell):
+        body["reasoning"] = {"effort": "low"}
+    else:
+        body["reasoning"] = {"enabled": False}
     r = requests.post("https://openrouter.ai/api/v1/chat/completions", json=body, timeout=240,
                       headers={"Authorization": "Bearer " + OR_KEY, "Content-Type": "application/json"})
     r.raise_for_status()
@@ -136,7 +142,13 @@ def planen(words, dauer, max_n=6, abstand=3.0, belegt=None, modell=None, saetze=
         teile = [str(t).strip() for t in (m.get("teile") or []) if str(t).strip()]
         anzeige = " ".join([text] + teile)
         # "3–5 Monate": Bindestrich und Gedankenstrich sind Trenner, im Transkript steht "3 bis 5"
-        fremd = [w for w in re.findall(r"[^\s–\-/]+", anzeige) if _norm(w) and _norm(w) not in fenster]
+        def _gesagt(w):
+            n_ = _norm(w)
+            if not n_ or n_ in fenster:
+                return True
+            # "organisch" gegen "organischen", "schalten" gegen "schaltest": ein Stamm ab fuenf Zeichen reicht
+            return len(n_) >= 5 and any(f.startswith(n_[:5]) for f in fenster)
+        fremd = [w for w in re.findall(r"[^\s–\-/→]+", anzeige) if not _gesagt(w)]
         if fremd or not anzeige:
             verworfen.append({"m": m, "grund": "nicht gesprochen: " + ", ".join(fremd[:4])})
             continue

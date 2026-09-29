@@ -13564,6 +13564,20 @@ async def _motion_regie(s: dict) -> dict:
         if erg.get("hinweis"):
             log.info("[MOTION] %d %s: %s (Quelle %s)", i, m["art"], erg["hinweis"], erg.get("quelle"))
         vid = await asyncio.to_thread(_kit_direkt, erg["markup"], w_px, h_px, m["dauer"])
+        # Lauf 6 (100): die Pfeilkette lief rechts aus der Karte. Der Alpha-Render meldet
+        # Ueberlauf; dann baut Opus EINMAL nach (vertikal, kleiner), sonst der Streifen.
+        if vid.get("url") and vid.get("ueberlauf") and erg.get("quelle") == "opus":
+            log.info("[MOTION] %d %s: Ueberlauf (%s), einmal nachgebaut", i, m["art"], str(vid.get("hinweis"))[:120])
+            erg2 = await asyncio.to_thread(mr.bauen, m, k, w_px, h_px, m["dauer"], cfg.get("modell"),
+                                           "Ueberlauf: " + str(vid.get("hinweis"))[:200])
+            kosten += float(erg2.get("kosten") or 0)
+            vid2 = await asyncio.to_thread(_kit_direkt, erg2["markup"], w_px, h_px, m["dauer"])
+            if vid2.get("url") and not vid2.get("ueberlauf"):
+                erg, vid = erg2, vid2
+            else:
+                log.info("[MOTION] %d %s: Ueberlauf bleibt, Streifen statt Opus", i, m["art"])
+                erg = {"markup": mr._streifen(m, k, w_px, h_px, m["dauer"]), "kosten": 0.0, "quelle": "streifen", "hinweis": "Ueberlauf"}
+                vid = await asyncio.to_thread(_kit_direkt, erg["markup"], w_px, h_px, m["dauer"])
         if not vid.get("url"):
             log.warning("[MOTION] %d %s nicht gerendert: %s", i, m["art"], str(vid.get("hinweis"))[:160])
             protokoll.append({**m, "ergebnis": "Render: " + str(vid.get("hinweis"))[:120], "quelle": erg.get("quelle")})

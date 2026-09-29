@@ -195,7 +195,9 @@ def _papier_css(k, fs, winkel, seed):
       background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .45  0 0 0 0 .42  0 0 0 0 .38  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");}}
     .band{{position:absolute;top:-{int(fs*.3)}px;left:{int(fs*.6)}px;width:{int(fs*2.0)}px;height:{int(fs*.65)}px;
            background:rgba(255,255,255,.55);transform:rotate({-winkel*3:.1f}deg);box-shadow:0 2px 6px rgba(0,0,0,.08);}}
-    .inhalt{{position:relative;font-size:{fs}px;line-height:1.14;font-weight:800;letter-spacing:-0.02em;color:{k['text']};}}
+    .inhalt{{position:relative;font-size:{fs}px;line-height:1.14;font-weight:800;letter-spacing:-0.02em;color:{k['text']};
+             max-width:100%;word-break:normal;overflow-wrap:normal;hyphens:none;}}
+    .inhalt *{{word-break:normal;overflow-wrap:normal;hyphens:none;}}
     .akzent{{color:{k['akzent']};}}
     .marker{{background:linear-gradient(transparent 12%, {k['akzent']}88 12%, {k['akzent']}88 92%, transparent 92%) no-repeat left / 0% 100%;
              padding:0 .08em;animation:marker .55s .5s cubic-bezier(.2,.8,.2,1) forwards;}}
@@ -237,21 +239,29 @@ HARTE REGELN
 - Kein <script>, kein <img>, kein url(), keine externen Schriften. Nur HTML und CSS-Keyframes.
 - Alles Sichtbare beginnt innerhalb der ersten 1,2 Sekunden und BLEIBT dann stehen (kein Ausflug, die Karte wird hart ausgeblendet).
 - Alles muss in die Karte passen: BREITE x HOEHE Pixel, mit dem Padding des Rahmens. Lieber Schrift verkleinern als abschneiden.
+- Kein Wort wird je getrennt oder abgeschnitten. Bei pfeil und liste mit drei Stationen oder einer Station ueber 14 Zeichen:
+  Stationen UNTEREINANDER (jede eine Zeile, Pfeil oder Ziffer davor), nicht nebeneinander. Zwei kurze Stationen duerfen nebeneinander.
+- Die Karte ist breit und flach (etwa 2,5:1): rechne mit hoechstens drei Textzeilen bei Schriftgroesse SCHRIFT.
 - Farben nur ueber die Klassen .akzent und .leise und currentColor.
 
 AUSGABE, nur JSON:
 {"body":"<div class='inhalt'>...</div>","css":".meine{...} @keyframes ...{...}"}"""
 
 
-def bauen(moment, k, breit, hoch, dauer, modell=None):
-    """Markup fuer einen Moment. Rueckgabe {"markup", "kosten", "quelle": "opus"|"streifen", "hinweis"}."""
+def bauen(moment, k, breit, hoch, dauer, modell=None, hinweis=""):
+    """Markup fuer einen Moment. Rueckgabe {"markup", "kosten", "quelle": "opus"|"streifen", "hinweis"}.
+    hinweis: Befund aus dem letzten Versuch (z. B. Ueberlauf), geht als Auftrag mit."""
     fs = max(40, int(breit * 0.075))
+    if hinweis:
+        fs = int(fs * 0.85)
     winkel = random.Random(moment.get("von_idx", 0)).choice([-1, 1]) * random.Random(len(moment.get("text", ""))).uniform(1.2, 2.6)
     kern = _papier_css(k, fs, winkel, seed=moment.get("von_idx", 0))
     auftrag = json.dumps({"art": moment["art"], "text": moment["text"], "teile": moment.get("teile") or [],
                           "breite_px": breit, "hoehe_px": hoch, "dauer_s": dauer, "schrift_px": fs}, ensure_ascii=False)
+    if hinweis:
+        auftrag += "\n\nBEFUND DES LETZTEN VERSUCHS (unbedingt beheben): " + hinweis + " Stationen untereinander, Schrift kleiner, nichts ragt heraus."
     try:
-        txt, kosten, usage = _llm(BAU_SYS.replace("BREITE", str(breit)).replace("HOEHE", str(hoch)),
+        txt, kosten, usage = _llm(BAU_SYS.replace("BREITE", str(breit)).replace("HOEHE", str(hoch)).replace("SCHRIFT", str(fs)),
                                   auftrag + "\n\nNur das JSON.", modell or BAU_MODELL, max_tokens=2200,
                                   temperature=0.4, cache=True)
     except Exception as exc:

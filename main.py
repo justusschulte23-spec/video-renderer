@@ -13380,9 +13380,14 @@ def _gesprochenes_fenster(s: dict, a: dict) -> Optional[str]:
             akt.append(n)
     laeufe.append(akt)
     lauf = max(laeufe, key=len)
-    if len(lauf) < 3:
+    worte = [str(w.get("word", "")).strip() for w in lauf]
+    # Lauf 2 (100): "Kunden und das ohne", "schon direkt zum Wie". Ein Lauf unter fuenf Woertern
+    # oder einer, der mit Bindewort, Pronomen oder Strich beginnt, ist ein Bruchstueck.
+    while worte and (worte[0].strip("-–") == "" or worte[0].lower() in ("und", "dass", "das", "es", "der", "die", "den", "dem", "weil", "aber", "also", "so", "ihr", "wir", "ich", "du", "dann")):
+        worte = worte[1:]
+    if len(worte) < 5:
         return None
-    return stil.phrase(" ".join(str(w.get("word", "")).strip() for w in lauf[:14]), max_worte=7)
+    return stil.phrase(" ".join(worte[:9]), max_worte=7)
 
 
 def _stil_pruefen(inhalt: dict, s: dict, a: dict) -> list:
@@ -13516,7 +13521,9 @@ async def _motion_regie(s: dict) -> dict:
     belegt = []
     for l in s["layers"]:
         hk = str(l.get("herkunft", ""))
-        if hk.startswith("plan:") and not hk.startswith(("plan:zoom", "plan:effekt", "plan:hintergrund")):
+        # Papierstreifen (plan:stil) belegen nichts: ein Motion-Overlay an derselben Stelle ist
+        # die reichere Fassung und verdraengt den Streifen (siehe unten).
+        if hk.startswith("plan:") and not hk.startswith(("plan:zoom", "plan:effekt", "plan:hintergrund", "plan:stil")):
             belegt.append((float(l.get("from", 0)) / FPS - 0.5, float(l.get("to", 0)) / FPS + 0.5))
     max_n = int(cfg.get("max") or 6)
     abstand = float(cfg.get("abstand_s") or 3.0)
@@ -13539,17 +13546,31 @@ async def _motion_regie(s: dict) -> dict:
         elif unten + 0.02 + hz <= 0.63:
             tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
         else:
+            log.info("[MOTION] %d %s: kein Platz neben dem Gesicht", i, m["art"])
             protokoll.append({**m, "ergebnis": "kein Platz neben dem Gesicht"})
             continue
         w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
-        erg = await asyncio.to_thread(mr.bauen, m, k, w_px, h_px, m["dauer"], cfg.get("modell"))
+        if m["art"] in ("zitat", "begriff", "frage"):
+            # Text allein braucht kein Opus: der Papierstreifen aus stil.py, mit dem Text, den der Planer gewaehlt hat.
+            erg = {"markup": mr._streifen(m, k, w_px, h_px, m["dauer"]), "kosten": 0.0, "quelle": "streifen", "hinweis": ""}
+        else:
+            erg = await asyncio.to_thread(mr.bauen, m, k, w_px, h_px, m["dauer"], cfg.get("modell"))
         kosten += float(erg.get("kosten") or 0)
+        if erg.get("hinweis"):
+            log.info("[MOTION] %d %s: %s (Quelle %s)", i, m["art"], erg["hinweis"], erg.get("quelle"))
         vid = await asyncio.to_thread(_kit_direkt, erg["markup"], w_px, h_px, m["dauer"])
         if not vid.get("url"):
+            log.warning("[MOTION] %d %s nicht gerendert: %s", i, m["art"], str(vid.get("hinweis"))[:160])
             protokoll.append({**m, "ergebnis": "Render: " + str(vid.get("hinweis"))[:120], "quelle": erg.get("quelle")})
             continue
         von_f = int(round(m["von"] * FPS))
         bis_f = min(frames, int(round(m["bis"] * FPS)))
+        # Ein Streifen an derselben Stelle weicht dem Overlay.
+        weg = [l for l in s["layers"] if str(l.get("herkunft", "")) == "plan:stil"
+               and not (int(l.get("to", 0)) <= von_f or int(l.get("from", 0)) >= bis_f)]
+        for l in weg:
+            s["layers"].remove(l)
+            log.info("[MOTION] %d verdraengt Streifen %s (%s)", i, l.get("id"), str(l.get("konzept") or "")[:60])
         s["layers"].append(_layer_defaults({
             "id": f"motion_{i}", "z": Z_ELEMENT,
             "source": {"kind": "video", "url": vid["url"], "transparent": True, "zeit": "ebene"},

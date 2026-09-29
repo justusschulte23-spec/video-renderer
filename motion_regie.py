@@ -128,7 +128,8 @@ def planen(words, dauer, max_n=6, abstand=3.0, belegt=None, modell=None, saetze=
         text = str(m.get("text") or "").strip()
         teile = [str(t).strip() for t in (m.get("teile") or []) if str(t).strip()]
         anzeige = " ".join([text] + teile)
-        fremd = [w for w in re.findall(r"\S+", anzeige) if _norm(w) and _norm(w) not in fenster]
+        # "3–5 Monate": Bindestrich und Gedankenstrich sind Trenner, im Transkript steht "3 bis 5"
+        fremd = [w for w in re.findall(r"[^\s–\-/]+", anzeige) if _norm(w) and _norm(w) not in fenster]
         if fremd or not anzeige:
             verworfen.append({"m": m, "grund": "nicht gesprochen: " + ", ".join(fremd[:4])})
             continue
@@ -261,7 +262,7 @@ def _pruefen(body, css, moment):
     erlaubt = {_norm(w) for w in re.findall(r"\S+", " ".join([moment.get("text", "")] + (moment.get("teile") or [])))}
     erlaubt.discard("")
     sichtbar = re.sub(r"<[^>]+>", " ", body)
-    fremd = [w for w in re.findall(r"[A-Za-zÄÖÜäöüß]{2,}", sichtbar) if _norm(w) not in erlaubt]
+    fremd = [w for w in re.findall(r"[A-Za-zÄÖÜäöüß]{2,}", sichtbar) if _norm(w) not in erlaubt and w.lower() not in ("bis", "vs", "und")]
     if fremd:
         return "fremde Woerter: " + ", ".join(fremd[:5])
     return ""

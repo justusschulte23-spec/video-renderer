@@ -13540,13 +13540,18 @@ async def _motion_regie(s: dict) -> dict:
     gebaut, protokoll = 0, []
     for i, m in enumerate(plan["momente"]):
         _abbruch_pruefen()
-        hz = 0.26 if m["art"] in ("liste", "vergleich", "pfeil") else 0.19
-        if oben - 0.07 - hz >= 0.03:
-            tf = {"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz}
-        elif unten + 0.02 + hz <= 0.63:
-            tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
-        else:
-            log.info("[MOTION] %d %s: kein Platz neben dem Gesicht", i, m["art"])
+        # Lauf 3 (100): vergleich und pfeil fielen mit "kein Platz", weil 26 % Hoehe ueber dem
+        # Kopf nie frei sind. Erst hoch, dann flacher; auf Brusthoehe bis 0,72 (Untertitel ab 0,88).
+        tf = None
+        for hz in ((0.26, 0.21) if m["art"] in ("liste", "vergleich", "pfeil") else (0.19,)):
+            if oben - 0.07 - hz >= 0.03:
+                tf = {"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz}
+                break
+            if unten + 0.02 + hz <= 0.72:
+                tf = {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz}
+                break
+        if not tf:
+            log.info("[MOTION] %d %s: kein Platz neben dem Gesicht (oben %.2f, unten %.2f)", i, m["art"], oben, unten)
             protokoll.append({**m, "ergebnis": "kein Platz neben dem Gesicht"})
             continue
         w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))

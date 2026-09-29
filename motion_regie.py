@@ -55,8 +55,15 @@ def _json(txt):
         return None
 
 
+_ZAHLWORT = {"1": "eins", "2": "zwei", "3": "drei", "4": "vier", "5": "fünf", "6": "sechs", "7": "sieben",
+             "8": "acht", "9": "neun", "10": "zehn", "11": "elf", "12": "zwölf", "20": "zwanzig", "30": "dreißig",
+             "50": "fünfzig", "100": "hundert", "1000": "tausend"}
+
+
 def _norm(w):
-    return re.sub(r"[^\wäöüß%€]", "", str(w).lower())
+    n = re.sub(r"[^\wäöüß%€]", "", str(w).lower())
+    # "3" im Overlay, "drei" im Transkript: dieselbe Zahl
+    return _ZAHLWORT.get(n, n)
 
 
 # ─────────────────────────────────────────────── Stufe 1: Planen

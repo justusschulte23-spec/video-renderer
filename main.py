@@ -1760,6 +1760,89 @@ def _lautheit_fenster(audio_path: Path, fenster_s: float = 0.05) -> dict:
 
 
 SPRACHE_ABSTAND_DB = 15.0   # Luecke lauter als Sprechpegel minus das: da spricht er noch
+STILLE_SCHWELLE_DB = 18.0   # unter Sprechpegel minus das ist es still (30.09.)
+
+
+def _pegel_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
+                         betonung: Optional[list] = None) -> tuple:
+    """30.09., Justus: "8 Sekunden Stille, wo ich gerade lese, stehen lassen, 600 ms ist der Frame".
+    Die Wortluecken-Fassung schnitt nur zwischen Whisper-Woertern; dehnt Whisper ein Wort ueber
+    eine Lesepause (Segmentende), lag die Stille IM Wort und blieb. Jetzt entscheidet der PEGEL:
+    still ist alles unter Sprechpegel minus STILLE_SCHWELLE_DB, ab min_stille wird es geschnitten,
+    mit den Polstern davor und danach. Ein Whisper-Wort schuetzt eine Stelle nur, wenn es dort
+    selbst laut ist. Rueckgabe: (keeps, schnitte, behalten)."""
+    import statistics
+    min_s = cfg["min_stille_ms"] / 1000.0
+    vor, nach = cfg["puffer_vor_ms"] / 1000.0, cfg["puffer_nach_ms"] / 1000.0
+    ts, dbs = laut.get("t") or [], laut.get("db") or []
+    fenster = float(laut.get("fenster") or 0.05)
+    if not words or not dbs:
+        return [(0.0, duration)], [], []
+
+    def pegel(a, b):
+        i0, i1 = int(a / fenster), int(b / fenster)
+        werte = dbs[max(0, i0):max(0, min(len(dbs), i1))]
+        return statistics.median(werte) if werte else None
+
+    sprech = [v for w in words for v in [pegel(float(w.get("start") or 0), float(w.get("end") or 0))] if v is not None]
+    sprech_db = statistics.median(sprech) if sprech else -30.0
+    laut["sprech_db"] = sprech_db
+    schwelle = sprech_db - STILLE_SCHWELLE_DB
+    # stille Strecken aus dem Pegel
+    strecken, start = [], None
+    for i, v in enumerate(dbs):
+        if v < schwelle:
+            if start is None:
+                start = i
+        else:
+            if start is not None and (i - start) * fenster >= min_s:
+                strecken.append((start * fenster, i * fenster))
+            start = None
+    if start is not None and (len(dbs) - start) * fenster >= min_s:
+        strecken.append((start * fenster, duration))
+    # ein Wort schuetzt nur, wenn es dort selbst laut ist
+    laute_woerter = [(float(w.get("start") or 0), float(w.get("end") or 0)) for w in words
+                     if (pegel(float(w.get("start") or 0), float(w.get("end") or 0)) or -999) >= schwelle]
+    removes, schnitte, behalten = [], [], []
+    for s0, s1 in strecken:
+        teile = [(s0, s1)]
+        for ws, we in laute_woerter:
+            if we <= s0 or ws >= s1:
+                continue
+            neu = []
+            for a, b in teile:
+                if we <= a or ws >= b:
+                    neu.append((a, b))
+                else:
+                    if ws - 0.1 - a >= min_s:
+                        neu.append((a, ws - 0.1))
+                    if b - (we + 0.1) >= min_s:
+                        neu.append((we + 0.1, b))
+            if len(neu) != len(teile) or neu != teile:
+                behalten.append({"von": round(ws, 3), "bis": round(we, 3), "db": None, "grund": "lautes Wort in der Stille"})
+            teile = neu
+        for a0, b0 in teile:
+            letztes = b0 >= duration - 0.05
+            v = 0.0 if a0 <= 0.0 else (max(vor, STILLE_TAIL_S) if letztes else vor)
+            n = 0.0 if letztes else nach
+            naechstes = next((i for i, w in enumerate(words) if float(w.get("start") or 0) >= b0 - 0.05), None)
+            if naechstes is not None and betonung and naechstes < len(betonung) and betonung[naechstes]:
+                n = max(n, PAUSE_HALTEN_S)
+            a, b = a0 + v, b0 - n
+            if b - a <= 0.05:
+                continue
+            removes.append((a, b))
+            schnitte.append({"von": round(a, 3), "bis": round(b, 3), "db": round(pegel(a, b) or -120.0, 1),
+                             "luecke": [round(a0, 3), round(b0, 3)]})
+    removes.sort()
+    keeps, cursor = [], 0.0
+    for a, b in removes:
+        if a > cursor:
+            keeps.append((round(cursor, 3), round(a, 3)))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        keeps.append((round(cursor, 3), round(duration, 3)))
+    return [(x, y) for x, y in keeps if y - x > 0.02], schnitte, behalten
 
 
 def _wort_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
@@ -17889,15 +17972,15 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
         # verschluckt), dann bleibt sie. Kurze Transienten fallen im Median heraus.
         dur2 = probe_duration(current)
         laut = _lautheit_fenster(a2)
-        keeps2, schnitte, behalten = _wort_keep_segments(w2, laut, dur2, cfg, betonung=_betont(w2))
+        keeps2, schnitte, behalten = _pegel_keep_segments(w2, laut, dur2, cfg, betonung=_betont(w2))
         kept = sum(e - s_ for s_, e in keeps2)
-        log.info("[TRIM] phase2 %s: %d Wortluecken geschnitten, %d behalten (Ton wie Sprache), "
+        log.info("[TRIM] phase2 %s: %d stille Strecken geschnitten, %d Woerter geschuetzt, "
                  "Sprechpegel %.1f dB (min %.0f ms, vor %.0f, nach %.0f): %s",
                  cfg["client_id"], len(schnitte), len(behalten), laut.get("sprech_db", 0.0),
                  cfg["min_stille_ms"], cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
                  ", ".join("%.2f-%.2f" % (x["von"], x["bis"]) for x in schnitte[:20]))
         for x in behalten[:6]:
-            log.info("[TRIM] phase2 behalten %.2f-%.2f: %.1f dB (Sprache %.1f dB)", x["von"], x["bis"], x["db"], laut.get("sprech_db", 0.0))
+            log.info("[TRIM] phase2 geschuetzt %.2f-%.2f: %s", x["von"], x["bis"], x.get("grund") or x.get("db"))
         # 28.09. (Skript 99: 262 s Roh, 170 s Stille, gepostet mit 243 s): hier stand
         # `kept > dur2 * 0.5`. Wer lange Pausen macht, hat mehr als die Haelfte Stille, und
         # dann fiel der GANZE Stille-Schnitt still weg. Die Sicherung ist jetzt die, um die es

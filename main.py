@@ -1711,6 +1711,7 @@ def _silence_keep_segments(silences: list, duration: float, pad: float = 0.09,
 # landete im Wort. Die drei Werte stehen in clients.schnitt, nicht hier.
 SCHNITT_RUECKFALL = {"min_stille_ms": 600, "puffer_vor_ms": 150, "puffer_nach_ms": 200}
 STILLE_NOISE_DB = -30
+QC_MIN_S = 15.0        # kuerzer ist kein Video (30.09., Stummel-Upload)
 # Hinter dem letzten Wort setzt Whisper das Ende regelmaessig zu frueh, und kein
 # folgendes Wort rettet den Schnitt. Dort bleibt mindestens so viel stehen.
 STILLE_TAIL_S = 0.35
@@ -15688,6 +15689,9 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     # Die Endkarte haengt hinten dran, deshalb darf es laenger sein.
     p("Laufzeit", dauer >= soll - 0.6, True,
       "%.1fs gerendert, %.1fs geplant" % (dauer, soll))
+    # 30.09.: ein 1,9-Sekunden-Stummel (versehentlicher Upload) lief durch alle Pruefungen und
+    # ueberschrieb das echte Video von Skript 108. Unter 15 Sekunden ist kein Video.
+    p("Mindestlaenge", dauer >= QC_MIN_S, True, "%.1fs (mindestens %.0f s)" % (dauer, QC_MIN_S))
     # 25.09.: Paper-Edit ueber dem Deckel hat nichts gestrichen, das Video muss jemand ansehen.
     _pap = s.get("paper") or {}
     p("Paper-Edit im Deckel", not _pap.get("pruefen"), True, _pap.get("pruefen") or "")

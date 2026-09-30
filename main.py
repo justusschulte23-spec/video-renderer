@@ -15739,7 +15739,10 @@ def _qc(video: Path, s: dict, plan: Optional[dict] = None) -> dict:
     # nichts passiert, sieht man nicht, wie viel woanders passiert ist.
     luecke_f, luecke_ab = _max_gap(s["layers"], s["frames"])
     grenze = min(20.0, max(6.0, (s["frames"] / FPS) / 4))
-    p("Keine tote Strecke", luecke_f / FPS <= grenze, True,
+    # 30.09., Justus: "abgelehnt darf nicht heissen, dass nichts passiert". Skript 109 blieb
+    # wegen 22,6 s ohne Element am Anfang auf 'pruefen' liegen, obwohl das Video sonst sauber
+    # war. Die tote Strecke wird gemeldet und nachgebessert, sperrt aber die Auslieferung nicht.
+    p("Keine tote Strecke", luecke_f / FPS <= grenze, False,
       "%.1fs ohne Element ab %.1fs (erlaubt %.1fs)"
       % (luecke_f / FPS, luecke_ab / FPS, grenze))
 

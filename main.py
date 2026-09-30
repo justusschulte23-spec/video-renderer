@@ -1791,8 +1791,10 @@ def _pegel_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
     # bei -24 dB, das Rauschen in den Lesepausen bei -33 bis -36 dB: "Sprechpegel minus 18"
     # (-42) hielt jede Pause fuer Ton. Die Schwelle liegt jetzt zwischen Rauschgrund
     # (10. Perzentil) und Sprechpegel, naeher am Rauschen.
-    sortiert = sorted(dbs)
-    rauschen = sortiert[max(0, int(len(sortiert) * 0.10))]
+    # Digitale Stille (-120 dB, z. B. geschnittene Uebergaenge) zaehlt nicht als Rauschgrund,
+    # sonst liegt die Schwelle bei -86 dB und nichts ist mehr still (Lauf 13:41).
+    echte = sorted(v for v in dbs if v > -90.0) or [-60.0]
+    rauschen = echte[max(0, int(len(echte) * 0.10))]
     schwelle = min(sprech_db - 4.0, rauschen + max(4.0, 0.35 * (sprech_db - rauschen)))
     laut["rauschen_db"], laut["schwelle_db"] = rauschen, schwelle
     # stille Strecken aus dem Pegel

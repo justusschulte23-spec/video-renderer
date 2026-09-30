@@ -1787,7 +1787,14 @@ def _pegel_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
     sprech = [v for w in words for v in [pegel(float(w.get("start") or 0), float(w.get("end") or 0))] if v is not None]
     sprech_db = statistics.median(sprech) if sprech else -30.0
     laut["sprech_db"] = sprech_db
-    schwelle = sprech_db - STILLE_SCHWELLE_DB
+    # 30.09., zweiter Anlauf: Handy-Mikro mit Verstaerkungsautomatik. Sein Sprechpegel liegt
+    # bei -24 dB, das Rauschen in den Lesepausen bei -33 bis -36 dB: "Sprechpegel minus 18"
+    # (-42) hielt jede Pause fuer Ton. Die Schwelle liegt jetzt zwischen Rauschgrund
+    # (10. Perzentil) und Sprechpegel, naeher am Rauschen.
+    sortiert = sorted(dbs)
+    rauschen = sortiert[max(0, int(len(sortiert) * 0.10))]
+    schwelle = min(sprech_db - 4.0, rauschen + max(4.0, 0.35 * (sprech_db - rauschen)))
+    laut["rauschen_db"], laut["schwelle_db"] = rauschen, schwelle
     # stille Strecken aus dem Pegel
     strecken, start = [], None
     for i, v in enumerate(dbs):
@@ -17975,8 +17982,9 @@ def _trim_pipeline(src: Path, job_dir: Path, smart_cut: bool = False, client_id:
         keeps2, schnitte, behalten = _pegel_keep_segments(w2, laut, dur2, cfg, betonung=_betont(w2))
         kept = sum(e - s_ for s_, e in keeps2)
         log.info("[TRIM] phase2 %s: %d stille Strecken geschnitten, %d Woerter geschuetzt, "
-                 "Sprechpegel %.1f dB (min %.0f ms, vor %.0f, nach %.0f): %s",
+                 "Sprechpegel %.1f dB, Rauschen %.1f, Schwelle %.1f (min %.0f ms, vor %.0f, nach %.0f): %s",
                  cfg["client_id"], len(schnitte), len(behalten), laut.get("sprech_db", 0.0),
+                 laut.get("rauschen_db", 0.0), laut.get("schwelle_db", 0.0),
                  cfg["min_stille_ms"], cfg["puffer_vor_ms"], cfg["puffer_nach_ms"],
                  ", ".join("%.2f-%.2f" % (x["von"], x["bis"]) for x in schnitte[:20]))
         for x in behalten[:6]:

@@ -1795,7 +1795,12 @@ def _pegel_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
     # sonst liegt die Schwelle bei -86 dB und nichts ist mehr still (Lauf 13:41).
     echte = sorted(v for v in dbs if v > -90.0) or [-60.0]
     rauschen = echte[max(0, int(len(echte) * 0.10))]
-    schwelle = min(sprech_db - 4.0, rauschen + max(4.0, 0.35 * (sprech_db - rauschen)))
+    # Dritter Anlauf 30.09.: Handy-Verstaerkung hebt Lesepausen auf -33 bis -36 dB, und Whisper
+    # legt dort halluzinierte Woerter hin. Die Schwelle liegt 12 dB unter dem Sprechpegel
+    # (mindestens 6 ueber dem Rauschgrund); ein Wort schuetzt nur, wenn es selbst hoechstens
+    # 10 dB unter dem Sprechpegel liegt.
+    schwelle = max(rauschen + 6.0, sprech_db - 12.0)
+    wort_schwelle = sprech_db - 10.0
     laut["rauschen_db"], laut["schwelle_db"] = rauschen, schwelle
     # stille Strecken aus dem Pegel
     strecken, start = [], None
@@ -1811,7 +1816,12 @@ def _pegel_keep_segments(words: list, laut: dict, duration: float, cfg: dict,
         strecken.append((start * fenster, duration))
     # ein Wort schuetzt nur, wenn es dort selbst laut ist
     laute_woerter = [(float(w.get("start") or 0), float(w.get("end") or 0)) for w in words
-                     if (pegel(float(w.get("start") or 0), float(w.get("end") or 0)) or -999) >= schwelle]
+                     if (pegel(float(w.get("start") or 0), float(w.get("end") or 0)) or -999) >= wort_schwelle]
+    # Diagnose: die laengsten Whisper-Woerter mit ihrem Pegel (Halluzination in Pausen)
+    lang = sorted(words, key=lambda w: -(float(w.get("end") or 0) - float(w.get("start") or 0)))[:6]
+    log.info("[TRIM] laengste Woerter: %s", "; ".join("%r %.2f-%.2f %.1f dB" % (
+        str(w.get("word", ""))[:16], float(w.get("start") or 0), float(w.get("end") or 0),
+        pegel(float(w.get("start") or 0), float(w.get("end") or 0)) or -120.0) for w in lang))
     removes, schnitte, behalten = [], [], []
     for s0, s1 in strecken:
         teile = [(s0, s1)]

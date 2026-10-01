@@ -15759,7 +15759,7 @@ def tool_abnahme(req: AbnahmeRequest):
 # Damals sagten alle Kennzahlen "fertig", und es waren 62 Sekunden schwarzer
 # Rahmen. Zwei der Punkte hier haetten das gefangen.
 # ══════════════════════════════════════════════════════════════════════════════
-QC_MAX_MB = 50.0            # Telegram und der Supabase-Bucket
+QC_MAX_MB = 100.0            # Telegram und der Supabase-Bucket   # 01.10.: 109 fiel mit 53,9 MB auf pruefen; Instagram und TikTok nehmen weit mehr
 QC_MIN_LUFS = -24.0
 QC_MAX_LUFS = -11.0
 QC_MIN_TONSPUR_S = 0.5

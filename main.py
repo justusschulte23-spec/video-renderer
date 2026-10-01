@@ -11586,14 +11586,24 @@ def _gemini_upload(pfad: Path, mime: str = "video/mp4") -> str:
     if not GOOGLE_AI_KEY:
         raise HTTPException(status_code=500, detail="GOOGLE_AI_KEY fehlt")
     daten = pfad.read_bytes()
-    start = requests.post(
-        f"{GEMINI_API}/upload/v1beta/files?key={GOOGLE_AI_KEY}", timeout=60,
-        headers={"X-Goog-Upload-Protocol": "resumable",
-                 "X-Goog-Upload-Command": "start",
-                 "X-Goog-Upload-Header-Content-Length": str(len(daten)),
-                 "X-Goog-Upload-Header-Content-Type": mime,
-                 "Content-Type": "application/json"},
-        json={"file": {"display_name": pfad.name}})
+    # 01.10.: 108 und 109 fielen mit "429 Too Many Requests" der Files API auf render_fehler.
+    # Ein Kontingent-Stau ist kein Fehler des Videos: vier Anlaeufe mit wachsender Pause.
+    start = None
+    for versuch in range(4):
+        start = requests.post(
+            f"{GEMINI_API}/upload/v1beta/files?key={GOOGLE_AI_KEY}", timeout=60,
+            headers={"X-Goog-Upload-Protocol": "resumable",
+                     "X-Goog-Upload-Command": "start",
+                     "X-Goog-Upload-Header-Content-Length": str(len(daten)),
+                     "X-Goog-Upload-Header-Content-Type": mime,
+                     "Content-Type": "application/json"},
+            json={"file": {"display_name": pfad.name}})
+        if start.status_code == 429 and versuch < 3:
+            warte = 60 * (2 ** versuch)
+            log.warning("[AD] Files API 429, Anlauf %d, warte %d s", versuch + 1, warte)
+            time.sleep(warte)
+            continue
+        break
     start.raise_for_status()
     ziel = start.headers.get("X-Goog-Upload-URL") or start.headers.get("x-goog-upload-url")
     if not ziel:

@@ -7169,6 +7169,38 @@ def _remotion_captions(words: list, max_words: int = 4) -> list:
     return items
 
 
+# 03.10., Skip-Rate: Skripte 100 und 107 waren Totalen an der Tafel, das Gesicht ein
+# Zehntel der Bildhoehe (Skip 87 / 80 Prozent). Skript 95 war eine Nahaufnahme, Gesicht
+# ein Drittel, Skip 50. Das Gesicht ist der Haken im Bild. Deshalb: ist es klein, zieht
+# der Grundzoom (punch.base) das ganze Video auf Nahaufnahme, um den Nasenpunkt herum.
+NAH_ZIEL = 0.24     # Anteil der Bildhoehe, den das Gesicht mindestens haben soll
+NAH_MAX = 1.5       # mehr Vergroesserung aus 1080p wird sichtbar weich
+NAH_BASIS = 1.04    # Grundueberzoom, damit der Shake keine Raender zeigt
+
+
+def _nahaufnahme(face: dict) -> dict:
+    """Grundzoom aus der Gesichtsbox und die Box, wie sie danach im Bild steht.
+    Ohne Gesichtsbox bleibt alles wie bisher (base 1.04, Box leer)."""
+    if not face or not face.get("bottom"):
+        return {"base": NAH_BASIS, "face": dict(face or {}), "gesicht_h": 0.0, "grund": "keine Gesichtsbox"}
+    h = float(face["bottom"]) - float(face.get("top") or 0.0)
+    if h <= 0.02:
+        return {"base": NAH_BASIS, "face": dict(face), "gesicht_h": round(h, 3), "grund": "Box unbrauchbar"}
+    base = max(NAH_BASIS, min(NAH_MAX, NAH_ZIEL / h))
+    ox = float(face.get("origin_x", 0.5))
+    oy = float(face.get("origin_y", 0.42))
+
+    def _p(v, o):
+        return round(max(0.0, min(1.0, o + (float(v) - o) * base)), 3)
+
+    proj = dict(face)
+    for k, o in (("top", oy), ("bottom", oy), ("left", ox), ("right", ox)):
+        if k in face:
+            proj[k] = _p(face[k], o)
+    return {"base": round(base, 3), "face": proj, "gesicht_h": round(h, 3),
+            "grund": "Nahaufnahme" if base > NAH_BASIS + 0.01 else "schon nah"}
+
+
 def _face_track_mediapipe(video_path: Path, duration: float, samples: int = 24) -> dict:
     """§3 precise face track via MediaPipe Face Mesh — origin locked on the nose
     bridge (landmark 168), box from the full mesh. {} if mediapipe unavailable."""
@@ -9436,9 +9468,14 @@ def tool_session_open(req: OpenSessionRequest):
                  "weiterverwendet (%d Woerter), kein zweiter Whisper-Lauf", len(words))
     else:
         words = transcribe_audio(cam) or []
-    face = _face_track(cam, duration)
+    face_roh = _face_track(cam, duration)
+    nah = _nahaufnahme(face_roh)
+    # Ab hier gilt die Box, wie sie NACH dem Grundzoom im Bild steht: Captions, Sticker,
+    # Freisteller und der Agent rechnen alle mit dem, was der Zuschauer sieht.
+    face = nah["face"]
+    log.info("[NAH] Gesicht %.2f der Hoehe -> base %.2f (%s)", nah["gesicht_h"], nah["base"], nah["grund"])
     onsets = _audio_onsets(cam, job)
-    sheet = _contact_sheet(cam, words, face, duration, onsets, job)
+    sheet = _contact_sheet(cam, words, face_roh, duration, onsets, job)
     sheet_url = upload_supabase(sheet, f"sheet_{sid}", folder="preview") if sheet else ""
 
     tpl = _load_template(req.client_id, None)
@@ -9462,7 +9499,7 @@ def tool_session_open(req: OpenSessionRequest):
         "id": sid, "dir": job, "client_id": req.client_id,
         "facecam_path": cam, "face_url": face_url,
         "duration": duration, "frames": frames,
-        "words": words, "face": face, "onsets": onsets,
+        "words": words, "face": face, "face_roh": face_roh, "nah": nah, "onsets": onsets,
         "transkript_filter": list(_HALLU_LETZTES.get("protokoll") or []),
         "sheet": sheet, "sheet_url": sheet_url,
         "style_guide": style, "colors": _farben_vereint(req.client_id, tpl),
@@ -9484,7 +9521,7 @@ def tool_session_open(req: OpenSessionRequest):
             "transform": {"origin": [face.get("origin_x", 0.5), face.get("origin_y", 0.42)]},
             "modifiers": {"handheld": True, "grade": True,
                           "punch": {"frames": [], "hookEndFrame": 0,
-                                    "outroStartFrame": 0, "base": 1.04}},
+                                    "outroStartFrame": 0, "base": nah["base"]}},
             "herkunft": "facecam",
         }, frames),
             # Captions sind keine Agentenentscheidung. Sie waren im alten

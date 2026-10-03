@@ -13692,12 +13692,95 @@ async def _stil_baustein(s: dict, a: dict, i: int) -> Optional[dict]:
     return None
 
 
+def _hook_bildtext(s: dict) -> str:
+    """Der Bildtext des Skriptbaus (drei bis fuenf Woerter, vom Autor gesetzt) zum Video.
+    Leer, wenn kein vorrat_id im Briefing steht oder kein fertiger Bau existiert."""
+    b = s.get("briefing") or {}
+    vid = (b.get("regie") or {}).get("vorrat_id") or b.get("vorrat_id")
+    if not vid:
+        return ""
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/skript_bau",
+                         params={"vorrat_id": f"eq.{int(vid)}", "status": "eq.fertig",
+                                 "select": "id,bildtext:phasen->form->>bildtext", "order": "id.desc", "limit": "1"},
+                         headers={"apikey": SUPABASE_SERVICE_KEY,
+                                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}, timeout=20)
+        rows = r.json() or []
+        return " ".join(str((rows[0] or {}).get("bildtext") or "").split())[:80] if rows else ""
+    except Exception as exc:
+        log.info("[MOTION] Bildtext nicht lesbar (%s): %s", vid, str(exc)[:100])
+        return ""
+
+
+async def _hook_titel_ebene(s: dict) -> int:
+    """03.10.: der Hook-Titel ist die wichtigste Grafik, der Skip faellt in den ersten drei
+    Sekunden. Vorher (29.09.) stand ein Transkript-Bruchstueck im Papierstreifen, nur wenn
+    sonst nichts im Bild lag. Jetzt immer, fuer jeden Kunden: der Bildtext aus dem Skriptbau
+    als freie Typografie (hook_titel.py, kein Modell, keine Kosten), ab Bild 0; fruehe
+    Streifen und Overlays weichen ihm. Rueckgabe: 1 wenn gebaut."""
+    import hook_titel as ht
+    words = s.get("words") or []
+    frames = int(s["frames"])
+    try:
+        titel = _hook_bildtext(s) or ""
+        if not titel and words:
+            hook_w = []
+            for v, n in zip(words, words[1:] + [None]):
+                hook_w.append(str(v.get("word", "")).strip())
+                if n is None or float(n.get("start") or 0) - float(v.get("end") or 0) >= 0.35 or len(hook_w) >= 6:
+                    break
+            titel = " ".join(w for w in hook_w if w)
+        if not titel or len(titel.split()) < 2:
+            log.info("[MOTION] Hook-Titel: kein Text")
+            return 0
+        k = stil._k(s.get("client_id"), _client_brand_colors(s.get("client_id")))
+        face = s.get("face") or {}
+        oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))
+        tf = None
+        for hz in (0.22, 0.17):
+            if oben - 0.04 - hz >= 0.02:
+                tf = {"x": 0.03, "y": round(oben - 0.04 - hz, 3), "w": 0.94, "h": hz}
+                break
+        if not tf and unten + 0.02 + 0.22 <= 0.72:
+            tf = {"x": 0.03, "y": round(unten + 0.02, 3), "w": 0.94, "h": 0.22}
+        if not tf:
+            log.info("[MOTION] Hook-Titel: kein Platz (oben %.2f, unten %.2f)", oben, unten)
+            return 0
+        w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
+        dauer_t = 3.2
+        vid = await asyncio.to_thread(_kit_direkt, ht.markup(titel, k, w_px, h_px, dauer_t, seed=len(titel)),
+                                      w_px, h_px, dauer_t)
+        if not vid.get("url"):
+            log.warning("[MOTION] Hook-Titel nicht gerendert: %s", str(vid.get("hinweis"))[:160])
+            return 0
+        bis_t = min(frames, int(dauer_t * FPS))
+        weg = [l for l in s["layers"] if str(l.get("herkunft", "")) in ("plan:stil", "plan:motion")
+               and int(l.get("from", 0)) < bis_t]
+        for l in weg:
+            s["layers"].remove(l)
+            log.info("[MOTION] Hook-Titel verdraengt %s (%s)", l.get("id"), str(l.get("konzept") or "")[:60])
+        s["layers"].append(_layer_defaults({
+            "id": "motion_hook", "z": Z_ELEMENT,
+            "source": {"kind": "video", "url": vid["url"], "transparent": True, "zeit": "ebene"},
+            "from": 0, "to": bis_t, "transform": tf,
+            "herkunft": "plan:motion", "konzept": "hook: " + titel[:60],
+        }, frames))
+        log.info("[MOTION] Hook-Titel ab Bild 0 (%s): %s", "oben" if tf["y"] < oben else "unten", titel[:80])
+        return 1
+    except JobAbbruch:
+        raise
+    except Exception as exc:
+        log.warning("[MOTION] Hook-Titel: %s", str(exc)[:160])
+        return 0
+
+
 async def _motion_regie(s: dict) -> dict:
     """Momente planen, Overlays bauen, als Ebenen anhaengen. Kosten gemessen je Aufruf."""
     import motion_regie as mr
+    hook_gebaut = await _hook_titel_ebene(s)
     cfg = (_client_feld(s.get("client_id"), "stil") or {}).get("motion") or {}
     if not isinstance(cfg, dict) or cfg.get("an") is False or not cfg:
-        return {"an": False}
+        return {"an": False, "hook_titel": hook_gebaut}
     words = s.get("words") or []
     frames = int(s["frames"])
     dauer = frames / FPS
@@ -13720,7 +13803,7 @@ async def _motion_regie(s: dict) -> dict:
     k = stil._k(s.get("client_id"), _client_brand_colors(s.get("client_id")))
     face = s.get("face") or {}
     oben, unten = float(face.get("top", 0.15)), float(face.get("bottom", 0.55))
-    gebaut, protokoll = 0, []
+    gebaut, protokoll = hook_gebaut, []
     for i, m in enumerate(plan["momente"]):
         _abbruch_pruefen()
         # Lauf 3 (100): vergleich und pfeil fielen mit "kein Platz", weil 26 % Hoehe ueber dem
@@ -13784,40 +13867,6 @@ async def _motion_regie(s: dict) -> dict:
                           "kosten": erg.get("kosten"), "url": vid["url"]})
         log.info("[MOTION] %d %s %.1f-%.1f s (%s): %s", i, m["art"], m["von"], m["bis"], erg.get("quelle"),
                  (m["text"] + " | " + " / ".join(m.get("teile") or []))[:120])
-    # 29.09., Skip-Rate 60 bis 86 %: der Planer meldete bei jedem Video "Moment 0 ist 'er' ohne
-    # Element, im Hook passiert ab Sekunde 0 nichts". Jetzt steht der erste gesprochene Satz
-    # ab Bild 6 als Papierstreifen im Bild, wenn dort noch nichts liegt.
-    try:
-        frueh = [l for l in s["layers"] if str(l.get("herkunft", "")).startswith(("plan:motion", "plan:stil", "plan:ausschnitt"))
-                 and int(l.get("from", 0)) < int(2.5 * FPS)]
-        if not frueh and words:
-            hook_w = []
-            for v, n in zip(words, words[1:] + [None]):
-                hook_w.append(str(v.get("word", "")).strip())
-                if n is None or float(n.get("start") or 0) - float(v.get("end") or 0) >= 0.35 or len(hook_w) >= 12:
-                    break
-            hook_txt = " ".join(w for w in hook_w if w)
-            if len(hook_w) >= 3:
-                hz = 0.19
-                tf = ({"x": 0.05, "y": round(oben - 0.07 - hz, 3), "w": 0.9, "h": hz} if oben - 0.07 - hz >= 0.03
-                      else {"x": 0.05, "y": round(unten + 0.02, 3), "w": 0.9, "h": hz} if unten + 0.02 + hz <= 0.72 else None)
-                if tf:
-                    w_px, h_px = int(round(tf["w"] * W)), int(round(tf["h"] * H))
-                    hm = {"art": "zitat", "text": hook_txt, "teile": [], "von_idx": 0, "dauer": 3.0}
-                    vid = await asyncio.to_thread(_kit_direkt, mr._streifen(hm, k, w_px, h_px, 3.0), w_px, h_px, 3.0)
-                    if vid.get("url"):
-                        s["layers"].append(_layer_defaults({
-                            "id": "motion_hook", "z": Z_ELEMENT,
-                            "source": {"kind": "video", "url": vid["url"], "transparent": True, "zeit": "ebene"},
-                            "from": 6, "to": min(frames, int(3.2 * FPS)), "transform": tf,
-                            "herkunft": "plan:motion", "konzept": "hook: " + hook_txt[:60],
-                        }, frames))
-                        gebaut += 1
-                        log.info("[MOTION] Hook-Karte ab Bild 6: %s", hook_txt[:80])
-    except JobAbbruch:
-        raise
-    except Exception as exc:
-        log.warning("[MOTION] Hook-Karte: %s", str(exc)[:160])
     s["motion_kosten"] = round(kosten, 4)
     log.info("[MOTION] %s: %d/%d gebaut, %.4f USD", s["id"], gebaut, len(plan["momente"]), kosten)
     return {"an": True, "geplant": len(plan["momente"]), "gebaut": gebaut, "kosten_usd": round(kosten, 4),

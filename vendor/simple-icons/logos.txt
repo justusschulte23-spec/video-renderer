@@ -3451,3 +3451,4 @@ zsh	Zsh	F15A24
 zulip	Zulip	6492FE
 zx	zx	F11A7B
 zyte	Zyte	B02CCE
+linkedin	LinkedIn	0A66C2
